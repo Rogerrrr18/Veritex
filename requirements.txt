@@ -1,0 +1,15 @@
+     fastapi
+     uvicorn
+     scholarly
+     pandas
+     groq
+     httpx
+     python-dotenv
+     supabase
+     # 新增Elicit功能复刻依赖
+     sentence-transformers
+     faiss-cpu
+     numpy
+     tenacity
+     openpyxl
+     aiohttp
