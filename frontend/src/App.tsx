@@ -128,6 +128,7 @@ function InviteCodePage() {
 function HomePage() {
   const [input, setInput] = useState('')
   const [currentSlide, setCurrentSlide] = useState(0)
+  const [searchMode, setSearchMode] = useState('traditional') // 'traditional', 'mcp_enhanced', 'visualization'
   const navigate = useNavigate()
 
   // 3D轮播图片
@@ -159,7 +160,20 @@ function HomePage() {
       return
     }
     if (input.trim()) {
-      navigate('/keywords', { state: { input } })
+      // 根据搜索模式导航到不同页面
+      switch (searchMode) {
+        case 'traditional':
+          navigate('/keywords', { state: { input, searchMode: 'traditional' } })
+          break
+        case 'mcp_enhanced':
+          navigate('/keywords', { state: { input, searchMode: 'mcp_enhanced' } })
+          break
+        case 'visualization':
+          navigate('/visualization', { state: { query: input } })
+          break
+        default:
+          navigate('/keywords', { state: { input, searchMode: 'traditional' } })
+      }
     }
   }
 
@@ -187,6 +201,81 @@ function HomePage() {
           <p className="hero-desc">
             Veritex 依托大模型与智能算法，支持关键词扩展、批量论文检索、摘要智能提取与报告导出，帮你快速定位当前的研究进展。
           </p>
+          
+          {/* 搜索模式选择 - 更新为MCP模式 */}
+          {hasValidSession && (
+            <div style={{ 
+              margin: '24px 0', 
+              display: 'flex', 
+              justifyContent: 'center', 
+              gap: 16,
+              flexWrap: 'wrap' 
+            }}>
+              <button
+                onClick={() => setSearchMode('traditional')}
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 25,
+                  border: searchMode === 'traditional' ? '2px solid #3bb0e6' : '1px solid #666',
+                  background: searchMode === 'traditional' ? 'rgba(59,176,230,0.1)' : 'transparent',
+                  color: searchMode === 'traditional' ? '#3bb0e6' : '#fff',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  transition: 'all 0.3s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}
+              >
+                🔍 传统搜索
+                <span style={{ fontSize: 12, opacity: 0.7 }}>Groq + Scholarly</span>
+              </button>
+              
+              <button
+                onClick={() => setSearchMode('mcp_enhanced')}
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 25,
+                  border: searchMode === 'mcp_enhanced' ? '2px solid #3bb0e6' : '1px solid #666',
+                  background: searchMode === 'mcp_enhanced' ? 'rgba(59,176,230,0.1)' : 'transparent',
+                  color: searchMode === 'mcp_enhanced' ? '#3bb0e6' : '#fff',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  transition: 'all 0.3s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}
+              >
+                🚀 MCP增强
+                <span style={{ fontSize: 12, opacity: 0.7 }}>多源搜索+分析</span>
+              </button>
+              
+              <button
+                onClick={() => setSearchMode('visualization')}
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 25,
+                  border: searchMode === 'visualization' ? '2px solid #3bb0e6' : '1px solid #666',
+                  background: searchMode === 'visualization' ? 'rgba(59,176,230,0.1)' : 'transparent',
+                  color: searchMode === 'visualization' ? '#3bb0e6' : '#fff',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  transition: 'all 0.3s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}
+              >
+                📊 可视化分析
+                <span style={{ fontSize: 12, opacity: 0.7 }}>图表+知识图谱</span>
+              </button>
+            </div>
+          )}
+          
           <form className="hero-form" onSubmit={handleSubmit}>
             <input
               type="text"
@@ -197,7 +286,11 @@ function HomePage() {
               disabled={!hasValidSession}
             />
             <button type="submit" className="btn btn-secondary">
-              {hasValidSession ? 'Find your paper' : '获取内测邀请码'}
+              {hasValidSession 
+                ? `${searchMode === 'traditional' ? '🔍 传统搜索' : 
+                     searchMode === 'mcp_enhanced' ? '🚀 MCP增强搜索' : 
+                     '📊 可视化分析'}` 
+                : '获取内测邀请码'}
             </button>
           </form>
         </section>
@@ -233,6 +326,7 @@ function KeywordCloudPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [input] = useState(location.state?.input || '')
+  const [searchMode] = useState(location.state?.searchMode || 'traditional')
   const [expanded, setExpanded] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -240,6 +334,11 @@ function KeywordCloudPage() {
   const [yearLow, setYearLow] = useState<string>('')
   const [yearHigh, setYearHigh] = useState<string>('')
   const [showLoading, setShowLoading] = useState(false)
+  
+  // MCP增强选项
+  const [enableAnalysis, setEnableAnalysis] = useState(searchMode === 'mcp_enhanced')
+  const [enableVisualization, setEnableVisualization] = useState(false)
+  const [selectedSources, setSelectedSources] = useState<string[]>(['arxiv', 'pubmed', 'semantic_scholar'])
 
   // 检查登录状态，未登录强制跳转/invite
   useEffect(() => {
@@ -264,7 +363,7 @@ function KeywordCloudPage() {
     // eslint-disable-next-line
   }, [input])
 
-  // 关键词扩展
+  // 关键词扩展 - 简化为使用传统扩展
   const handleExpand = async () => {
     if (localStorage.getItem('invite_logged_in') !== '1') {
       navigate('/invite')
@@ -273,7 +372,6 @@ function KeywordCloudPage() {
     
     const userId = localStorage.getItem('user_id')
     if (!userId) {
-      // 如果没有用户ID，清除登录状态并跳转
       localStorage.removeItem('invite_logged_in')
       navigate('/invite')
       return
@@ -282,6 +380,7 @@ function KeywordCloudPage() {
     setError('')
     setLoading(true)
     setShowLoading(true)
+    
     try {
       // 记录行为
       await logUserAction(userId, 'expand_keywords', input)
@@ -289,14 +388,11 @@ function KeywordCloudPage() {
       const res = await fetch('/expand_keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          keywords: input,
-          user_id: userId 
-        })
+        body: JSON.stringify({ keywords: input, user_id: userId })
       })
+      
       if (!res.ok) {
         const errData = await res.json().catch(() => ({ detail: '扩展失败，无法解析错误响应' }))
-        // 如果是401错误，说明用户未登录或无效
         if (res.status === 401) {
           localStorage.removeItem('invite_logged_in')
           localStorage.removeItem('user_id')
@@ -305,8 +401,10 @@ function KeywordCloudPage() {
         }
         throw new Error(errData.detail || `HTTP error ${res.status}`)
       }
+      
       const data = await res.json()
       setExpanded(data.expanded_terms || [])
+      
     } catch (e: any) {
       setError(e.message || '扩展关键词失败')
     }
@@ -342,7 +440,7 @@ function KeywordCloudPage() {
     return `hsl(${hue}, 70%, 60%)`
   }
 
-  // 开始检索
+  // 开始检索 - 支持MCP增强模式
   const handleSearch = async () => {
     if (localStorage.getItem('invite_logged_in') !== '1') {
       navigate('/invite')
@@ -351,7 +449,6 @@ function KeywordCloudPage() {
     
     const userId = localStorage.getItem('user_id')
     if (!userId) {
-      // 如果没有用户ID，清除登录状态并跳转
       localStorage.removeItem('invite_logged_in')
       navigate('/invite')
       return
@@ -366,10 +463,8 @@ function KeywordCloudPage() {
     
     setLoading(true)
     try {
-      // 记录行为
-      await logUserAction(userId, 'search_papers', validKeywords.join(','))
-      
-      const payload = {
+      let endpoint = '/search_papers'
+      let payload: any = {
         keywords: validKeywords,
         max_results: maxResults,
         year_low: yearLow ? parseInt(yearLow, 10) : null,
@@ -377,15 +472,33 @@ function KeywordCloudPage() {
         user_id: userId
       }
       
-      const res = await fetch('/search_papers', {
+      // 如果是MCP增强模式，使用不同接口
+      if (searchMode === 'mcp_enhanced') {
+        endpoint = '/mcp_search'
+        payload = {
+          query: validKeywords.join(' '),
+          max_results: maxResults,
+          sources: selectedSources,
+          enable_analysis: enableAnalysis,
+          enable_visualization: enableVisualization,
+          user_id: userId
+        }
+        
+        // 记录MCP增强搜索行为
+        await logUserAction(userId, 'mcp_enhanced_search', payload)
+      } else {
+        // 记录传统搜索行为
+        await logUserAction(userId, 'search_papers', validKeywords.join(','))
+      }
+      
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
       
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({ detail: '爬取失败，无法解析错误响应' }))
-        // 如果是401错误，说明用户未登录或无效
+        const errData = await res.json().catch(() => ({ detail: '搜索失败，无法解析错误响应' }))
         if (res.status === 401) {
           localStorage.removeItem('invite_logged_in')
           localStorage.removeItem('user_id')
@@ -396,7 +509,20 @@ function KeywordCloudPage() {
       }
       
       const data = await res.json()
-      navigate('/report', { state: { papers: data.papers || [] } })
+      
+      // 根据搜索模式导航到不同页面
+      if (searchMode === 'mcp_enhanced' && (data.analysis || data.visualization)) {
+        // MCP增强结果包含分析或可视化数据
+        navigate('/enhanced-report', { state: { 
+          papers: data.papers || [], 
+          analysis: data.analysis,
+          visualization: data.visualization,
+          searchMode: 'mcp_enhanced'
+        }})
+      } else {
+        // 传统结果页面
+        navigate('/report', { state: { papers: data.papers || [] } })
+      }
     } catch (e: any) {
       setError(e.message || '检索论文失败')
     }
@@ -406,13 +532,193 @@ function KeywordCloudPage() {
   return (
     <div className="keyword-cloud-page">
       <div className="cloud-header">
-        <h2>Keyword Cloud</h2>
+        <h2>Keyword Cloud - {searchMode === 'mcp_enhanced' ? 'MCP增强模式' : '传统模式'}</h2>
         <p>Edit your keywords, then start searching</p>
+        
+        {/* 显示当前搜索模式信息 */}
+        <div style={{ 
+          marginTop: 16, 
+          padding: 12, 
+          background: searchMode === 'mcp_enhanced' ? 'rgba(59,176,230,0.1)' : 'rgba(100,100,100,0.1)', 
+          borderRadius: 8,
+          border: `1px solid ${searchMode === 'mcp_enhanced' ? '#3bb0e6' : '#666'}`
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 16 }}>
+              {searchMode === 'mcp_enhanced' ? '🚀' : '🔍'}
+            </span>
+            <strong style={{ color: '#fff' }}>
+              {searchMode === 'mcp_enhanced' ? 'MCP多源增强搜索' : '传统关键词搜索'}
+            </strong>
+          </div>
+          <p style={{ margin: 0, fontSize: 14, color: '#a1a1aa' }}>
+            {searchMode === 'mcp_enhanced' 
+              ? '使用MCP服务器集成多个学术数据库，支持数据分析和可视化' 
+              : '使用Groq关键词扩展 + Scholarly搜索'}
+          </p>
+        </div>
       </div>
       
       {error && <p className="error-message">错误: {error}</p>}
       
       {showLoading && <div className="loading-spinner">扩展关键词中...</div>}
+      
+      {/* 智能分析结果展示 */}
+      {analysisResults && (
+        <div style={{
+          margin: '20px 0',
+          padding: 20,
+          background: 'rgba(30, 30, 30, 0.8)',
+          borderRadius: 12,
+          border: '1px solid #333'
+        }}>
+          {/* 查询分析结果 */}
+          {analysisResults.query_analysis && (
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ color: '#3bb0e6', fontSize: 18, marginBottom: 12 }}>🔍 查询分析</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                <div>
+                  <strong style={{ color: '#fff' }}>查询类型:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {analysisResults.query_analysis.query_type}
+                  </span>
+                </div>
+                <div>
+                  <strong style={{ color: '#fff' }}>复杂度:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {analysisResults.query_analysis.complexity}
+                  </span>
+                </div>
+                <div>
+                  <strong style={{ color: '#fff' }}>研究焦点:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {analysisResults.query_analysis.research_focus}
+                  </span>
+                </div>
+                <div>
+                  <strong style={{ color: '#fff' }}>置信度:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {(analysisResults.query_analysis.confidence * 100).toFixed(0)}%
+                  </span>
+                </div>
+              </div>
+              
+              {analysisResults.query_analysis.entities?.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <strong style={{ color: '#fff' }}>识别实体:</strong>
+                  <div style={{ marginTop: 4 }}>
+                    {analysisResults.query_analysis.entities.map((entity: string, idx: number) => (
+                      <span key={idx} style={{
+                        display: 'inline-block',
+                        margin: '2px 4px',
+                        padding: '4px 8px',
+                        background: 'rgba(59,176,230,0.2)',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        color: '#3bb0e6'
+                      }}>{entity}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {analysisResults.query_analysis.suggested_strategy && (
+                <div style={{ marginTop: 12 }}>
+                  <strong style={{ color: '#fff' }}>搜索策略:</strong>
+                  <p style={{ margin: '4px 0', color: '#a1a1aa', fontSize: 14, fontStyle: 'italic' }}>
+                    {analysisResults.query_analysis.suggested_strategy}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* 学科检测结果 */}
+          {analysisResults.keyword_expansion?.discipline_info && (
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ color: '#3bb0e6', fontSize: 18, marginBottom: 12 }}>🎓 学科检测</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                <div>
+                  <strong style={{ color: '#fff' }}>主要学科:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {analysisResults.keyword_expansion.discipline_info.primary_discipline}
+                  </span>
+                </div>
+                <div>
+                  <strong style={{ color: '#fff' }}>扩展策略:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {analysisResults.keyword_expansion.expansion_strategy}
+                  </span>
+                </div>
+                <div>
+                  <strong style={{ color: '#fff' }}>质量分数:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {(analysisResults.keyword_expansion.quality_score * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div>
+                  <strong style={{ color: '#fff' }}>学科置信度:</strong>
+                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
+                    {(analysisResults.keyword_expansion.discipline_info.confidence * 100).toFixed(0)}%
+                  </span>
+                </div>
+              </div>
+              
+              {analysisResults.keyword_expansion.discipline_info.secondary_disciplines?.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <strong style={{ color: '#fff' }}>相关学科:</strong>
+                  <div style={{ marginTop: 4 }}>
+                    {analysisResults.keyword_expansion.discipline_info.secondary_disciplines.map((disc: string, idx: number) => (
+                      <span key={idx} style={{
+                        display: 'inline-block',
+                        margin: '2px 4px',
+                        padding: '4px 8px',
+                        background: 'rgba(100,200,100,0.2)',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        color: '#64c864'
+                      }}>{disc}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* 搜索建议 */}
+          {analysisResults.search_suggestions?.search_queries?.length > 0 && (
+            <div>
+              <h3 style={{ color: '#3bb0e6', fontSize: 18, marginBottom: 12 }}>💡 搜索建议</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {analysisResults.search_suggestions.search_queries.map((query: string, idx: number) => (
+                  <div key={idx} style={{
+                    padding: '8px 12px',
+                    background: 'rgba(255,255,255,0.05)',
+                    borderRadius: 8,
+                    fontSize: 14,
+                    color: '#a1a1aa',
+                    fontFamily: 'monospace'
+                  }}>
+                    {query}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* 优化建议 */}
+          {analysisResults.query_analysis?.optimization_notes?.length > 0 && (
+            <div style={{ marginTop: 16, padding: 12, background: 'rgba(255,193,7,0.1)', borderRadius: 8, border: '1px solid rgba(255,193,7,0.3)' }}>
+              <strong style={{ color: '#ffc107' }}>💡 优化建议:</strong>
+              <ul style={{ margin: '8px 0', paddingLeft: 20, color: '#ffc107' }}>
+                {analysisResults.query_analysis.optimization_notes.map((note: string, idx: number) => (
+                  <li key={idx} style={{ margin: '4px 0', fontSize: 14 }}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
       
       <div className="keyword-bubbles">
         {expanded.map((term, idx) => (
@@ -587,6 +893,46 @@ function ReportPage() {
   )
 }
 
+// Elicit风格研究页面
+function ElicitPage() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [query] = useState(location.state?.query || '')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [searchResults, setSearchResults] = useState<any>(null)
+
+  // 检查登录状态
+  useEffect(() => {
+    const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
+    const userId = localStorage.getItem('user_id')
+    
+    if (!isLoggedIn || !userId) {
+      localStorage.removeItem('invite_logged_in')
+      localStorage.removeItem('user_id')
+      navigate('/invite')
+    }
+  }, [navigate])
+
+  return (
+    <div style={{ 
+      minHeight: '100vh', 
+      background: '#000', 
+      color: '#fff', 
+      padding: '20px'
+    }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        <h2 style={{ fontSize: 28, color: '#3bb0e6' }}>
+          ⚡ Elicit风格研究分析
+        </h2>
+        <p style={{ color: '#a1a1aa' }}>
+          查询: "{query}" - 功能开发中，敬请期待！
+        </p>
+      </div>
+    </div>
+  )
+}
+
 // Products页面
 function ProductsPage() {
   return (
@@ -648,6 +994,7 @@ function App() {
       <Route path="/" element={<HomePage />} />
       <Route path="/invite" element={<InviteCodePage />} />
       <Route path="/keywords" element={<KeywordCloudPage />} />
+      <Route path="/elicit" element={<ElicitPage />} />
       <Route path="/report" element={<ReportPage />} />
       <Route path="/products" element={<ProductsPage />} />
       <Route path="/features" element={<FeaturesPage />} />

@@ -9,13 +9,12 @@ import re
 import json
 import logging
 
-# 导入原有模块
-from main import GroqKeywordExpander, QueryBuilder, LiteratureCollector
-from user_analytics import UserAnalytics
+# 导入MCP客户端
+from mcp_client import MCPClient, SearchResult, get_mcp_client
 
-# 导入新的Elicit风格模块
-from elicit_research_engine import ElicitStyleResearchEngine
-from structured_data_extractor import ExtractionField, CustomColumn
+# 导入保留的核心模块
+from main import GroqKeywordExpander
+from user_analytics import UserAnalytics
 
 app = FastAPI()
 
@@ -26,9 +25,11 @@ logger = logging.getLogger(__name__)
 # Initialize user analytics
 analytics = UserAnalytics()
 
-# 初始化Elicit风格研究引擎
+# 初始化MCP客户端和核心组件
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-research_engine = ElicitStyleResearchEngine(GROQ_API_KEY) if GROQ_API_KEY else None
+keyword_expander = GroqKeywordExpander() if GROQ_API_KEY else None
+
+# =================== API请求模型 ===================
 
 class ExpandRequest(BaseModel):
     keywords: str
@@ -40,22 +41,27 @@ class SearchRequest(BaseModel):
     year_low: Optional[int] = None
     year_high: Optional[int] = None
     user_id: str
+    sources: Optional[List[str]] = None
 
-class ElicitSearchRequest(BaseModel):
-    """Elicit风格搜索请求"""
+class MCPSearchRequest(BaseModel):
+    """MCP增强搜索请求"""
     query: str
-    max_papers: int = 50
-    extraction_fields: Optional[List[str]] = None
-    custom_columns: Optional[List[Dict[str, Any]]] = None
-    year_min: Optional[int] = None
-    year_max: Optional[int] = None
+    max_results: int = 50
+    sources: Optional[List[str]] = None
+    enable_analysis: bool = True
+    enable_visualization: bool = False
     user_id: str
-    search_mode: str = "full"  # "full" 或 "quick"
 
-class QuickSearchRequest(BaseModel):
-    """快速搜索请求"""
-    query: str
-    max_papers: int = 20
+class DataAnalysisRequest(BaseModel):
+    """数据分析请求"""
+    papers: List[Dict[str, Any]]
+    analysis_type: str = "basic"
+    user_id: str
+
+class VisualizationRequest(BaseModel):
+    """可视化请求"""
+    data: List[Dict[str, Any]]
+    chart_type: str = "network"
     user_id: str
 
 def verify_user_login(user_id: str) -> bool:
@@ -72,28 +78,183 @@ def verify_user_login(user_id: str) -> bool:
 
 @app.post("/expand_keywords")
 async def expand_keywords_api(req: ExpandRequest):
+    """关键词扩展API - 使用Groq进行智能扩展"""
     # 验证用户登录状态
     if not verify_user_login(req.user_id):
         raise HTTPException(status_code=401, detail="用户未登录或无效")
     
-    expander = GroqKeywordExpander()
+    if not keyword_expander:
+        raise HTTPException(status_code=500, detail="关键词扩展器未初始化")
     
-    # 处理多个关键词（用空格分隔）
-    keyword_list = [kw.strip() for kw in req.keywords.split() if kw.strip()]
+    try:
+        # 记录用户行为
+        await analytics.log_user_action(
+            req.user_id, 
+            "expand_keywords", 
+            {"keywords": req.keywords}
+        )
+        
+        # 使用Groq进行关键词扩展
+        expanded_terms = await keyword_expander.expand_keywords(req.keywords)
+        
+        return {
+            "expanded_terms": expanded_terms,
+            "original_keywords": req.keywords,
+            "strategy": "groq_expansion",
+            "count": len(expanded_terms)
+        }
+        
+    except Exception as e:
+        logger.error(f"关键词扩展失败: {e}")
+        raise HTTPException(status_code=500, detail=f"关键词扩展失败: {str(e)}")
+
+# 新增MCP增强搜索API
+@app.post("/mcp_search")
+async def mcp_search_api(req: MCPSearchRequest):
+    """MCP增强搜索API - 集成多源搜索、数据分析和可视化"""
+    # 验证用户登录状态
+    if not verify_user_login(req.user_id):
+        raise HTTPException(status_code=401, detail="用户未登录或无效")
     
-    all_expanded_terms = []
-    for keyword in keyword_list:
-        expanded_terms = await expander.expand_keywords(keyword)
-        all_expanded_terms.extend(expanded_terms)
+    try:
+        # 记录用户行为
+        await analytics.log_user_action(
+            req.user_id, 
+            "mcp_enhanced_search", 
+            {"query": req.query, "sources": req.sources}
+        )
+        
+        # 获取MCP客户端
+        mcp_client = await get_mcp_client()
+        
+        # 1. 多源搜索
+        search_results = await mcp_client.multi_source_search(
+            query=req.query,
+            max_results=req.max_results,
+            sources=req.sources
+        )
+        
+        # 转换为字典格式便于分析
+        papers_data = []
+        for result in search_results:
+            paper_dict = {
+                "title": result.title,
+                "authors": result.authors,
+                "year": result.year,
+                "abstract": result.abstract,
+                "url": result.url,
+                "source": result.source,
+                "citations": result.citations,
+                "venue": result.venue
+            }
+            papers_data.append(paper_dict)
+        
+        response_data = {
+            "papers": papers_data,
+            "total_found": len(papers_data),
+            "sources_used": req.sources or ["arxiv", "pubmed", "semantic_scholar"],
+            "search_mode": "mcp_enhanced"
+        }
+        
+        # 2. 可选数据分析
+        if req.enable_analysis and papers_data:
+            try:
+                analysis_result = await mcp_client.analyze_data(
+                    data=papers_data,
+                    analysis_type="academic_papers"
+                )
+                response_data["analysis"] = analysis_result
+            except Exception as e:
+                logger.warning(f"数据分析失败: {e}")
+                response_data["analysis"] = {"error": str(e)}
+        
+        # 3. 可选可视化
+        if req.enable_visualization and papers_data:
+            try:
+                viz_result = await mcp_client.generate_visualization(
+                    data=papers_data,
+                    chart_type="timeline"
+                )
+                response_data["visualization"] = viz_result
+            except Exception as e:
+                logger.warning(f"可视化生成失败: {e}")
+                response_data["visualization"] = {"error": str(e)}
+        
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"MCP增强搜索失败: {e}")
+        raise HTTPException(status_code=500, detail=f"增强搜索失败: {str(e)}")
+
+@app.post("/analyze_data")
+async def analyze_data_api(req: DataAnalysisRequest):
+    """数据分析API - 使用MCP进行学术数据分析"""
+    # 验证用户登录状态
+    if not verify_user_login(req.user_id):
+        raise HTTPException(status_code=401, detail="用户未登录或无效")
     
-    # 去重并限制总数量
-    unique_terms = list(dict.fromkeys(all_expanded_terms))  # 保持顺序去重
-    final_terms = unique_terms[:12]  # 总共最多12个术语
+    try:
+        # 记录用户行为
+        await analytics.log_user_action(
+            req.user_id,
+            "data_analysis",
+            {"papers_count": len(req.papers), "analysis_type": req.analysis_type}
+        )
+        
+        # 获取MCP客户端并进行数据分析
+        mcp_client = await get_mcp_client()
+        analysis_result = await mcp_client.analyze_data(
+            data=req.papers,
+            analysis_type=req.analysis_type
+        )
+        
+        return {
+            "status": "success",
+            "analysis_type": req.analysis_type,
+            "data_count": len(req.papers),
+            "result": analysis_result
+        }
+        
+    except Exception as e:
+        logger.error(f"数据分析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"数据分析失败: {str(e)}")
+
+@app.post("/generate_visualization")
+async def generate_visualization_api(req: VisualizationRequest):
+    """可视化生成API - 使用MCP生成学术数据可视化"""
+    # 验证用户登录状态
+    if not verify_user_login(req.user_id):
+        raise HTTPException(status_code=401, detail="用户未登录或无效")
     
-    return {"expanded_terms": final_terms}
+    try:
+        # 记录用户行为
+        await analytics.log_user_action(
+            req.user_id,
+            "generate_visualization",
+            {"data_count": len(req.data), "chart_type": req.chart_type}
+        )
+        
+        # 获取MCP客户端并生成可视化
+        mcp_client = await get_mcp_client()
+        viz_result = await mcp_client.generate_visualization(
+            data=req.data,
+            chart_type=req.chart_type
+        )
+        
+        return {
+            "status": "success",
+            "chart_type": req.chart_type,
+            "data_count": len(req.data),
+            "visualization": viz_result
+        }
+        
+    except Exception as e:
+        logger.error(f"可视化生成失败: {e}")
+        raise HTTPException(status_code=500, detail=f"可视化生成失败: {str(e)}")
 
 @app.post("/search_papers")
-async def search_papers_api(req: SearchRequest): # Renamed to avoid conflict
+async def search_papers_api(req: SearchRequest):
+    """传统搜索API - 保持向后兼容"""
     # 验证用户登录状态
     if not verify_user_login(req.user_id):
         raise HTTPException(status_code=401, detail="用户未登录或无效")
@@ -101,115 +262,98 @@ async def search_papers_api(req: SearchRequest): # Renamed to avoid conflict
     if not req.keywords:
         raise HTTPException(status_code=400, detail="Keywords cannot be empty")
     
-    query_engine = QueryBuilder(req.keywords)
-    search_query = query_engine.build_query()
-    
-    # 不再生成xlsx文件
-    collector = LiteratureCollector()
-    try:
-        await collector.collect(
-            search_query, 
-            req.max_results, 
-            output_filename=None, # 不再传递文件名
-            year_low=req.year_low, 
-            year_high=req.year_high
-        )
-        return {
-            "papers": collector.results
-        }
-    except Exception as e:
-        print(f"Error during paper collection: {e}")
-        raise HTTPException(status_code=500, detail=f"处理文献时发生错误: {str(e)}")
-
-# =================== 新增Elicit风格API端点 ===================
-
-@app.post("/elicit_search")
-async def elicit_search_api(req: ElicitSearchRequest):
-    """Elicit风格的智能研究搜索"""
-    if not research_engine:
-        raise HTTPException(status_code=500, detail="研究引擎未初始化")
-    
-    # 验证用户登录状态
-    if not verify_user_login(req.user_id):
-        raise HTTPException(status_code=401, detail="用户未登录或无效")
-    
     try:
         # 记录用户行为
         await analytics.log_user_action(
             req.user_id, 
-            "elicit_search", 
-            {"query": req.query, "mode": req.search_mode}
+            "search_papers_traditional", 
+            {"keywords": req.keywords, "max_results": req.max_results}
         )
         
-        if req.search_mode == "quick":
-            # 快速搜索模式
-            result = await research_engine.quick_search(
-                query=req.query,
-                max_papers=req.max_papers
-            )
-            return {"status": "success", "mode": "quick", "data": result}
+        # 使用MCP客户端进行搜索
+        mcp_client = await get_mcp_client()
+        query = " ".join(req.keywords)
         
-        else:
-            # 完整研究模式
-            # 处理提取字段
-            extraction_fields = None
-            if req.extraction_fields:
-                extraction_fields = []
-                for field_name in req.extraction_fields:
-                    try:
-                        field = ExtractionField(field_name)
-                        extraction_fields.append(field)
-                    except ValueError:
-                        logger.warning(f"未知的提取字段: {field_name}")
-            
-            # 处理自定义列
-            custom_columns = None
-            if req.custom_columns:
-                custom_columns = []
-                for col_data in req.custom_columns:
-                    try:
-                        column = CustomColumn(
-                            name=col_data.get("name", ""),
-                            description=col_data.get("description", ""),
-                            extraction_prompt=col_data.get("extraction_prompt", ""),
-                            data_type=col_data.get("data_type", "text")
-                        )
-                        custom_columns.append(column)
-                    except Exception as e:
-                        logger.warning(f"自定义列处理失败: {e}")
-            
-            # 执行完整研究
-            session = await research_engine.research(
-                query=req.query,
-                max_papers=req.max_papers,
-                extraction_fields=extraction_fields,
-                custom_columns=custom_columns,
-                year_min=req.year_min,
-                year_max=req.year_max
-            )
-            
-            # 导出会话摘要
-            summary = research_engine.export_session_summary(session)
-            
-            return {
-                "status": "success",
-                "mode": "full",
-                "session_id": session.session_id,
-                "summary": summary,
-                "research_matrix": session.research_matrix,
-                "reasoning_trace": session.reasoning_trace
+        # 使用MCP多源搜索
+        search_results = await mcp_client.multi_source_search(
+            query=query,
+            max_results=req.max_results,
+            sources=req.sources
+        )
+        
+        # 转换为前端期望的格式
+        papers = []
+        for result in search_results:
+            paper = {
+                "title": result.title,
+                "authors": "; ".join(result.authors) if result.authors else "",
+                "year": str(result.year) if result.year else "",
+                "abstract": result.abstract,
+                "url": result.url
             }
-    
+            papers.append(paper)
+        
+        return {
+            "papers": papers,
+            "source": "mcp_enhanced",
+            "total_found": len(papers)
+        }
+        
     except Exception as e:
-        logger.error(f"Elicit搜索失败: {e}")
-        raise HTTPException(status_code=500, detail=f"智能搜索失败: {str(e)}")
+        logger.error(f"搜索失败: {e}")
+        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
 
-@app.post("/quick_search")
-async def quick_search_api(req: QuickSearchRequest):
-    """快速搜索API"""
-    if not research_engine:
-        raise HTTPException(status_code=500, detail="研究引擎未初始化")
-    
+# =================== MCP系统管理API端点 ===================
+
+@app.get("/mcp/health")
+async def mcp_health_check():
+    """MCP服务器健康检查"""
+    try:
+        mcp_client = await get_mcp_client()
+        health_status = await mcp_client.health_check()
+        
+        return {
+            "status": "success",
+            "timestamp": time.time(),
+            "servers": health_status
+        }
+    except Exception as e:
+        logger.error(f"MCP健康检查失败: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": time.time()
+        }
+
+@app.get("/mcp/servers")
+async def list_mcp_servers():
+    """列出所有MCP服务器配置"""
+    try:
+        mcp_client = await get_mcp_client()
+        servers_info = []
+        
+        for server_id, server in mcp_client.servers.items():
+            server_info = {
+                "id": server_id,
+                "name": server.name,
+                "type": server.server_type.value,
+                "endpoint": server.endpoint,
+                "enabled": server.enabled,
+                "config": server.config
+            }
+            servers_info.append(server_info)
+        
+        return {
+            "status": "success",
+            "servers": servers_info
+        }
+    except Exception as e:
+        logger.error(f"获取MCP服务器列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取服务器列表失败: {str(e)}")
+
+@app.post("/build_knowledge_graph")
+async def build_knowledge_graph_api(req: DataAnalysisRequest):
+    """构建知识图谱API - 基于论文数据构建学术知识图谱"""
     # 验证用户登录状态
     if not verify_user_login(req.user_id):
         raise HTTPException(status_code=401, detail="用户未登录或无效")
@@ -217,76 +361,39 @@ async def quick_search_api(req: QuickSearchRequest):
     try:
         # 记录用户行为
         await analytics.log_user_action(
-            req.user_id, 
-            "quick_search", 
-            {"query": req.query}
+            req.user_id,
+            "build_knowledge_graph",
+            {"papers_count": len(req.papers)}
         )
         
-        result = await research_engine.quick_search(
-            query=req.query,
-            max_papers=req.max_papers
-        )
+        # 转换数据格式
+        search_results = []
+        for paper in req.papers:
+            result = SearchResult(
+                title=paper.get("title", ""),
+                authors=paper.get("authors", []) if isinstance(paper.get("authors"), list) else paper.get("authors", "").split("; "),
+                year=paper.get("year"),
+                abstract=paper.get("abstract", ""),
+                url=paper.get("url", ""),
+                source=paper.get("source", "unknown")
+            )
+            search_results.append(result)
         
-        return {"status": "success", "data": result}
-    
-    except Exception as e:
-        logger.error(f"快速搜索失败: {e}")
-        raise HTTPException(status_code=500, detail=f"快速搜索失败: {str(e)}")
-
-@app.get("/reasoning_trace/{session_id}")
-async def get_reasoning_trace(session_id: str, user_id: str = Query(...)):
-    """获取推理过程追踪"""
-    if not verify_user_login(user_id):
-        raise HTTPException(status_code=401, detail="用户未登录或无效")
-    
-    # 这里可以从数据库或缓存中获取会话的推理过程
-    # 目前返回当前引擎的推理过程
-    if research_engine:
-        trace = research_engine.get_reasoning_trace()
-        return {"session_id": session_id, "reasoning_trace": trace}
-    else:
-        raise HTTPException(status_code=500, detail="研究引擎未初始化")
-
-@app.get("/extraction_fields")
-async def get_available_extraction_fields():
-    """获取可用的数据提取字段"""
-    fields = [
-        {"name": field.value, "enum_name": field.name} 
-        for field in ExtractionField
-    ]
-    return {"available_fields": fields}
-
-@app.post("/analyze_query")
-async def analyze_query_intent(query: str, user_id: str):
-    """分析查询意图"""
-    if not research_engine:
-        raise HTTPException(status_code=500, detail="研究引擎未初始化")
-    
-    if not verify_user_login(user_id):
-        raise HTTPException(status_code=401, detail="用户未登录或无效")
-    
-    try:
-        # 使用查询处理器分析意图
-        processed_query = await research_engine.query_processor.process_query(query)
+        # 获取MCP客户端并构建知识图谱
+        mcp_client = await get_mcp_client()
+        graph_result = await mcp_client.build_knowledge_graph(search_results)
         
         return {
-            "original_query": query,
-            "query_type": processed_query.query_intent.query_type.value,
-            "complexity": processed_query.query_intent.complexity.value,
-            "entities": processed_query.query_intent.entities,
-            "concepts": processed_query.query_intent.concepts,
-            "research_focus": processed_query.query_intent.research_focus,
-            "suggested_strategy": processed_query.query_intent.suggested_search_strategy,
-            "processed_keywords": processed_query.processed_keywords,
-            "search_queries": processed_query.search_queries,
-            "optimization_notes": processed_query.optimization_notes
+            "status": "success",
+            "papers_processed": len(req.papers),
+            "graph_data": graph_result
         }
-    
+        
     except Exception as e:
-        logger.error(f"查询分析失败: {e}")
-        raise HTTPException(status_code=500, detail=f"查询分析失败: {str(e)}")
+        logger.error(f"知识图谱构建失败: {e}")
+        raise HTTPException(status_code=500, detail=f"知识图谱构建失败: {str(e)}")
 
-# =================== 保留原有API端点 ===================
+# =================== 用户分析和管理API端点 ===================
 
 # 用户数据监测API端点
 @app.get("/analytics/user_stats")

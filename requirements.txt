@@ -1,15 +1,37 @@
-     fastapi
-     uvicorn
-     scholarly
-     pandas
-     groq
-     httpx
-     python-dotenv
-     supabase
-     # 新增Elicit功能复刻依赖
-     sentence-transformers
-     faiss-cpu
-     numpy
-     tenacity
-     openpyxl
-     aiohttp
+# Paper God - MCP增强版依赖
+
+# 核心框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# 数据处理
+pandas>=2.1.0
+numpy>=1.24.0
+
+# HTTP客户端
+httpx[socks]>=0.25.0
+aiohttp>=3.9.0
+
+# 机器学习和向量处理
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.4
+
+# API集成
+groq>=0.4.0
+scholarly>=1.7.0
+supabase>=2.0.0
+
+# 工具库
+python-dotenv>=1.0.0
+tenacity>=8.2.0
+openpyxl>=3.1.0
+
+# MCP相关依赖
+# 注意：MCP服务器需要单独安装和配置
+# pip install paper-search-mcp pandas-mcp-server antv-mcp-server neo4j-mcp-server
+
+# 开发和测试工具
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+isort>=5.12.0

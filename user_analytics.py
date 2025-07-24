@@ -165,6 +165,27 @@ class UserAnalytics:
             print(f"获取用户时间线失败: {e}")
             return {}
     
+    async def log_user_action(self, user_id: str, action: str, detail: str = None) -> bool:
+        """记录用户行为"""
+        try:
+            # 插入行为记录
+            self.supabase.table('user_actions').insert({
+                'user_id': user_id,
+                'action': action,
+                'detail': detail,
+                'created_at': datetime.now().isoformat()
+            }).execute()
+            
+            # 更新用户最后活动时间
+            self.supabase.table('users').update({
+                'last_action_at': datetime.now().isoformat()
+            }).eq('id', user_id).execute()
+            
+            return True
+        except Exception as e:
+            print(f"记录用户行为失败: {e}")
+            return False
+    
     def get_real_time_stats(self) -> Dict[str, Any]:
         """获取实时统计数据"""
         try:

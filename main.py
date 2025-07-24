@@ -1,3 +1,9 @@
+"""
+Paper God - 学术文献智能搜索系统
+重构版本：集成MCP (Model Context Protocol) 多源搜索能力
+保留核心的Groq关键词扩展功能
+"""
+
 from scholarly import scholarly
 import pandas as pd
 import time
@@ -8,13 +14,11 @@ from groq import Groq
 from typing import List, Dict, Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
-# openpyxl import removed - no longer generating Excel reports
 import sys
 
 # ================ 配置 ================
-DEFAULT_MAX_RESULTS = 200
-DEFAULT_OUTPUT_FILE = "literature.csv"
-REQUEST_DELAY = (1, 3)
+DEFAULT_MAX_RESULTS = 50  # 提高默认搜索数量
+REQUEST_DELAY = (0.5, 1.5)  # 降低延迟以提高效率
 
 load_dotenv()
 
@@ -37,17 +41,16 @@ if not GROQ_MODEL:
     GROQ_MODEL = "mixtral-8x7b-32768"
 
 print(f"当前配置 - 模型: {GROQ_MODEL}, API密钥: {'已配置' if GROQ_API_KEY else '未配置'}")
-
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "papers")
-
-# Excel generation removed - no longer creating test files
-print("Current GROQ_MODEL:", os.getenv("GROQ_MODEL"))
 print(f"当前 Python 路径: {sys.executable}")
 
 class GroqKeywordExpander:
+    """
+    Groq关键词扩展器 - Paper God的核心组件
+    支持中英文关键词的智能扩展
+    """
     def __init__(self):
+        if not GROQ_API_KEY:
+            raise ValueError("Groq API密钥未配置")
         self.client = Groq(api_key=GROQ_API_KEY)
 
     def _is_chinese(self, text: str) -> bool:
@@ -87,7 +90,7 @@ class GroqKeywordExpander:
         # 基本验证：术语应该有意义
         return len(term.strip()) >= 2
 
-    async def expand_keywords(self, keywords: str) -> List[str]:
+    async def expand_keywords(self, keywords: str, max_terms: int = 5) -> List[str]:
         """智能关键词扩展：中文转英文，英文高质量专业术语扩展"""
         try:
             # 检测是否为中文关键词
@@ -96,7 +99,7 @@ class GroqKeywordExpander:
             if is_chinese_input:
                 # 中文关键词：翻译为英文同义词
                 prompt = f"""
-你是专业的学术翻译专家。请将以下中文关键词转换为2-3个最相关的英文同义词：
+你是专业的学术翻译专家。请将以下中文关键词转换为{max_terms-1}个最相关的英文同义词：
 
 中文关键词: {keywords}
 
@@ -105,14 +108,13 @@ class GroqKeywordExpander:
 2. 包括直接同义词和相关概念
 3. 优先选择学术文献中常用的表达
 4. 仅返回英文词汇，用逗号分隔，不要包含任何解释或说明
-5. 不要包含"related terms"、"synonyms"等描述性词汇
-6. 格式：term1, term2, term3
+5. 格式：term1, term2, term3
 
 英文同义词："""
             else:
                 # 英文关键词：专业领域识别 + 术语简写扩展
                 prompt = f"""
-你是专业的学术术语扩展专家。请为以下关键词生成2-3个相关术语：
+你是专业的学术术语扩展专家。请为以下关键词生成{max_terms-1}个相关术语：
 
 关键词: {keywords}
 
@@ -122,9 +124,7 @@ class GroqKeywordExpander:
 3. 如果是完整术语，提供相关简写
 4. 提供同领域的重要相关概念
 5. 仅返回英文术语，用逗号分隔
-6. 不要包含任何解释、说明或描述性词汇
-7. 不要包含"Based on"、"I've generated"等短语
-8. 格式：term1, term2, term3
+6. 格式：term1, term2, term3
 
 专业术语扩展："""
 
@@ -148,14 +148,13 @@ class GroqKeywordExpander:
                 if self._validate_term(clean_term):
                     terms.append(clean_term)
 
-            # 对于中文输入，不包含原词；对于英文输入，可以包含原词
+            # 对于英文输入，保留原词；对于中文输入，不包含原词
             if not is_chinese_input and keywords not in terms:
                 terms.insert(0, keywords)
 
-            # 限制返回数量：最多3个术语
-            result = terms[:3]
+            # 限制返回数量
+            result = terms[:max_terms]
             print(f"  扩展结果: {result}")
-            print(f"  验证详情: 原始返回 {len(raw_terms.split(','))} 个术语，验证通过 {len(result)} 个")
             return result
 
         except Exception as e:
@@ -163,124 +162,139 @@ class GroqKeywordExpander:
             return [keywords] if not self._is_chinese(keywords) else []
 
 
-class QueryBuilder:
-    def __init__(self, keywords: List[str]):
-        # 清洗关键词：移除特殊字符，限制长度
-        self.keywords = [
-            term.replace('"', '').replace("'", "").strip()
-            for term in keywords
-            if 3 <= len(term.strip()) <= 50
-        ]
-
-    def build_query(self) -> str:
-        """简化查询构建：只用OR连接所有关键词"""
-        if not self.keywords:
-            raise ValueError("无有效关键词")
-
-        # 对包含空格的关键词加引号
-        quoted_terms = [
-            f'"{term}"' if ' ' in term else term
-            for term in self.keywords
-        ]
-
-        return " OR ".join(quoted_terms)
-
-
-class LiteratureCollector:
+class SimpleLiteratureCollector:
+    """
+    简化版文献收集器 - 作为MCP搜索的后备方案
+    仅保留核心的scholarly搜索功能
+    """
     def __init__(self):
         self.results = []
         self.seen_urls = set()
-        self.supabase: Client = None
-        if SUPABASE_URL and SUPABASE_KEY:
-            self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    async def collect(self, query: str, max_results: int, output_filename: Optional[str] = None, year_low: Optional[int] = None, year_high: Optional[int] = None):
-        print(f"\n开始检索: {query}, 年份范围: {year_low}-{year_high}, 最大结果: {max_results}")
-        self.results = [] # Ensure results are reset for each call
-        self.seen_urls = set() # Ensure seen_urls are reset
-        retrieved_count = 0
+    
+    async def collect_fallback(self, query: str, max_results: int = 20, 
+                              year_low: Optional[int] = None, 
+                              year_high: Optional[int] = None) -> List[Dict]:
+        """后备搜索方法 - 当MCP不可用时使用"""
+        print(f"\n📚 使用后备搜索: {query}")
+        self.results = []
+        self.seen_urls = set()
+        
         try:
-            print(f"调用 scholarly.search_pubs with query: '{query}', year_low: {year_low}, year_high: {year_high}")
-            search_results_iterator = scholarly.search_pubs(query, year_low=year_low, year_high=year_high)
-            for i in range(max_results * 2):
+            search_results_iterator = scholarly.search_pubs(
+                query, year_low=year_low, year_high=year_high
+            )
+            
+            retrieved_count = 0
+            for i in range(max_results * 2):  # 搜索更多以过滤无效结果
                 try:
                     result = next(search_results_iterator)
                     retrieved_count += 1
-                    if result:
-                        print(f"  scholarly 返回结果 {retrieved_count}: {result.get('bib', {}).get('title', '无标题')[:50]}...")
-                    else:
-                        print(f"  scholarly 返回了一个空结果 {retrieved_count}")
+                    
+                    if not result:
                         continue
+                        
                     bib = result.get('bib', {})
                     title = bib.get('title', '')
                     if not title:
-                        print("  结果无标题，跳过.")
                         continue
+                        
                     url = result.get('pub_url', '')
-                    if not url:
-                        print(f"  结果 '{title[:30]}...' 无URL，跳过.")
+                    if not url or url in self.seen_urls:
                         continue
-                    if url in self.seen_urls:
-                        print(f"  结果 '{title[:30]}...' URL重复，跳过.")
-                        continue
-                    current_year_str = str(bib.get('pub_year', ''))
+                    
                     paper_data = {
                         "title": title,
                         "authors": "; ".join(bib.get('author', [])),
-                        "year": current_year_str,
-                        "abstract": bib.get('abstract', '')[:300] + "..." if bib.get('abstract') else '',
+                        "year": str(bib.get('pub_year', '')),
+                        "abstract": (bib.get('abstract', '')[:300] + "...") if bib.get('abstract') else '',
                         "url": url
                     }
+                    
                     self.results.append(paper_data)
                     self.seen_urls.add(url)
-                    print(f"  已添加: '{title[:30]}...'. 当前结果数: {len(self.results)}/{max_results}")
+                    
+                    print(f"  📄 添加: '{title[:50]}...'. 当前: {len(self.results)}/{max_results}")
+                    
                     if len(self.results) >= max_results:
-                        print(f"已达到最大结果数 {max_results}")
                         break
+                        
                     await asyncio.sleep(random.uniform(*REQUEST_DELAY))
+                    
                 except StopIteration:
-                    print("scholarly.search_pubs 已无更多结果.")
+                    print("搜索完成 - 无更多结果")
                     break
                 except Exception as e:
-                    print(f"\n从scholarly获取单个结果时出错: {str(e)}")
+                    print(f"处理单条结果错误: {str(e)}")
                     continue
-            print(f"scholarly 检索循环结束. 共尝试获取 {retrieved_count} 条, 实际添加到self.results的有 {len(self.results)} 条.")
-            # 不再保存xlsx
+                    
         except Exception as e:
-            print(f"\n致命错误: {str(e)}")
+            print(f"搜索失败: {str(e)}")
+        
+        print(f"🏁 后备搜索完成，获得 {len(self.results)} 篇论文")
+        return self.results
 
 
-async def main_workflow():
-    print("\n=== 智能文献检索系统 ===")
+# ================ 简化的命令行工具 ================
 
+async def simple_search_workflow(query: str, max_results: int = 20):
+    """简化的搜索工作流 - 用于测试和演示"""
+    print("\n=== Paper God 简化搜索演示 ===")
+    print(f"查询: {query}")
+    print(f"最大结果数: {max_results}")
+    
     try:
-        keywords = input("请输入研究关键词（英文）: ").strip()
-        if not keywords:
-            raise ValueError("必须输入关键词")
-
-        max_results = input(f"最大结果数 [{DEFAULT_MAX_RESULTS}]: ").strip()
-        max_results = int(max_results) if max_results.isdigit() else DEFAULT_MAX_RESULTS
-
-        output_file = input(f"输出文件名 [{DEFAULT_OUTPUT_FILE}]: ").strip()
-        output_file = output_file or DEFAULT_OUTPUT_FILE
-
-        print("\n🔄 正在扩展关键词...")
-        expander = GroqKeywordExpander()
-        expanded_terms = await expander.expand_keywords(keywords)
-        print(f"🔍 扩展后的关键词: {', '.join(expanded_terms)}")
-
-        query_engine = QueryBuilder(expanded_terms)
-        search_query = query_engine.build_query()
-        print(f"\n⚙️ 生成的搜索式: {search_query}")
-
-        collector = LiteratureCollector()
-        await collector.collect(search_query, max_results, None)
-
+        # 1. 关键词扩展
+        if GROQ_API_KEY:
+            print("\n🔄 正在扩展关键词...")
+            expander = GroqKeywordExpander()
+            expanded_terms = await expander.expand_keywords(query, max_terms=5)
+            print(f"🔍 扩展后的关键词: {', '.join(expanded_terms)}")
+        else:
+            print("⚠️ Groq API密钥未配置，跳过关键词扩展")
+            expanded_terms = [query]
+        
+        # 2. 文献搜索
+        print("\n📚 开始文献搜索...")
+        collector = SimpleLiteratureCollector()
+        results = await collector.collect_fallback(" ".join(expanded_terms), max_results)
+        
+        # 3. 输出结果
+        print(f"\n📊 搜索完成！共找到 {len(results)} 篇论文")
+        
+        for i, paper in enumerate(results[:5], 1):  # 显示前5篇
+            print(f"\n{i}. {paper['title']}")
+            print(f"   作者: {paper['authors']}")
+            print(f"   年份: {paper['year']}")
+            if paper['abstract']:
+                print(f"   摘要: {paper['abstract'][:100]}...")
+        
+        if len(results) > 5:
+            print(f"\n... 还有 {len(results) - 5} 篇论文")
+        
+        return results
+        
     except Exception as e:
-        print(f"\n❌ 系统错误: {str(e)}")
-    finally:
-        print("\n程序执行结束")
+        print(f"\n❌ 搜索失败: {str(e)}")
+        return []
 
 
 if __name__ == "__main__":
-    asyncio.run(main_workflow())
+    # 简单的命令行测试界面
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        max_results = 10
+    else:
+        query = input("请输入搜索关键词: ").strip()
+        if not query:
+            print("未输入关键词，退出")
+            sys.exit(1)
+        
+        try:
+            max_results = int(input(f"最大结果数 [{DEFAULT_MAX_RESULTS}]: ").strip() or DEFAULT_MAX_RESULTS)
+        except ValueError:
+            max_results = DEFAULT_MAX_RESULTS
+    
+    # 运行搜索
+    asyncio.run(simple_search_workflow(query, max_results))

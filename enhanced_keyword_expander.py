@@ -283,7 +283,7 @@ JSON结果："""
         self,
         keywords: str,
         discipline_info: DisciplineDetectionResult,
-        expansion_count: int = 5
+        expansion_count: int = 3
     ) -> List[str]:
         """
         基于学科信息进行关键词扩展
@@ -323,8 +323,9 @@ JSON结果："""
 1. 优先转换为该学科领域的标准英文术语
 2. 包括技术方法名、理论概念、专业工具等
 3. 避免一般性词汇，专注于专业术语
-4. 返回格式：term1, term2, term3, term4, term5
-5. 仅返回英文术语，用逗号分隔
+4. 每个术语要精准且高质量
+5. 返回格式：term1, term2, term3
+6. 仅返回英文术语，用逗号分隔
 
 专业英文术语："""
 
@@ -366,7 +367,8 @@ Requirements:
 2. Include both abbreviations and full terms when applicable
 3. Prioritize terms commonly used in academic literature
 4. Avoid general synonyms, focus on professional terminology
-5. Format: term1, term2, term3, term4, term5
+5. Each term should be precise and high-quality
+6. Format: term1, term2, term3
 
 Professional terms:"""
 
@@ -418,7 +420,7 @@ Professional terms:"""
     async def comprehensive_expansion(
         self, 
         keywords: str,
-        max_keywords: int = 8
+        max_keywords: int = 3
     ) -> KeywordExpansionResult:
         """
         综合关键词扩展：检测学科 + 扩展关键词

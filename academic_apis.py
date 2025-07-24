@@ -398,27 +398,29 @@ class AcademicSearchEngine:
         
         # Semantic Scholar搜索
         if use_both_apis or not hasattr(self, '_openalex_only'):
-            async with SemanticScholarAPI(self.semantic_scholar_api_key) as ss_api:
-                task = ss_api.search_papers(
-                    query=query,
-                    limit=papers_per_api,
-                    year_min=year_min,
-                    year_max=year_max,
-                    fields_of_study=fields_of_study
-                )
-                tasks.append(task)
+            async def search_semantic():
+                async with SemanticScholarAPI(self.semantic_scholar_api_key) as ss_api:
+                    return await ss_api.search_papers(
+                        query=query,
+                        limit=papers_per_api,
+                        year_min=year_min,
+                        year_max=year_max,
+                        fields_of_study=fields_of_study
+                    )
+            tasks.append(search_semantic())
         
         # OpenAlex搜索
         if use_both_apis or hasattr(self, '_openalex_only'):
-            async with OpenAlexAPI() as oa_api:
-                task = oa_api.search_papers(
-                    query=query,
-                    limit=papers_per_api,
-                    year_min=year_min,
-                    year_max=year_max,
-                    fields_of_study=fields_of_study
-                )
-                tasks.append(task)
+            async def search_openalex():
+                async with OpenAlexAPI() as oa_api:
+                    return await oa_api.search_papers(
+                        query=query,
+                        limit=papers_per_api,
+                        year_min=year_min,
+                        year_max=year_max,
+                        fields_of_study=fields_of_study
+                    )
+            tasks.append(search_openalex())
         
         # 并发执行搜索
         try:
