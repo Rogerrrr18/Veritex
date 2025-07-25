@@ -6,8 +6,15 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      // 代理到后端（端口8000）
       '/expand_keywords': 'http://localhost:8000',
       '/search_papers': 'http://localhost:8000',
+      '/multi_source_search': 'http://localhost:8000',
+      '/analyze_discipline': 'http://localhost:8000',
+      '/batch_expand': 'http://localhost:8000',
+      '/performance': 'http://localhost:8000',
+      '/health': 'http://localhost:8000',
+      '/clear_cache': 'http://localhost:8000',
       '/analytics': 'http://localhost:8000',
     }
   }

@@ -1,400 +1,311 @@
 """
-增强的关键词扩展和学科检测模块
-支持15+学科领域的自动检测和专业术语扩展
+增强的关键词扩展器 - Paper God核心组件
+重构版：集成学科检测 + 优化Groq LLM扩展 + 为SPLADE预留接口
 """
 
 import asyncio
+import time
 from groq import Groq
-from typing import List, Dict, Optional, Tuple
-import re
+from typing import List, Dict, Any
 import json
 import logging
 from dataclasses import dataclass
-from enum import Enum
 
 logger = logging.getLogger(__name__)
-
-class AcademicDiscipline(Enum):
-    """学科领域枚举"""
-    COMPUTER_SCIENCE = "计算机科学"
-    ARTIFICIAL_INTELLIGENCE = "人工智能"
-    BIOLOGY = "生物学"
-    MEDICINE = "医学"
-    CHEMISTRY = "化学"
-    PHYSICS = "物理学"
-    MATHEMATICS = "数学"
-    PSYCHOLOGY = "心理学"
-    ECONOMICS = "经济学"
-    ENGINEERING = "工程学"
-    SOCIAL_SCIENCE = "社会科学"
-    ENVIRONMENTAL_SCIENCE = "环境科学"
-    MATERIALS_SCIENCE = "材料科学"
-    NEUROSCIENCE = "神经科学"
-    PHARMACOLOGY = "药理学"
-    BIOTECHNOLOGY = "生物技术"
-    DATA_SCIENCE = "数据科学"
-    ROBOTICS = "机器人学"
-    UNKNOWN = "未知领域"
-
-@dataclass
-class DisciplineDetectionResult:
-    """学科检测结果"""
-    primary_discipline: AcademicDiscipline
-    secondary_disciplines: List[AcademicDiscipline]
-    confidence: float
-    keywords_by_discipline: Dict[str, List[str]]
 
 @dataclass
 class KeywordExpansionResult:
     """关键词扩展结果"""
-    original_keywords: List[str]
+    original_query: str
     expanded_keywords: List[str]
-    discipline_info: DisciplineDetectionResult
+    detected_discipline: str
+    discipline_chinese: str
+    confidence: float
     expansion_strategy: str
     quality_score: float
+    processing_time: float
 
 class EnhancedKeywordExpander:
-    """增强的关键词扩展器"""
+    """增强的关键词扩展器 - 支持学科检测和专业术语扩展"""
     
-    def __init__(self, groq_api_key: str, model_name: str = "gemma2-9b-it"):
-        self.client = Groq(api_key=groq_api_key)
-        self.model_name = model_name
+    def __init__(self, api_key: str, model: str = "gemma2-9b-it"):
+        """初始化关键词扩展器"""
+        try:
+            self.client = Groq(api_key=api_key)
+            self.model = model
+            self.max_retries = 3
+            self.retry_delay = 1  # 秒
+            logger.info("关键词扩展器初始化成功")
+        except Exception as e:
+            logger.error(f"关键词扩展器初始化失败: {e}")
+            raise
+    
+    async def detect_and_expand(
+        self,
+        query: str,
+        max_keywords: int = 5
+    ) -> KeywordExpansionResult:
+        """检测学科领域并扩展关键词"""
+        start_time = time.time()
         
-        # 学科特征词典
-        self.discipline_keywords = {
-            AcademicDiscipline.COMPUTER_SCIENCE: [
-                "algorithm", "software", "programming", "computing", "database", 
-                "network", "system", "code", "compiler", "interface"
-            ],
-            AcademicDiscipline.ARTIFICIAL_INTELLIGENCE: [
-                "machine learning", "neural network", "deep learning", "AI", 
-                "artificial intelligence", "model", "training", "prediction", 
-                "classification", "regression", "transformer", "attention"
-            ],
-            AcademicDiscipline.BIOLOGY: [
-                "gene", "protein", "cell", "organism", "evolution", "species",
-                "DNA", "RNA", "enzyme", "molecular", "genetics", "biotechnology"
-            ],
-            AcademicDiscipline.MEDICINE: [
-                "patient", "treatment", "diagnosis", "therapy", "clinical",
-                "disease", "symptom", "drug", "pharmaceutical", "healthcare"
-            ],
-            AcademicDiscipline.CHEMISTRY: [
-                "molecule", "compound", "reaction", "catalyst", "synthesis",
-                "organic", "inorganic", "chemical", "bond", "element"
-            ],
-            AcademicDiscipline.PHYSICS: [
-                "quantum", "particle", "energy", "force", "wave", "field",
-                "matter", "radiation", "electromagnetic", "mechanics"
-            ],
-            AcademicDiscipline.MATHEMATICS: [
-                "theorem", "proof", "equation", "function", "matrix", "calculus",
-                "algebra", "geometry", "statistics", "probability"
-            ],
-            AcademicDiscipline.PSYCHOLOGY: [
-                "behavior", "cognitive", "mental", "brain", "mind", "emotion",
-                "perception", "learning", "memory", "consciousness"
-            ],
-            AcademicDiscipline.ECONOMICS: [
-                "market", "economy", "finance", "trade", "investment", "price",
-                "economic", "monetary", "fiscal", "business", "growth"
-            ],
-            AcademicDiscipline.ENGINEERING: [
-                "design", "construction", "mechanical", "electrical", "civil",
-                "structural", "manufacturing", "technology", "innovation"
-            ],
-            AcademicDiscipline.SOCIAL_SCIENCE: [
-                "social", "society", "culture", "community", "policy", "governance",
-                "political", "sociology", "anthropology", "demographic"
-            ],
-            AcademicDiscipline.ENVIRONMENTAL_SCIENCE: [
-                "environment", "climate", "ecosystem", "pollution", "sustainability",
-                "conservation", "ecology", "biodiversity", "carbon", "renewable"
-            ],
-            AcademicDiscipline.MATERIALS_SCIENCE: [
-                "material", "polymer", "composite", "ceramic", "metal", "crystal",
-                "nanostructure", "mechanical properties", "thermal"
-            ],
-            AcademicDiscipline.NEUROSCIENCE: [
-                "neuron", "brain", "nervous system", "synaptic", "neurological",
-                "cognitive neuroscience", "neuroimaging", "neurotransmitter"
-            ],
-            AcademicDiscipline.PHARMACOLOGY: [
-                "drug", "pharmaceutical", "pharmacokinetics", "toxicity",
-                "medication", "therapeutic", "dosage", "clinical trial"
-            ],
-            AcademicDiscipline.BIOTECHNOLOGY: [
-                "bioengineering", "genetic engineering", "bioinformatics",
-                "bioprocessing", "fermentation", "recombinant", "cloning"
-            ],
-            AcademicDiscipline.DATA_SCIENCE: [
-                "data mining", "big data", "analytics", "visualization",
-                "statistical analysis", "machine learning", "predictive modeling"
-            ],
-            AcademicDiscipline.ROBOTICS: [
-                "robot", "automation", "control system", "sensor", "actuator",
-                "autonomous", "manipulation", "navigation", "humanoid"
+        try:
+            # 规范化查询
+            query = query.strip()
+            if not query:
+                raise ValueError("查询不能为空")
+            
+            # 构建提示词
+            prompt = self._build_prompt(query, max_keywords)
+            
+            # 尝试获取响应
+            response = await self._get_response_with_retry(prompt)
+            
+            # 解析响应
+            try:
+                result = self._parse_response(response, query)
+            except Exception as e:
+                logger.error(f"解析响应失败: {e}")
+                # 返回基本结果
+                return KeywordExpansionResult(
+                    original_query=query,
+                    expanded_keywords=[query],
+                    detected_discipline="unknown",
+                    discipline_chinese="未知",
+                    confidence=0.0,
+                    expansion_strategy="fallback",
+                    quality_score=0.0,
+                    processing_time=time.time() - start_time
+                )
+            
+            # 添加处理时间
+            result.processing_time = time.time() - start_time
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"关键词扩展失败: {e}")
+            # 返回原始查询作为结果
+            return KeywordExpansionResult(
+                original_query=query,
+                expanded_keywords=[query],
+                detected_discipline="error",
+                discipline_chinese="错误",
+                confidence=0.0,
+                expansion_strategy="error",
+                quality_score=0.0,
+                processing_time=time.time() - start_time
+            )
+    
+    def _build_prompt(self, query: str, max_keywords: int) -> str:
+        """构建提示词"""
+        return f"""作为一个学术文献搜索助手，请帮我分析以下查询并提供相关信息：
+
+查询: {query}
+
+请提供以下信息（JSON格式）：
+1. 检测到的学科领域（英文）
+2. 学科中文名称
+3. 置信度（0-1）
+4. 扩展策略说明
+5. 扩展后的关键词列表（最多{max_keywords}个，包含原始关键词）
+6. 质量评分（0-1）
+
+示例格式：
+{{
+    "detected_discipline": "computer_science",
+    "discipline_chinese": "计算机科学",
+    "confidence": 0.95,
+    "expansion_strategy": "field_specific_terms",
+    "expanded_keywords": ["machine learning", "deep learning", "neural networks"],
+    "quality_score": 0.85
+}}"""
+    
+    async def _get_response_with_retry(self, prompt: str, attempt: int = 1) -> str:
+        """获取响应，支持重试"""
+        try:
+            # 使用asyncio.to_thread在线程池中运行同步调用
+            completion = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                messages=[{"role": "user", "content": prompt}],
+                model=self.model,
+                temperature=0.3,
+                max_tokens=500,
+                top_p=0.9
+            )
+            
+            return completion.choices[0].message.content
+            
+        except Exception as e:
+            if attempt < self.max_retries:
+                logger.warning(f"API调用失败，尝试重试 ({attempt}/{self.max_retries}): {e}")
+                await asyncio.sleep(self.retry_delay * attempt)
+                return await self._get_response_with_retry(prompt, attempt + 1)
+            else:
+                logger.error(f"API调用失败，已达到最大重试次数: {e}")
+                raise
+    
+    def _parse_response(self, response: str, original_query: str) -> KeywordExpansionResult:
+        """解析API响应"""
+        try:
+            # 提取JSON部分
+            start = response.find("{")
+            end = response.rfind("}") + 1
+            if start == -1 or end == 0:
+                raise ValueError("响应中未找到有效的JSON")
+            
+            json_str = response[start:end]
+            data = json.loads(json_str)
+            
+            # 验证必要字段
+            required_fields = [
+                "detected_discipline",
+                "discipline_chinese",
+                "confidence",
+                "expansion_strategy",
+                "expanded_keywords",
+                "quality_score"
             ]
-        }
+            
+            for field in required_fields:
+                if field not in data:
+                    raise ValueError(f"缺少必要字段: {field}")
+            
+            # 确保扩展关键词包含原始查询
+            expanded_keywords = data["expanded_keywords"]
+            if original_query not in expanded_keywords:
+                expanded_keywords.insert(0, original_query)
+            
+            # 规范化数值
+            confidence = max(0.0, min(1.0, float(data["confidence"])))
+            quality_score = max(0.0, min(1.0, float(data["quality_score"])))
+            
+            return KeywordExpansionResult(
+                original_query=original_query,
+                expanded_keywords=expanded_keywords,
+                detected_discipline=data["detected_discipline"],
+                discipline_chinese=data["discipline_chinese"],
+                confidence=confidence,
+                expansion_strategy=data["expansion_strategy"],
+                quality_score=quality_score,
+                processing_time=0.0  # 将在外部设置
+            )
+            
+        except Exception as e:
+            logger.error(f"解析响应失败: {e}")
+            raise
     
     def _is_chinese(self, text: str) -> bool:
         """检测文本是否包含中文字符"""
         return any('\u4e00' <= char <= '\u9fff' for char in text)
     
-    async def detect_discipline(self, keywords: str) -> DisciplineDetectionResult:
-        """
-        检测关键词所属的学科领域
-        
-        Args:
-            keywords: 关键词字符串
-            
-        Returns:
-            DisciplineDetectionResult: 学科检测结果
-        """
-        # 简单的关键词匹配检测
-        keywords_lower = keywords.lower()
-        discipline_scores = {}
-        
-        for discipline, discipline_keywords in self.discipline_keywords.items():
-            score = 0
-            matched_keywords = []
-            
-            for keyword in discipline_keywords:
-                if keyword.lower() in keywords_lower:
-                    score += 1
-                    matched_keywords.append(keyword)
-            
-            if score > 0:
-                discipline_scores[discipline] = {
-                    'score': score,
-                    'keywords': matched_keywords
-                }
-        
-        # 如果基于关键词匹配没有结果，使用LLM判断
-        if not discipline_scores:
-            llm_result = await self._llm_discipline_detection(keywords)
-            return llm_result
-        
-        # 排序并选择主要学科
-        sorted_disciplines = sorted(
-            discipline_scores.items(), 
-            key=lambda x: x[1]['score'], 
-            reverse=True
-        )
-        
-        primary_discipline = sorted_disciplines[0][0]
-        secondary_disciplines = [d[0] for d in sorted_disciplines[1:3]]
-        
-        # 计算置信度
-        total_matches = sum(d['score'] for d in discipline_scores.values())
-        primary_score = sorted_disciplines[0][1]['score']
-        confidence = primary_score / total_matches if total_matches > 0 else 0.5
-        
-        # 构建关键词分布
-        keywords_by_discipline = {}
-        for discipline, data in discipline_scores.items():
-            if data['keywords']:
-                keywords_by_discipline[discipline.value] = data['keywords']
-        
-        return DisciplineDetectionResult(
-            primary_discipline=primary_discipline,
-            secondary_disciplines=secondary_disciplines,
-            confidence=confidence,
-            keywords_by_discipline=keywords_by_discipline
-        )
-    
-    async def _llm_discipline_detection(self, keywords: str) -> DisciplineDetectionResult:
-        """使用LLM进行学科检测"""
-        
-        disciplines_list = [d.value for d in AcademicDiscipline if d != AcademicDiscipline.UNKNOWN]
-        
-        prompt = f"""
-你是学科领域专家。请分析以下关键词所属的学术领域：
-
-关键词: {keywords}
-
-可选学科领域：
-{', '.join(disciplines_list)}
-
-请返回JSON格式结果：
-{{
-    "primary_discipline": "主要学科（中文）",
-    "secondary_disciplines": ["次要学科1", "次要学科2"],
-    "confidence": 0.85,
-    "reasoning": "判断理由"
-}}
-
-要求：
-1. primary_discipline必须从可选学科中选择
-2. secondary_disciplines最多2个
-3. confidence为0-1之间的数值
-4. 提供简短的判断理由
-
-JSON结果："""
-
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=200
-            )
-            
-            result_text = response.choices[0].message.content.strip()
-            
-            # 尝试提取JSON
-            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
-            if json_match:
-                result_data = json.loads(json_match.group())
-                
-                # 转换为枚举类型
-                primary_discipline = AcademicDiscipline.UNKNOWN
-                for discipline in AcademicDiscipline:
-                    if discipline.value == result_data.get('primary_discipline'):
-                        primary_discipline = discipline
-                        break
-                
-                secondary_disciplines = []
-                for sec_disc in result_data.get('secondary_disciplines', []):
-                    for discipline in AcademicDiscipline:
-                        if discipline.value == sec_disc:
-                            secondary_disciplines.append(discipline)
-                            break
-                
-                return DisciplineDetectionResult(
-                    primary_discipline=primary_discipline,
-                    secondary_disciplines=secondary_disciplines,
-                    confidence=result_data.get('confidence', 0.5),
-                    keywords_by_discipline={}
-                )
-            
-        except Exception as e:
-            logger.warning(f"LLM学科检测失败: {e}")
-        
-        # 默认返回未知领域
-        return DisciplineDetectionResult(
-            primary_discipline=AcademicDiscipline.UNKNOWN,
-            secondary_disciplines=[],
-            confidence=0.3,
-            keywords_by_discipline={}
-        )
-    
-    async def expand_keywords_by_discipline(
-        self,
-        keywords: str,
-        discipline_info: DisciplineDetectionResult,
-        expansion_count: int = 3
+    async def _expand_keywords_with_groq(
+        self, 
+        query: str, 
+        discipline: str, 
+        discipline_chinese: str,
+        max_keywords: int
     ) -> List[str]:
-        """
-        基于学科信息进行关键词扩展
+        """使用优化的Groq LLM进行关键词扩展"""
         
-        Args:
-            keywords: 原始关键词
-            discipline_info: 学科检测信息
-            expansion_count: 扩展关键词数量
-        """
-        is_chinese_input = self._is_chinese(keywords)
+        is_chinese_input = self._is_chinese(query)
         
         if is_chinese_input:
-            return await self._expand_chinese_keywords(keywords, discipline_info, expansion_count)
+            return await self._expand_chinese_query(query, discipline_chinese, max_keywords)
         else:
-            return await self._expand_english_keywords(keywords, discipline_info, expansion_count)
+            return await self._expand_english_query(query, discipline, max_keywords)
     
-    async def _expand_chinese_keywords(
-        self,
-        keywords: str,
-        discipline_info: DisciplineDetectionResult,
-        expansion_count: int
+    async def _expand_chinese_query(
+        self, 
+        query: str, 
+        discipline_chinese: str, 
+        max_keywords: int
     ) -> List[str]:
-        """扩展中文关键词"""
-        
-        discipline_context = f"学科领域：{discipline_info.primary_discipline.value}"
-        if discipline_info.secondary_disciplines:
-            secondary_names = [d.value for d in discipline_info.secondary_disciplines]
-            discipline_context += f"，相关领域：{', '.join(secondary_names)}"
+        """扩展中文查询为英文学术术语"""
         
         prompt = f"""
-你是{discipline_info.primary_discipline.value}领域的专业术语专家。请将以下中文关键词转换为{expansion_count}个最相关的英文专业术语：
+你是{discipline_chinese}领域的专业术语专家。请将以下中文查询转换为{max_keywords}个最相关的英文学术术语：
 
-{discipline_context}
-中文关键词: {keywords}
+学科领域：{discipline_chinese}
+中文查询：{query}
 
 要求：
-1. 优先转换为该学科领域的标准英文术语
-2. 包括技术方法名、理论概念、专业工具等
-3. 避免一般性词汇，专注于专业术语
-4. 每个术语要精准且高质量
-5. 返回格式：term1, term2, term3
-6. 仅返回英文术语，用逗号分隔
+1. 转换为该学科的标准英文术语
+2. 包括核心概念、技术方法、专业工具
+3. 避免通用词汇，专注专业术语
+4. 术语要精准且在学术文献中常用
+5. 仅返回英文术语，用逗号分隔
+6. 不要包含解释或其他文字
 
-专业英文术语："""
+英文学术术语："""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
+            # 使用asyncio.to_thread在线程池中运行同步调用
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
-                max_tokens=100
+                max_tokens=150
             )
             
             raw_terms = response.choices[0].message.content.strip()
-            terms = self._parse_and_validate_terms(raw_terms)
+            terms = self._parse_terms(raw_terms)
             
-            return terms[:expansion_count]
+            return terms[:max_keywords]
             
         except Exception as e:
-            logger.error(f"中文关键词扩展失败: {e}")
-            return []
+            logger.error(f"中文查询扩展失败: {e}")
+            return [query]
     
-    async def _expand_english_keywords(
-        self,
-        keywords: str,
-        discipline_info: DisciplineDetectionResult,
-        expansion_count: int
+    async def _expand_english_query(
+        self, 
+        query: str, 
+        discipline: str, 
+        max_keywords: int
     ) -> List[str]:
-        """扩展英文关键词"""
-        
-        discipline_context = f"Academic field: {discipline_info.primary_discipline.value}"
+        """扩展英文查询为相关学术术语"""
         
         prompt = f"""
-You are a {discipline_info.primary_discipline.value} terminology expert. Generate {expansion_count} highly relevant professional terms for the given keyword:
+You are a {discipline} terminology expert. Generate {max_keywords} highly relevant academic terms for:
 
-{discipline_context}
-Keywords: {keywords}
+Field: {discipline}
+Query: {query}
 
 Requirements:
-1. Focus on technical methods, algorithms, theories specific to this field
+1. Focus on technical methods, theories, algorithms specific to this field
 2. Include both abbreviations and full terms when applicable
 3. Prioritize terms commonly used in academic literature
 4. Avoid general synonyms, focus on professional terminology
-5. Each term should be precise and high-quality
-6. Format: term1, term2, term3
+5. Return only terms separated by commas
+6. No explanations or additional text
 
-Professional terms:"""
+Academic terms:"""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
+            # 使用asyncio.to_thread在线程池中运行同步调用
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
-                max_tokens=100
+                max_tokens=150
             )
             
             raw_terms = response.choices[0].message.content.strip()
-            terms = self._parse_and_validate_terms(raw_terms)
+            terms = self._parse_terms(raw_terms)
             
-            # 确保原关键词包含在结果中
-            if keywords not in terms:
-                terms.insert(0, keywords)
+            # 确保原查询包含在结果中
+            if query not in terms:
+                terms.insert(0, query)
             
-            return terms[:expansion_count]
+            return terms[:max_keywords]
             
         except Exception as e:
-            logger.error(f"英文关键词扩展失败: {e}")
-            return [keywords]
+            logger.error(f"英文查询扩展失败: {e}")
+            return [query]
     
-    def _parse_and_validate_terms(self, raw_terms: str) -> List[str]:
-        """解析和验证术语"""
+    def _parse_terms(self, raw_terms: str) -> List[str]:
+        """解析和清理术语列表"""
         terms = []
         
         for term in raw_terms.split(','):
@@ -406,10 +317,10 @@ Professional terms:"""
                 len(clean_term) <= 100 and
                 not self._is_chinese(clean_term)):
                 
-                # 排除无效模式
+                # 过滤无效模式
                 invalid_patterns = [
-                    'based on', "i've generated", 'following', 'requirements',
-                    'format', 'professional terms', 'academic field'
+                    'academic terms', 'professional terms', 'requirements',
+                    'format', 'field:', 'query:', 'based on'
                 ]
                 
                 if not any(pattern in clean_term.lower() for pattern in invalid_patterns):
@@ -417,92 +328,83 @@ Professional terms:"""
         
         return terms
     
-    async def comprehensive_expansion(
-        self, 
-        keywords: str,
-        max_keywords: int = 3
-    ) -> KeywordExpansionResult:
-        """
-        综合关键词扩展：检测学科 + 扩展关键词
+    def _merge_expansions(self, groq_terms: List[str], splade_terms: List[str]) -> List[str]:
+        """合并Groq和SPLADE扩展结果（预留功能）"""
+        # 简单合并策略，SPLADE集成时完善
+        all_terms = groq_terms.copy()
         
-        Args:
-            keywords: 原始关键词
-            max_keywords: 最大扩展关键词数量
-            
-        Returns:
-            KeywordExpansionResult: 完整的扩展结果
-        """
-        # 1. 检测学科领域
-        discipline_info = await self.detect_discipline(keywords)
+        for term in splade_terms:
+            if term not in all_terms:
+                all_terms.append(term)
         
-        # 2. 基于学科进行关键词扩展
-        expanded_keywords = await self.expand_keywords_by_discipline(
-            keywords, discipline_info, max_keywords
-        )
-        
-        # 3. 计算扩展质量分数
-        quality_score = self._calculate_quality_score(
-            keywords, expanded_keywords, discipline_info
-        )
-        
-        # 4. 确定扩展策略
-        strategy = self._determine_expansion_strategy(keywords, discipline_info)
-        
-        return KeywordExpansionResult(
-            original_keywords=[keywords],
-            expanded_keywords=expanded_keywords,
-            discipline_info=discipline_info,
-            expansion_strategy=strategy,
-            quality_score=quality_score
-        )
+        return all_terms
     
-    def _calculate_quality_score(
-        self,
-        original: str,
-        expanded: List[str],
-        discipline_info: DisciplineDetectionResult
+    def _calculate_expansion_quality(
+        self, 
+        expanded_keywords: List[str], 
+        confidence: float
     ) -> float:
         """计算扩展质量分数"""
         base_score = 0.5
         
         # 基于学科检测置信度
-        base_score += discipline_info.confidence * 0.3
+        base_score += confidence * 0.3
         
         # 基于扩展术语数量
-        if len(expanded) >= 3:
+        if len(expanded_keywords) >= 3:
             base_score += 0.2
         
-        # 如果有专业术语特征，加分
+        # 专业术语指标
         professional_indicators = [
             'algorithm', 'method', 'analysis', 'technique', 'approach',
             'model', 'system', 'framework', 'protocol', 'mechanism'
         ]
         
-        professional_count = 0
-        for term in expanded:
-            if any(indicator in term.lower() for indicator in professional_indicators):
-                professional_count += 1
+        professional_count = sum(
+            1 for term in expanded_keywords 
+            if any(indicator in term.lower() for indicator in professional_indicators)
+        )
         
         if professional_count > 0:
             base_score += min(professional_count * 0.05, 0.2)
         
         return min(base_score, 1.0)
     
-    def _determine_expansion_strategy(
-        self,
-        keywords: str,
-        discipline_info: DisciplineDetectionResult
+    def _determine_strategy(
+        self, 
+        query: str, 
+        discipline_info: Dict[str, Any]
     ) -> str:
-        """确定扩展策略"""
-        if self._is_chinese(keywords):
-            return f"中文翻译策略 - {discipline_info.primary_discipline.value}领域"
+        """确定扩展策略描述"""
+        if self._is_chinese(query):
+            return f"中文翻译扩展 - {discipline_info['discipline_chinese']}领域"
         else:
-            if discipline_info.confidence > 0.7:
-                return f"专业术语扩展 - {discipline_info.primary_discipline.value}领域"
+            if discipline_info['confidence'] > 0.7:
+                return f"专业术语扩展 - {discipline_info['discipline_chinese']}领域"
             else:
-                return "通用扩展策略"
+                return "通用学术术语扩展"
+    
+    # 预留SPLADE集成接口
+    def enable_splade(self, splade_model):
+        """启用SPLADE语义扩展（预留接口）"""
+        self.splade_model = splade_model
+        self.use_splade = True
+        logger.info("SPLADE语义扩展已启用")
+    
+    def disable_splade(self):
+        """禁用SPLADE语义扩展"""
+        self.use_splade = False
+        logger.info("SPLADE语义扩展已禁用")
+    
+    # 保持向后兼容的方法
+    async def expand_keywords(self, keywords: str, max_terms: int = 5) -> List[str]:
+        """
+        向后兼容方法 - 保持与原有代码的兼容性
+        """
+        result = await self.detect_and_expand(keywords, max_terms)
+        return result.expanded_keywords
 
-# 测试用例
+# 测试和示例
 async def main():
     """测试增强的关键词扩展器"""
     import os
@@ -519,28 +421,26 @@ async def main():
     
     # 测试案例
     test_cases = [
-        "机器学习",
-        "neural networks", 
-        "CRISPR基因编辑",
-        "quantum computing",
-        "蛋白质折叠",
-        "blockchain technology"
+        "甲烷干重整催化剂",
+        "machine learning algorithms", 
+        "CRISPR基因编辑技术",
+        "quantum computing applications",
+        "蛋白质折叠预测",
+        "blockchain consensus mechanisms"
     ]
     
-    for keywords in test_cases:
-        print(f"\n=== 测试关键词: {keywords} ===")
+    for query in test_cases:
+        print(f"\n=== 测试查询: {query} ===")
         
-        # 学科检测
-        discipline_info = await expander.detect_discipline(keywords)
-        print(f"主要学科: {discipline_info.primary_discipline.value}")
-        print(f"次要学科: {[d.value for d in discipline_info.secondary_disciplines]}")
-        print(f"置信度: {discipline_info.confidence:.2f}")
+        # 检测和扩展
+        result = await expander.detect_and_expand(query, max_keywords=5)
         
-        # 综合扩展
-        result = await expander.comprehensive_expansion(keywords, max_keywords=6)
+        print(f"检测学科: {result.discipline_chinese} ({result.detected_discipline})")
+        print(f"置信度: {result.confidence:.2f}")
         print(f"扩展策略: {result.expansion_strategy}")
+        print(f"处理时间: {result.processing_time:.2f}秒")
         print(f"质量分数: {result.quality_score:.2f}")
-        print(f"扩展关键词: {result.expanded_keywords}")
+        print(f"扩展结果: {result.expanded_keywords}")
 
 if __name__ == "__main__":
     asyncio.run(main())

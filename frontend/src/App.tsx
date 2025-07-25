@@ -3,6 +3,43 @@ import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { supabase, registerUser, logUserAction } from './supabaseClient';
 import AdminDashboard from './AdminDashboard';
+import { api, APP_CONFIG, DEV_CONFIG } from './config';
+
+// 搜索历史管理
+interface SearchHistory {
+  id: string;
+  timestamp: number;
+  originalQuery: string;
+  expandedKeywords: string[];
+  papers: any[];
+  maxResults: number;
+}
+
+const STORAGE_KEY = 'paper_god_search_history';
+
+const saveSearchHistory = (history: SearchHistory) => {
+  const existingHistory = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  existingHistory.unshift(history); // 最新的在前面
+  // 只保留最近50次搜索
+  if (existingHistory.length > 50) {
+    existingHistory.splice(50);
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(existingHistory));
+};
+
+const getSearchHistory = (): SearchHistory[] => {
+  return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+};
+
+const deleteSearchHistory = (ids: string[]) => {
+  const existingHistory = getSearchHistory();
+  const filteredHistory = existingHistory.filter(item => !ids.includes(item.id));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(filteredHistory));
+};
+
+const clearAllSearchHistory = () => {
+  localStorage.removeItem(STORAGE_KEY);
+};
 
 // 简洁主题切换icon，仅用于报告页
 function ReportThemeToggle({ theme, toggle }: { theme: string, toggle: () => void }) {
@@ -128,7 +165,6 @@ function InviteCodePage() {
 function HomePage() {
   const [input, setInput] = useState('')
   const [currentSlide, setCurrentSlide] = useState(0)
-  const [searchMode, setSearchMode] = useState('traditional') // 'traditional', 'mcp_enhanced', 'visualization'
   const navigate = useNavigate()
 
   // 3D轮播图片
@@ -160,20 +196,7 @@ function HomePage() {
       return
     }
     if (input.trim()) {
-      // 根据搜索模式导航到不同页面
-      switch (searchMode) {
-        case 'traditional':
-          navigate('/keywords', { state: { input, searchMode: 'traditional' } })
-          break
-        case 'mcp_enhanced':
-          navigate('/keywords', { state: { input, searchMode: 'mcp_enhanced' } })
-          break
-        case 'visualization':
-          navigate('/visualization', { state: { query: input } })
-          break
-        default:
-          navigate('/keywords', { state: { input, searchMode: 'traditional' } })
-      }
+      navigate('/keywords', { state: { input } })
     }
   }
 
@@ -191,6 +214,15 @@ function HomePage() {
           </ul>
         </nav>
         <div className="header-right">
+          {hasValidSession ? (
+            <button 
+              className="btn btn-primary" 
+              onClick={() => navigate('/my')}
+              style={{ marginRight: 8 }}
+            >
+              我的
+            </button>
+          ) : null}
           <button className="btn btn-primary" onClick={() => navigate('/invite')}>Start free trial</button>
         </div>
       </header>
@@ -202,79 +234,6 @@ function HomePage() {
             Veritex 依托大模型与智能算法，支持关键词扩展、批量论文检索、摘要智能提取与报告导出，帮你快速定位当前的研究进展。
           </p>
           
-          {/* 搜索模式选择 - 更新为MCP模式 */}
-          {hasValidSession && (
-            <div style={{ 
-              margin: '24px 0', 
-              display: 'flex', 
-              justifyContent: 'center', 
-              gap: 16,
-              flexWrap: 'wrap' 
-            }}>
-              <button
-                onClick={() => setSearchMode('traditional')}
-                style={{
-                  padding: '12px 24px',
-                  borderRadius: 25,
-                  border: searchMode === 'traditional' ? '2px solid #3bb0e6' : '1px solid #666',
-                  background: searchMode === 'traditional' ? 'rgba(59,176,230,0.1)' : 'transparent',
-                  color: searchMode === 'traditional' ? '#3bb0e6' : '#fff',
-                  cursor: 'pointer',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  transition: 'all 0.3s',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8
-                }}
-              >
-                🔍 传统搜索
-                <span style={{ fontSize: 12, opacity: 0.7 }}>Groq + Scholarly</span>
-              </button>
-              
-              <button
-                onClick={() => setSearchMode('mcp_enhanced')}
-                style={{
-                  padding: '12px 24px',
-                  borderRadius: 25,
-                  border: searchMode === 'mcp_enhanced' ? '2px solid #3bb0e6' : '1px solid #666',
-                  background: searchMode === 'mcp_enhanced' ? 'rgba(59,176,230,0.1)' : 'transparent',
-                  color: searchMode === 'mcp_enhanced' ? '#3bb0e6' : '#fff',
-                  cursor: 'pointer',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  transition: 'all 0.3s',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8
-                }}
-              >
-                🚀 MCP增强
-                <span style={{ fontSize: 12, opacity: 0.7 }}>多源搜索+分析</span>
-              </button>
-              
-              <button
-                onClick={() => setSearchMode('visualization')}
-                style={{
-                  padding: '12px 24px',
-                  borderRadius: 25,
-                  border: searchMode === 'visualization' ? '2px solid #3bb0e6' : '1px solid #666',
-                  background: searchMode === 'visualization' ? 'rgba(59,176,230,0.1)' : 'transparent',
-                  color: searchMode === 'visualization' ? '#3bb0e6' : '#fff',
-                  cursor: 'pointer',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  transition: 'all 0.3s',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8
-                }}
-              >
-                📊 可视化分析
-                <span style={{ fontSize: 12, opacity: 0.7 }}>图表+知识图谱</span>
-              </button>
-            </div>
-          )}
           
           <form className="hero-form" onSubmit={handleSubmit}>
             <input
@@ -286,11 +245,7 @@ function HomePage() {
               disabled={!hasValidSession}
             />
             <button type="submit" className="btn btn-secondary">
-              {hasValidSession 
-                ? `${searchMode === 'traditional' ? '🔍 传统搜索' : 
-                     searchMode === 'mcp_enhanced' ? '🚀 MCP增强搜索' : 
-                     '📊 可视化分析'}` 
-                : '获取内测邀请码'}
+              {hasValidSession ? '🔍 开始搜索' : '获取内测邀请码'}
             </button>
           </form>
         </section>
@@ -326,19 +281,15 @@ function KeywordCloudPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [input] = useState(location.state?.input || '')
-  const [searchMode] = useState(location.state?.searchMode || 'traditional')
-  const [expanded, setExpanded] = useState<string[]>([])
+  const [expanded, setExpanded] = useState<string[]>(location.state?.expandedKeywords ? [...location.state.expandedKeywords, ''] : [])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [maxResults, setMaxResults] = useState<number>(20)
+  const [maxResults, setMaxResults] = useState<number>(location.state?.maxResults || APP_CONFIG.DEFAULT_MAX_RESULTS)
   const [yearLow, setYearLow] = useState<string>('')
   const [yearHigh, setYearHigh] = useState<string>('')
   const [showLoading, setShowLoading] = useState(false)
+  const [skipExpansion] = useState(location.state?.skipExpansion || false)
   
-  // MCP增强选项
-  const [enableAnalysis, setEnableAnalysis] = useState(searchMode === 'mcp_enhanced')
-  const [enableVisualization, setEnableVisualization] = useState(false)
-  const [selectedSources, setSelectedSources] = useState<string[]>(['arxiv', 'pubmed', 'semantic_scholar'])
 
   // 检查登录状态，未登录强制跳转/invite
   useEffect(() => {
@@ -356,14 +307,14 @@ function KeywordCloudPage() {
 
   // 自动扩展关键词
   useEffect(() => {
-    if (input) {
+    if (input && !skipExpansion) {
       setShowLoading(true)
       handleExpand()
     }
     // eslint-disable-next-line
   }, [input])
 
-  // 关键词扩展 - 简化为使用传统扩展
+  // 关键词扩展
   const handleExpand = async () => {
     if (localStorage.getItem('invite_logged_in') !== '1') {
       navigate('/invite')
@@ -385,26 +336,36 @@ function KeywordCloudPage() {
       // 记录行为
       await logUserAction(userId, 'expand_keywords', input)
       
-      const res = await fetch('/expand_keywords', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keywords: input, user_id: userId })
-      })
+      // 使用配置化的API调用
+      const maxKeywords = 5
+      const data = await api.expandKeywords(input, maxKeywords)
       
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ detail: '扩展失败，无法解析错误响应' }))
-        if (res.status === 401) {
-          localStorage.removeItem('invite_logged_in')
-          localStorage.removeItem('user_id')
-          navigate('/invite')
-          return
+      // 适配优化后端响应格式
+      if (data.success && data.data) {
+        const responseData = data.data
+        
+        // 调试日志
+        if (DEV_CONFIG.ENABLE_DEBUG_LOGS) {
+          console.log('[前端] 后端响应数据:', responseData)
+          console.log('[前端] 扩展关键词:', responseData.expanded_keywords)
         }
-        throw new Error(errData.detail || `HTTP error ${res.status}`)
+        
+        // 设置扩展的关键词
+        const keywords = responseData.expanded_keywords || []
+        // 添加一个空字符串用于新增输入
+        const expandedWithEmpty = keywords.length > 0 ? [...keywords, ''] : ['']
+        
+        setExpanded(expandedWithEmpty)
+      } else {
+        // 兼容旧格式响应
+        const keywords = data.expanded_terms || data.expanded_keywords || []
+        const expandedWithEmpty = keywords.length > 0 ? [...keywords, ''] : ['']
+        setExpanded(expandedWithEmpty)
+        
+        if (DEV_CONFIG.ENABLE_DEBUG_LOGS) {
+          console.log('[前端] 使用兼容格式，关键词:', keywords)
+        }
       }
-      
-      const data = await res.json()
-      setExpanded(data.expanded_terms || [])
-      
     } catch (e: any) {
       setError(e.message || '扩展关键词失败')
     }
@@ -440,7 +401,7 @@ function KeywordCloudPage() {
     return `hsl(${hue}, 70%, 60%)`
   }
 
-  // 开始检索 - 支持MCP增强模式
+  // 开始检索
   const handleSearch = async () => {
     if (localStorage.getItem('invite_logged_in') !== '1') {
       navigate('/invite')
@@ -449,6 +410,7 @@ function KeywordCloudPage() {
     
     const userId = localStorage.getItem('user_id')
     if (!userId) {
+      // 如果没有用户ID，清除登录状态并跳转
       localStorage.removeItem('invite_logged_in')
       navigate('/invite')
       return
@@ -463,66 +425,38 @@ function KeywordCloudPage() {
     
     setLoading(true)
     try {
-      let endpoint = '/search_papers'
-      let payload: any = {
-        keywords: validKeywords,
-        max_results: maxResults,
-        year_low: yearLow ? parseInt(yearLow, 10) : null,
-        year_high: yearHigh ? parseInt(yearHigh, 10) : null,
-        user_id: userId
-      }
+      // 记录行为
+      await logUserAction(userId, 'search_papers', validKeywords.join(','))
       
-      // 如果是MCP增强模式，使用不同接口
-      if (searchMode === 'mcp_enhanced') {
-        endpoint = '/mcp_search'
-        payload = {
-          query: validKeywords.join(' '),
-          max_results: maxResults,
-          sources: selectedSources,
-          enable_analysis: enableAnalysis,
-          enable_visualization: enableVisualization,
-          user_id: userId
-        }
-        
-        // 记录MCP增强搜索行为
-        await logUserAction(userId, 'mcp_enhanced_search', payload)
-      } else {
-        // 记录传统搜索行为
-        await logUserAction(userId, 'search_papers', validKeywords.join(','))
-      }
+      // 构造查询字符串，适配优化后端格式
+      const queryString = validKeywords.join(' OR ')
       
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      // 使用配置化的API调用
+      const data = await api.searchPapers(queryString, maxResults, false)
+      
+      // 适配优化后端响应格式
+      const papers = data.success && data.data ? data.data.papers : (data.papers || [])
+      
+      // 保存搜索历史
+      const searchHistory: SearchHistory = {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        originalQuery: input,
+        expandedKeywords: validKeywords,
+        papers: papers,
+        maxResults: maxResults
+      };
+      saveSearchHistory(searchHistory);
+      
+      navigate('/report', { 
+        state: { 
+          papers,
+          searchHistory,
+          expandedKeywords: validKeywords,
+          originalQuery: input,
+          maxResults: maxResults
+        } 
       })
-      
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ detail: '搜索失败，无法解析错误响应' }))
-        if (res.status === 401) {
-          localStorage.removeItem('invite_logged_in')
-          localStorage.removeItem('user_id')
-          navigate('/invite')
-          return
-        }
-        throw new Error(errData.detail || `HTTP error ${res.status}`)
-      }
-      
-      const data = await res.json()
-      
-      // 根据搜索模式导航到不同页面
-      if (searchMode === 'mcp_enhanced' && (data.analysis || data.visualization)) {
-        // MCP增强结果包含分析或可视化数据
-        navigate('/enhanced-report', { state: { 
-          papers: data.papers || [], 
-          analysis: data.analysis,
-          visualization: data.visualization,
-          searchMode: 'mcp_enhanced'
-        }})
-      } else {
-        // 传统结果页面
-        navigate('/report', { state: { papers: data.papers || [] } })
-      }
     } catch (e: any) {
       setError(e.message || '检索论文失败')
     }
@@ -532,193 +466,15 @@ function KeywordCloudPage() {
   return (
     <div className="keyword-cloud-page">
       <div className="cloud-header">
-        <h2>Keyword Cloud - {searchMode === 'mcp_enhanced' ? 'MCP增强模式' : '传统模式'}</h2>
+        <h2>Keyword Cloud</h2>
         <p>Edit your keywords, then start searching</p>
         
-        {/* 显示当前搜索模式信息 */}
-        <div style={{ 
-          marginTop: 16, 
-          padding: 12, 
-          background: searchMode === 'mcp_enhanced' ? 'rgba(59,176,230,0.1)' : 'rgba(100,100,100,0.1)', 
-          borderRadius: 8,
-          border: `1px solid ${searchMode === 'mcp_enhanced' ? '#3bb0e6' : '#666'}`
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 16 }}>
-              {searchMode === 'mcp_enhanced' ? '🚀' : '🔍'}
-            </span>
-            <strong style={{ color: '#fff' }}>
-              {searchMode === 'mcp_enhanced' ? 'MCP多源增强搜索' : '传统关键词搜索'}
-            </strong>
-          </div>
-          <p style={{ margin: 0, fontSize: 14, color: '#a1a1aa' }}>
-            {searchMode === 'mcp_enhanced' 
-              ? '使用MCP服务器集成多个学术数据库，支持数据分析和可视化' 
-              : '使用Groq关键词扩展 + Scholarly搜索'}
-          </p>
-        </div>
       </div>
       
       {error && <p className="error-message">错误: {error}</p>}
       
       {showLoading && <div className="loading-spinner">扩展关键词中...</div>}
       
-      {/* 智能分析结果展示 */}
-      {analysisResults && (
-        <div style={{
-          margin: '20px 0',
-          padding: 20,
-          background: 'rgba(30, 30, 30, 0.8)',
-          borderRadius: 12,
-          border: '1px solid #333'
-        }}>
-          {/* 查询分析结果 */}
-          {analysisResults.query_analysis && (
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ color: '#3bb0e6', fontSize: 18, marginBottom: 12 }}>🔍 查询分析</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-                <div>
-                  <strong style={{ color: '#fff' }}>查询类型:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {analysisResults.query_analysis.query_type}
-                  </span>
-                </div>
-                <div>
-                  <strong style={{ color: '#fff' }}>复杂度:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {analysisResults.query_analysis.complexity}
-                  </span>
-                </div>
-                <div>
-                  <strong style={{ color: '#fff' }}>研究焦点:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {analysisResults.query_analysis.research_focus}
-                  </span>
-                </div>
-                <div>
-                  <strong style={{ color: '#fff' }}>置信度:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {(analysisResults.query_analysis.confidence * 100).toFixed(0)}%
-                  </span>
-                </div>
-              </div>
-              
-              {analysisResults.query_analysis.entities?.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <strong style={{ color: '#fff' }}>识别实体:</strong>
-                  <div style={{ marginTop: 4 }}>
-                    {analysisResults.query_analysis.entities.map((entity: string, idx: number) => (
-                      <span key={idx} style={{
-                        display: 'inline-block',
-                        margin: '2px 4px',
-                        padding: '4px 8px',
-                        background: 'rgba(59,176,230,0.2)',
-                        borderRadius: 6,
-                        fontSize: 12,
-                        color: '#3bb0e6'
-                      }}>{entity}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              {analysisResults.query_analysis.suggested_strategy && (
-                <div style={{ marginTop: 12 }}>
-                  <strong style={{ color: '#fff' }}>搜索策略:</strong>
-                  <p style={{ margin: '4px 0', color: '#a1a1aa', fontSize: 14, fontStyle: 'italic' }}>
-                    {analysisResults.query_analysis.suggested_strategy}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* 学科检测结果 */}
-          {analysisResults.keyword_expansion?.discipline_info && (
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ color: '#3bb0e6', fontSize: 18, marginBottom: 12 }}>🎓 学科检测</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-                <div>
-                  <strong style={{ color: '#fff' }}>主要学科:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {analysisResults.keyword_expansion.discipline_info.primary_discipline}
-                  </span>
-                </div>
-                <div>
-                  <strong style={{ color: '#fff' }}>扩展策略:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {analysisResults.keyword_expansion.expansion_strategy}
-                  </span>
-                </div>
-                <div>
-                  <strong style={{ color: '#fff' }}>质量分数:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {(analysisResults.keyword_expansion.quality_score * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div>
-                  <strong style={{ color: '#fff' }}>学科置信度:</strong>
-                  <span style={{ marginLeft: 8, color: '#a1a1aa' }}>
-                    {(analysisResults.keyword_expansion.discipline_info.confidence * 100).toFixed(0)}%
-                  </span>
-                </div>
-              </div>
-              
-              {analysisResults.keyword_expansion.discipline_info.secondary_disciplines?.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <strong style={{ color: '#fff' }}>相关学科:</strong>
-                  <div style={{ marginTop: 4 }}>
-                    {analysisResults.keyword_expansion.discipline_info.secondary_disciplines.map((disc: string, idx: number) => (
-                      <span key={idx} style={{
-                        display: 'inline-block',
-                        margin: '2px 4px',
-                        padding: '4px 8px',
-                        background: 'rgba(100,200,100,0.2)',
-                        borderRadius: 6,
-                        fontSize: 12,
-                        color: '#64c864'
-                      }}>{disc}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* 搜索建议 */}
-          {analysisResults.search_suggestions?.search_queries?.length > 0 && (
-            <div>
-              <h3 style={{ color: '#3bb0e6', fontSize: 18, marginBottom: 12 }}>💡 搜索建议</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {analysisResults.search_suggestions.search_queries.map((query: string, idx: number) => (
-                  <div key={idx} style={{
-                    padding: '8px 12px',
-                    background: 'rgba(255,255,255,0.05)',
-                    borderRadius: 8,
-                    fontSize: 14,
-                    color: '#a1a1aa',
-                    fontFamily: 'monospace'
-                  }}>
-                    {query}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          
-          {/* 优化建议 */}
-          {analysisResults.query_analysis?.optimization_notes?.length > 0 && (
-            <div style={{ marginTop: 16, padding: 12, background: 'rgba(255,193,7,0.1)', borderRadius: 8, border: '1px solid rgba(255,193,7,0.3)' }}>
-              <strong style={{ color: '#ffc107' }}>💡 优化建议:</strong>
-              <ul style={{ margin: '8px 0', paddingLeft: 20, color: '#ffc107' }}>
-                {analysisResults.query_analysis.optimization_notes.map((note: string, idx: number) => (
-                  <li key={idx} style={{ margin: '4px 0', fontSize: 14 }}>{note}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
       
       <div className="keyword-bubbles">
         {expanded.map((term, idx) => (
@@ -806,6 +562,7 @@ function KeywordCloudPage() {
 
 // 报告页组件
 function ReportPage() {
+  const navigate = useNavigate()
   const [theme, setTheme] = useState('dark')
   const toggle = () => setTheme(t => (t === 'dark' ? 'light' : 'dark'))
   useEffect(() => {
@@ -814,8 +571,12 @@ function ReportPage() {
   }, [theme])
   const location = useLocation()
   const [papers] = useState(location.state?.papers || [])
+  const [searchHistory] = useState(location.state?.searchHistory)
+  const [expandedKeywords] = useState(location.state?.expandedKeywords || [])
+  const [originalQuery] = useState(location.state?.originalQuery || '')
+  const [maxResults] = useState(location.state?.maxResults || 20)
   const [expandedIdx, setExpandedIdx] = useState<{[key:number]: boolean}>({})
-  const MAX_ABSTRACT = 120
+  const MAX_ABSTRACT = APP_CONFIG.ABSTRACT_PREVIEW_LENGTH
   const toggleAbstract = (idx: number) => setExpandedIdx(e => ({...e, [idx]: !e[idx]}))
 
   const handleExport = () => {
@@ -830,10 +591,40 @@ function ReportPage() {
     link.click()
   }
 
+  const handleBackToKeywords = () => {
+    // 返回关键词页面，带上历史数据，不重新调用后端
+    navigate('/keywords', { 
+      state: { 
+        input: originalQuery,
+        expandedKeywords: expandedKeywords,
+        maxResults: maxResults,
+        skipExpansion: true // 标记跳过扩展
+      } 
+    })
+  }
+
   return (
     <div className={`report-page ${theme === 'light' ? 'light' : 'dark'}`}> 
       <div className="report-header">
-        <h2>文献报告</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button 
+            onClick={handleBackToKeywords}
+            style={{
+              padding: '8px 16px',
+              borderRadius: 6,
+              border: '1px solid #666',
+              background: 'transparent',
+              color: theme === 'dark' ? '#fff' : '#333',
+              cursor: 'pointer',
+              fontSize: 14,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            ← 返回编辑
+          </button>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button onClick={handleExport} className="export-button">导出CSV</button>
           <ReportThemeToggle theme={theme} toggle={toggle} />
@@ -898,9 +689,6 @@ function ElicitPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [query] = useState(location.state?.query || '')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [searchResults, setSearchResults] = useState<any>(null)
 
   // 检查登录状态
   useEffect(() => {
@@ -988,6 +776,347 @@ function FeaturesPage() {
   )
 }
 
+// "我的"页面 - 搜索历史管理
+function MyPage() {
+  const navigate = useNavigate()
+  const [searchHistory, setSearchHistory] = useState<SearchHistory[]>([])
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [selectAll, setSelectAll] = useState(false)
+
+  // 检查登录状态
+  useEffect(() => {
+    const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
+    const userId = localStorage.getItem('user_id')
+    
+    if (!isLoggedIn || !userId) {
+      localStorage.removeItem('invite_logged_in')
+      localStorage.removeItem('user_id')
+      navigate('/invite')
+      return
+    }
+    
+    // 加载搜索历史
+    loadSearchHistory()
+  }, [navigate])
+
+  const loadSearchHistory = () => {
+    const history = getSearchHistory()
+    setSearchHistory(history)
+  }
+
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(searchHistory.map(item => item.id))
+    }
+    setSelectAll(!selectAll)
+  }
+
+  const handleSelectItem = (id: string) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter(sid => sid !== id))
+    } else {
+      setSelectedIds([...selectedIds, id])
+    }
+  }
+
+  const handleDeleteSelected = () => {
+    if (selectedIds.length === 0) return
+    
+    if (confirm(`确定要删除选中的 ${selectedIds.length} 条搜索记录吗？`)) {
+      deleteSearchHistory(selectedIds)
+      setSelectedIds([])
+      setSelectAll(false)
+      loadSearchHistory()
+    }
+  }
+
+  const handleClearAll = () => {
+    if (confirm('确定要清空所有搜索历史吗？此操作不可恢复。')) {
+      clearAllSearchHistory()
+      setSearchHistory([])
+      setSelectedIds([])
+      setSelectAll(false)
+    }
+  }
+
+  const handleViewReport = (history: SearchHistory) => {
+    // 直接查看历史报告
+    navigate('/report', {
+      state: {
+        papers: history.papers,
+        searchHistory: history,
+        expandedKeywords: history.expandedKeywords,
+        originalQuery: history.originalQuery,
+        maxResults: history.maxResults
+      }
+    })
+  }
+
+  const handleReSearch = (history: SearchHistory) => {
+    // 返回关键词页面重新搜索
+    navigate('/keywords', {
+      state: {
+        input: history.originalQuery,
+        expandedKeywords: history.expandedKeywords,
+        maxResults: history.maxResults,
+        skipExpansion: true
+      }
+    })
+  }
+
+  const formatDate = (timestamp: number) => {
+    const date = new Date(timestamp)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+    
+    if (diffDays === 0) {
+      return '今天 ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    } else if (diffDays === 1) {
+      return '昨天 ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    } else if (diffDays < 7) {
+      return `${diffDays}天前`
+    } else {
+      return date.toLocaleDateString('zh-CN')
+    }
+  }
+
+  return (
+    <div style={{ 
+      minHeight: '100vh', 
+      background: '#000', 
+      color: '#fff', 
+      padding: '20px'
+    }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        {/* 页面头部 */}
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          marginBottom: '24px',
+          borderBottom: '1px solid #333',
+          paddingBottom: '16px'
+        }}>
+          <div>
+            <h2 style={{ fontSize: 28, color: '#3bb0e6', margin: 0 }}>我的搜索历史</h2>
+            <p style={{ color: '#a1a1aa', margin: '4px 0 0 0' }}>
+              共 {searchHistory.length} 条记录
+              {selectedIds.length > 0 && ` · 已选择 ${selectedIds.length} 条`}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button
+              onClick={() => navigate('/')}
+              style={{
+                padding: '8px 16px',
+                borderRadius: 6,
+                border: '1px solid #666',
+                background: 'transparent',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: 14
+              }}
+            >
+              返回首页
+            </button>
+          </div>
+        </div>
+
+        {/* 操作栏 */}
+        {searchHistory.length > 0 && (
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            marginBottom: '20px',
+            padding: '12px 16px',
+            background: '#111',
+            borderRadius: 8,
+            border: '1px solid #333'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={selectAll}
+                  onChange={handleSelectAll}
+                  style={{ cursor: 'pointer' }}
+                />
+                全选
+              </label>
+              <button
+                onClick={handleDeleteSelected}
+                disabled={selectedIds.length === 0}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 4,
+                  border: 'none',
+                  background: selectedIds.length > 0 ? '#dc3545' : '#666',
+                  color: '#fff',
+                  cursor: selectedIds.length > 0 ? 'pointer' : 'not-allowed',
+                  fontSize: 12
+                }}
+              >
+                删除选中 ({selectedIds.length})
+              </button>
+            </div>
+            <button
+              onClick={handleClearAll}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 4,
+                border: '1px solid #dc3545',
+                background: 'transparent',
+                color: '#dc3545',
+                cursor: 'pointer',
+                fontSize: 12
+              }}
+            >
+              清空全部
+            </button>
+          </div>
+        )}
+
+        {/* 搜索历史列表 */}
+        {searchHistory.length === 0 ? (
+          <div style={{ 
+            textAlign: 'center', 
+            padding: '60px 20px',
+            color: '#666'
+          }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📚</div>
+            <h3 style={{ margin: '0 0 8px 0' }}>还没有搜索历史</h3>
+            <p style={{ margin: 0 }}>开始你的第一次文献搜索吧！</p>
+            <button
+              onClick={() => navigate('/')}
+              style={{
+                marginTop: 20,
+                padding: '12px 24px',
+                borderRadius: 8,
+                border: 'none',
+                background: '#3bb0e6',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: 16
+              }}
+            >
+              开始搜索
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {searchHistory.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  padding: 20,
+                  background: '#111',
+                  borderRadius: 12,
+                  border: selectedIds.includes(item.id) ? '2px solid #3bb0e6' : '1px solid #333',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(item.id)}
+                    onChange={() => handleSelectItem(item.id)}
+                    style={{ marginTop: 4, cursor: 'pointer' }}
+                  />
+                  
+                  <div style={{ flex: 1 }}>
+                    {/* 搜索信息 */}
+                    <div style={{ marginBottom: 12 }}>
+                      <h4 style={{ 
+                        margin: '0 0 8px 0', 
+                        fontSize: 16, 
+                        color: '#fff',
+                        fontWeight: 600 
+                      }}>
+                        "{item.originalQuery}"
+                      </h4>
+                      <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: 16, 
+                        fontSize: 14, 
+                        color: '#a1a1aa' 
+                      }}>
+                        <span>{formatDate(item.timestamp)}</span>
+                        <span>•</span>
+                        <span>{item.papers.length} 篇文献</span>
+                        <span>•</span>
+                        <span>目标数量: {item.maxResults}</span>
+                      </div>
+                    </div>
+
+                    {/* 扩展关键词 */}
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, color: '#666', marginBottom: 6 }}>扩展关键词:</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {item.expandedKeywords.map((keyword, idx) => (
+                          <span
+                            key={idx}
+                            style={{
+                              padding: '2px 8px',
+                              background: 'rgba(59,176,230,0.1)',
+                              borderRadius: 12,
+                              fontSize: 12,
+                              color: '#3bb0e6',
+                              border: '1px solid rgba(59,176,230,0.2)'
+                            }}
+                          >
+                            {keyword}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 操作按钮 */}
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <button
+                        onClick={() => handleViewReport(item)}
+                        style={{
+                          padding: '6px 16px',
+                          borderRadius: 6,
+                          border: '1px solid #3bb0e6',
+                          background: 'rgba(59,176,230,0.1)',
+                          color: '#3bb0e6',
+                          cursor: 'pointer',
+                          fontSize: 13
+                        }}
+                      >
+                        查看报告
+                      </button>
+                      <button
+                        onClick={() => handleReSearch(item)}
+                        style={{
+                          padding: '6px 16px',
+                          borderRadius: 6,
+                          border: '1px solid #666',
+                          background: 'transparent',
+                          color: '#fff',
+                          cursor: 'pointer',
+                          fontSize: 13
+                        }}
+                      >
+                        重新搜索
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function App() {
   return (
     <Routes>
@@ -996,6 +1125,7 @@ function App() {
       <Route path="/keywords" element={<KeywordCloudPage />} />
       <Route path="/elicit" element={<ElicitPage />} />
       <Route path="/report" element={<ReportPage />} />
+      <Route path="/my" element={<MyPage />} />
       <Route path="/products" element={<ProductsPage />} />
       <Route path="/features" element={<FeaturesPage />} />
       <Route path="/admin" element={<AdminDashboard />} />
