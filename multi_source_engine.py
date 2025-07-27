@@ -53,6 +53,9 @@ class SemanticScholarAPI:
     def __init__(self):
         self.base_url = "https://api.semanticscholar.org/graph/v1"
         self.session = None
+        self._last_request_time = 0
+        self._min_delay = 1.0  # 最小请求间隔1秒
+        self._max_retries = 3  # 最大重试次数
         
     async def _get_session(self):
         """获取异步HTTP会话"""
@@ -62,29 +65,49 @@ class SemanticScholarAPI:
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
         """搜索论文"""
-        try:
-            session = await self._get_session()
-            
-            # 构建搜索URL
-            encoded_query = quote(query)
-            url = f"{self.base_url}/paper/search"
-            params = {
-                'query': query,
-                'limit': limit,
-                'fields': 'title,authors,abstract,year,journal,url,citationCount,externalIds'
-            }
-            
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return self._parse_papers(data.get('data', []))
-                else:
-                    logger.warning(f"Semantic Scholar API错误: {response.status}")
+        for attempt in range(self._max_retries):
+            try:
+                # 确保请求间隔
+                current_time = time.time()
+                time_since_last = current_time - self._last_request_time
+                if time_since_last < self._min_delay:
+                    await asyncio.sleep(self._min_delay - time_since_last)
+                
+                session = await self._get_session()
+                
+                # 构建搜索URL
+                encoded_query = quote(query)
+                url = f"{self.base_url}/paper/search"
+                params = {
+                    'query': query,
+                    'limit': limit,
+                    'fields': 'title,authors,abstract,year,journal,url,citationCount,externalIds'
+                }
+                
+                self._last_request_time = time.time()
+                
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return self._parse_papers(data.get('data', []))
+                    elif response.status == 429:
+                        # 处理429错误 - 等待更长时间后重试
+                        wait_time = (attempt + 1) * 2  # 指数退避
+                        logger.warning(f"Semantic Scholar API限频 (429), 等待 {wait_time} 秒后重试 (尝试 {attempt + 1}/{self._max_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        logger.warning(f"Semantic Scholar API错误: {response.status}")
+                        if attempt == self._max_retries - 1:
+                            return []
+                        
+            except Exception as e:
+                logger.error(f"Semantic Scholar搜索错误: {e}")
+                if attempt == self._max_retries - 1:
                     return []
-                    
-        except Exception as e:
-            logger.error(f"Semantic Scholar搜索错误: {e}")
-            return []
+                await asyncio.sleep(1)  # 异常时也等待1秒
+        
+        return []
     
     def _parse_papers(self, papers_data: List[Dict]) -> List[Paper]:
         """解析API返回的论文数据"""

@@ -154,7 +154,7 @@ function InviteCodePage() {
             disabled={loading}
           />
           {error && <div style={{ color: '#ff4d4f', marginBottom: 8, textAlign: 'center' }}>{error}</div>}
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', fontSize: 18 }} disabled={loading}>{loading ? '校验中...' : '进入内测'}</button>
+          <button type="submit" className="btn btn-primary" style={{ width: '100%', fontSize: 18 }} disabled={loading}>{loading ? 'Verifying...' : 'Start Beta'}</button>
         </form>
       </div>
     </div>
@@ -220,7 +220,7 @@ function HomePage() {
               onClick={() => navigate('/my')}
               style={{ marginRight: 8 }}
             >
-              我的
+              My
             </button>
           ) : null}
           <button className="btn btn-primary" onClick={() => navigate('/invite')}>Start free trial</button>
@@ -245,7 +245,7 @@ function HomePage() {
               disabled={!hasValidSession}
             />
             <button type="submit" className="btn btn-secondary">
-              {hasValidSession ? '🔍 开始搜索' : '获取内测邀请码'}
+              {hasValidSession ? '🔍 Search' : 'Get Beta Code'}
             </button>
           </form>
         </section>
@@ -465,6 +465,26 @@ function KeywordCloudPage() {
 
   return (
     <div className="keyword-cloud-page">
+      <div className="keyword-page-header">
+        <div 
+          className="logo"
+          onClick={() => navigate('/')}
+          style={{ 
+            cursor: 'pointer',
+            fontSize: '2.5rem',
+            fontWeight: 'bold',
+            letterSpacing: '2px',
+            color: '#fff',
+            fontFamily: "'IBM Plex Sans', 'Inter', 'Plus Jakarta Sans', Arial, sans-serif",
+            position: 'absolute',
+            top: '20px',
+            left: '32px',
+            zIndex: 10
+          }}
+        >
+          Veritex
+        </div>
+      </div>
       <div className="cloud-header">
         <h2>Keyword Cloud</h2>
         <p>Edit your keywords, then start searching</p>
@@ -510,7 +530,7 @@ function KeywordCloudPage() {
           className="add-bubble-btn"
           disabled={loading}
         >
-          + 添加关键词
+          + Add
         </button>
       </div>
       
@@ -553,7 +573,7 @@ function KeywordCloudPage() {
           disabled={loading || expanded.filter(k => k.trim()).length === 0}
           className="search-button"
         >
-          {loading ? '检索中...' : '开始检索论文'}
+          {loading ? 'Searching...' : 'Search Papers'}
         </button>
       </div>
     </div>
@@ -622,11 +642,11 @@ function ReportPage() {
               gap: 6
             }}
           >
-            ← 返回编辑
+            ← Back
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button onClick={handleExport} className="export-button">导出CSV</button>
+          <button onClick={handleExport} className="export-button">Export CSV</button>
           <ReportThemeToggle theme={theme} toggle={toggle} />
         </div>
       </div>
@@ -664,14 +684,14 @@ function ReportPage() {
                         : abstract}
                       {isLong && (
                         <button className="abstract-toggle" onClick={() => toggleAbstract(idx)}>
-                          {showAll ? '收起' : '展开'}
+                          {showAll ? 'Less' : 'More'}
                         </button>
                       )}
                     </div>
                   </td>
                   <td className="col-link">
                     <a href={paper.url} target="_blank" rel="noopener noreferrer" className="link-button">
-                      查看
+                      View
                     </a>
                   </td>
                 </tr>
@@ -920,7 +940,7 @@ function MyPage() {
                 fontSize: 14
               }}
             >
-              返回首页
+              Home
             </button>
           </div>
         </div>
@@ -960,7 +980,7 @@ function MyPage() {
                   fontSize: 12
                 }}
               >
-                删除选中 ({selectedIds.length})
+                Delete ({selectedIds.length})
               </button>
             </div>
             <button
@@ -975,7 +995,7 @@ function MyPage() {
                 fontSize: 12
               }}
             >
-              清空全部
+              Clear All
             </button>
           </div>
         )}
@@ -1003,7 +1023,7 @@ function MyPage() {
                 fontSize: 16
               }}
             >
-              开始搜索
+              Start Search
             </button>
           </div>
         ) : (
@@ -1089,7 +1109,7 @@ function MyPage() {
                           fontSize: 13
                         }}
                       >
-                        查看报告
+                        View Report
                       </button>
                       <button
                         onClick={() => handleReSearch(item)}
@@ -1103,7 +1123,7 @@ function MyPage() {
                           fontSize: 13
                         }}
                       >
-                        重新搜索
+                        Re-search
                       </button>
                     </div>
                   </div>

@@ -42,6 +42,10 @@ class SearchRequest(BaseModel):
     max_results: int = 20
     enable_expansion: bool = True
 
+class ExpandKeywordsRequest(BaseModel):
+    keywords: str
+    max_keywords: int = 5
+
 def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
     return {
         "title": paper.title or "",
@@ -55,6 +59,48 @@ def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
         "source": paper.source,
         "relevance_score": paper.relevance_score or 0.0
     }
+
+@app.post("/expand_keywords")
+async def expand_keywords_api(req: ExpandKeywordsRequest):
+    try:
+        logger.info(f"关键词扩展请求: {req.keywords}")
+        engine = get_search_engine()
+        
+        # 调用关键词扩展功能
+        expansion_result = await engine.keyword_expander.detect_and_expand(
+            req.keywords, 
+            max_keywords=req.max_keywords
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "original_query": expansion_result.original_query,
+                "expanded_keywords": expansion_result.expanded_keywords,
+                "detected_discipline": expansion_result.detected_discipline,
+                "discipline_chinese": expansion_result.discipline_chinese,
+                "confidence": expansion_result.confidence,
+                "expansion_strategy": expansion_result.expansion_strategy,
+                "quality_score": expansion_result.quality_score,
+                "processing_time": expansion_result.processing_time
+            }
+        }
+    except Exception as e:
+        logger.error(f"关键词扩展失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "data": {
+                "original_query": req.keywords,
+                "expanded_keywords": [req.keywords],
+                "detected_discipline": "unknown",
+                "discipline_chinese": "未知",
+                "confidence": 0.0,
+                "expansion_strategy": "fallback",
+                "quality_score": 0.0,
+                "processing_time": 0.0
+            }
+        }
 
 @app.post("/search_papers")
 async def search_papers_api(req: SearchRequest):
@@ -99,7 +145,11 @@ async def root():
     return {
         "message": "Paper God API - 学术文献智能搜索系统",
         "version": "2.0.0",
-        "endpoints": {"/search_papers": "论文搜索", "/health": "健康检查"}
+        "endpoints": {
+            "/expand_keywords": "关键词扩展", 
+            "/search_papers": "论文搜索", 
+            "/health": "健康检查"
+        }
     }
 
 @app.on_event("shutdown")
