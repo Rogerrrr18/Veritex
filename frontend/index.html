@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/robot.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>学术论文搜索系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <div class="chat-container">
+            <header class="chat-header">
+                <div class="header-content">
+                    <div class="logo">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 18C9.79 18 8 16.21 8 14C8 11.79 9.79 10 12 10C14.21 10 16 11.79 16 14C16 16.21 14.21 18 12 18Z" fill="currentColor"/>
+                        </svg>
+                        <h1>学术论文搜索系统</h1>
+                    </div>
+                    <div class="header-actions">
+                        <button id="clearBtn" class="clear-btn" title="清空聊天记录">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M6 19C6 20.1 6.9 21 8 21H16C17.1 21 18 20.1 18 19V7H6V19ZM19 4H15.5L14.5 3H9.5L8.5 4H5V6H19V4Z" fill="currentColor"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </header>
+            
+            <main class="chat-main">
+                <div id="chatMessages" class="chat-messages">
+                    <div class="welcome-message">
+                        <div class="welcome-icon">📚</div>
+                        <h2>欢迎使用学术论文搜索系统</h2>
+                        <p>基于LangGraph智能代理，支持多数据源论文搜索</p>
+                    </div>
+                </div>
+                
+                <div class="chat-input-container">
+                    <div class="chat-input-wrapper">
+                        <textarea 
+                            id="messageInput" 
+                            class="chat-input" 
+                            placeholder="输入论文搜索关键词..." 
+                            rows="1"
+                        ></textarea>
+                        <button id="sendBtn" class="send-btn" disabled>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M2.01 21L23 12L2.01 3L2 10L17 12L2 14L2.01 21Z" fill="currentColor"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="input-hint">
+                        按 Enter 发送，Shift + Enter 换行
+                    </div>
+                </div>
+            </main>
+        </div>
+        
+        <!-- 移除加载动画蒙版 -->
+    </div>
+    
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

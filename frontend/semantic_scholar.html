@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Semantic Scholar MCP 论文搜索</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .search-section {
+            padding: 30px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .search-form {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 300px;
+            padding: 12px 16px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .search-btn {
+            padding: 12px 24px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .search-btn:hover {
+            background: #45a049;
+        }
+
+        .search-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .filters {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .filter-group label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+
+        .filter-group input, .filter-group select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .status.loading {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .status.success {
+            background: #e8f5e8;
+            color: #2e7d32;
+        }
+
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .results {
+            padding: 30px;
+        }
+
+        .result-item {
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .result-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .paper-title {
+            font-size: 1.4rem;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            line-height: 1.3;
+        }
+
+        .paper-title a {
+            color: #2c3e50;
+            text-decoration: none;
+        }
+
+        .paper-title a:hover {
+            color: #4CAF50;
+        }
+
+        .paper-authors {
+            color: #666;
+            margin-bottom: 8px;
+            font-style: italic;
+        }
+
+        .paper-meta {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .meta-item {
+            background: #e3f2fd;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            color: #1976d2;
+        }
+
+        .paper-abstract {
+            color: #444;
+            line-height: 1.6;
+            margin-top: 15px;
+            text-align: justify;
+        }
+
+        .no-results {
+            text-align: center;
+            color: #666;
+            font-size: 1.2rem;
+            padding: 50px;
+        }
+
+        @media (max-width: 768px) {
+            .search-form {
+                flex-direction: column;
+            }
+
+            .search-input {
+                min-width: auto;
+            }
+
+            .filters {
+                grid-template-columns: 1fr;
+            }
+
+            .paper-meta {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Semantic Scholar MCP</h1>
+            <p>基于MCP服务的学术论文搜索引擎</p>
+        </div>
+
+        <div class="search-section">
+            <div class="search-form">
+                <input type="text" class="search-input" id="searchQuery" placeholder="输入搜索关键词，如：machine learning, deep learning, NLP...">
+                <button class="search-btn" id="searchBtn">搜索论文</button>
+            </div>
+
+            <div class="filters">
+                <div class="filter-group">
+                    <label for="limitSelect">结果数量</label>
+                    <select id="limitSelect">
+                        <option value="10">10篇</option>
+                        <option value="20">20篇</option>
+                        <option value="50">50篇</option>
+                        <option value="100">100篇</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label for="yearInput">发表年份</label>
+                    <input type="text" id="yearInput" placeholder="如：2023 或 2020-2023">
+                </div>
+
+                <div class="filter-group">
+                    <label for="venueInput">期刊/会议</label>
+                    <input type="text" id="venueInput" placeholder="如：Nature, ICML, NIPS">
+                </div>
+
+                <div class="filter-group">
+                    <label for="citationInput">最小引用数</label>
+                    <input type="number" id="citationInput" placeholder="如：10">
+                </div>
+            </div>
+        </div>
+
+        <div id="status" class="status" style="display: none;"></div>
+
+        <div class="results">
+            <div id="resultsContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://127.0.0.1:8002';
+
+        // 页面元素
+        const searchInput = document.getElementById('searchQuery');
+        const searchBtn = document.getElementById('searchBtn');
+        const limitSelect = document.getElementById('limitSelect');
+        const yearInput = document.getElementById('yearInput');
+        const venueInput = document.getElementById('venueInput');
+        const citationInput = document.getElementById('citationInput');
+        const statusDiv = document.getElementById('status');
+        const resultsContainer = document.getElementById('resultsContainer');
+
+        // 显示状态消息
+        function showStatus(message, type) {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+        }
+
+        // 隐藏状态消息
+        function hideStatus() {
+            statusDiv.style.display = 'none';
+        }
+
+        // 格式化作者列表
+        function formatAuthors(authors) {
+            if (!authors || authors.length === 0) return '未知作者';
+            return authors.map(author => author.name).join(', ');
+        }
+
+        // 渲染搜索结果
+        function renderResults(papers) {
+            if (!papers || papers.length === 0) {
+                resultsContainer.innerHTML = '<div class="no-results">未找到相关论文，请尝试其他关键词</div>';
+                return;
+            }
+
+            const html = papers.map(paper => `
+                <div class="result-item">
+                    <div class="paper-title">
+                        ${paper.url ? `<a href="${paper.url}" target="_blank">${paper.title || '无标题'}</a>` : (paper.title || '无标题')}
+                    </div>
+                    
+                    <div class="paper-authors">
+                        作者：${formatAuthors(paper.authors)}
+                    </div>
+                    
+                    <div class="paper-meta">
+                        ${paper.year ? `<span class="meta-item">📅 ${paper.year}</span>` : ''}
+                        ${paper.venue ? `<span class="meta-item">📍 ${paper.venue}</span>` : ''}
+                        ${paper.citationCount !== undefined ? `<span class="meta-item">📈 引用: ${paper.citationCount}</span>` : ''}
+                        ${paper.paperId ? `<span class="meta-item">🆔 ${paper.paperId}</span>` : ''}
+                    </div>
+                    
+                    ${paper.abstract ? `
+                        <div class="paper-abstract">
+                            <strong>摘要：</strong>${paper.abstract}
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+
+            resultsContainer.innerHTML = html;
+        }
+
+        // 执行搜索
+        async function performSearch() {
+            const query = searchInput.value.trim();
+            if (!query) {
+                alert('请输入搜索关键词');
+                return;
+            }
+
+            searchBtn.disabled = true;
+            showStatus('正在搜索论文...', 'loading');
+            resultsContainer.innerHTML = '';
+
+            try {
+                const searchData = {
+                    query: query,
+                    limit: parseInt(limitSelect.value),
+                    year: yearInput.value.trim() || null,
+                    venue: venueInput.value.trim() || null,
+                    min_citation_count: citationInput.value ? parseInt(citationInput.value) : null
+                };
+
+                // 移除空值
+                Object.keys(searchData).forEach(key => {
+                    if (searchData[key] === null || searchData[key] === '') {
+                        delete searchData[key];
+                    }
+                });
+
+                const response = await fetch(`${API_BASE}/search_papers`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(searchData)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    const papers = result.data?.data || [];
+                    showStatus(`搜索完成，找到 ${result.count} 篇论文`, 'success');
+                    renderResults(papers);
+                } else {
+                    showStatus(`搜索失败：${result.error}`, 'error');
+                    resultsContainer.innerHTML = '';
+                }
+
+            } catch (error) {
+                showStatus(`搜索出错：${error.message}`, 'error');
+                resultsContainer.innerHTML = '';
+            } finally {
+                searchBtn.disabled = false;
+            }
+        }
+
+        // 事件监听
+        searchBtn.addEventListener('click', performSearch);
+
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        // 页面加载时检查MCP状态
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${API_BASE}/mcp/status`);
+                const status = await response.json();
+                
+                if (status.status === 'healthy') {
+                    showStatus('✅ Semantic Scholar MCP服务已就绪', 'success');
+                    setTimeout(hideStatus, 3000);
+                } else {
+                    showStatus(`⚠️ MCP服务状态异常：${status.message}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`⚠️ 无法连接到后端服务：${error.message}`, 'error');
+            }
+        });
+    </script>
+</body>
+</html>
