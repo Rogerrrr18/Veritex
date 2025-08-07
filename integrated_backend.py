@@ -14,8 +14,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from qwen_api_async import get_qwen_client
 from universal_mcp import get_universal_client, universal_search
-from langchain_workflows.paper_search_graph_v2 import search_literature_simple
-from langchain_tools.mcp_google_scholar_tool import create_google_scholar_tools
+from langchain_workflows.paper_search_graph_v2 import chat_with_search_strategy
+# 注释掉不再使用的MCP工具导入
+# from langchain_tools.mcp_google_scholar_tool import create_google_scholar_tools
 
 # FastAPI应用初始化
 app = FastAPI(
@@ -110,91 +111,40 @@ async def chat(request: ChatRequest):
         # 转换历史记录格式
         history = [{"role": msg.role, "content": msg.content} for msg in request.history]
         
-        # 智能判断是否是学术搜索请求
+        # 简化的路由判断：基础问候 vs 需要LangGraph处理
         user_message = request.message.lower()
         
-        # 定义学术搜索的关键词组合
-        academic_keywords = [
-            ("搜索", ["论文", "文献", "研究", "paper"]),
-            ("查找", ["论文", "文献", "研究", "paper"]), 
-            ("找", ["论文", "文献", "研究", "paper"]),
-            ("机器学习", []),
-            ("甲烷", ["干重整", "reforming"]),
-            ("methane", ["reforming"]),
-            ("search", ["paper", "literature", "research"]),
+        # 简单问候模式 - 直接快速响应
+        simple_greetings = [
+            "你好", "您好", "hi", "hello", 
+            "谢谢", "thanks", "thank you",
+            "再见", "bye", "goodbye"
         ]
         
-        # 明确的学术搜索词汇
-        explicit_academic = ["论文", "文献", "paper", "literature", "research"]
+        # 如果是简单问候（短小且匹配问候词），走快速响应
+        is_simple_greeting = (
+            len(request.message.strip()) <= 10 and 
+            any(greeting in user_message for greeting in simple_greetings)
+        )
         
-        # 数量 + 学术词汇的模式
-        quantity_academic_pattern = r'\d+\s*篇\s*(论文|文献|paper)'
-        
-        is_academic_query = False
-        
-        # 检查是否匹配学术搜索模式
-        if any(word in user_message for word in explicit_academic):
-            is_academic_query = True
-        elif re.search(quantity_academic_pattern, user_message):
-            is_academic_query = True
-        else:
-            # 检查关键词组合
-            for primary, secondary in academic_keywords:
-                if primary in user_message:
-                    if not secondary:  # 如"机器学习"这样的单独关键词
-                        is_academic_query = True
-                        break
-                    elif any(sec in user_message for sec in secondary):
-                        is_academic_query = True
-                        break
+        # 其他所有情况都交给LangGraph工作流处理（包括复杂问题、学术查询等）
+        is_academic_query = not is_simple_greeting
         
         if is_academic_query:
-            # 使用LangGraph v2进行智能搜索
+            # 使用LangGraph v2进行智能处理
             try:
-                # 提取搜索关键词和数量
-                search_query = request.message
-                max_results = 5  # 默认5篇
+                print(f"🔄 交给LangGraph工作流处理: '{request.message}'")
                 
-                # 智能提取搜索词
-                if "搜索" in user_message:
-                    parts = user_message.split("搜索")
-                    if len(parts) > 1:
-                        search_query = parts[-1].strip()
-                elif "论文" in user_message:
-                    search_query = user_message.replace("论文", "").replace("篇", "").strip()
-                elif "文献" in user_message:
-                    search_query = user_message.replace("文献", "").replace("篇", "").strip()
-                
-                # 提取数量信息
-                numbers = re.findall(r'(\d+)篇', user_message)
-                if numbers:
-                    try:
-                        max_results = min(int(numbers[0]), 20)  # 最多20篇
-                    except:
-                        pass
-                
-                # 处理特殊查询词
-                if "甲烷" in search_query or "干重整" in search_query:
-                    search_query = "methane reforming"
-                
-                # 清理搜索词
-                search_query = re.sub(r'[我想要需要帮助查找]', '', search_query).strip()
-                if not search_query:
-                    search_query = "machine learning"  # 默认搜索
-                
-                print(f"LangGraph搜索查询: '{search_query}', 数量: {max_results}")
-                
-                # 使用新的LangGraph架构进行搜索
-                langgraph_result = await search_literature_simple(
-                    query=search_query,
-                    max_results=max_results
+                # 直接传递原始查询给LangGraph，让其智能处理
+                langgraph_result = await chat_with_search_strategy(
+                    query=request.message  # 传递原始用户输入
                 )
                 
-                print(f"LangGraph搜索结果: success={langgraph_result.get('success')}, count={langgraph_result.get('total_found', 0)}")
+                print(f"LangGraph结果: success={langgraph_result.get('success')}, 需要搜索策略={langgraph_result.get('need_search_strategy')}")
                 
-                if langgraph_result.get("success") and langgraph_result.get("formatted_results"):
-                    # 直接使用LangGraph生成的标准化表格结果
-                    ai_response = langgraph_result["formatted_results"]
+                if langgraph_result.get("success") and langgraph_result.get("response"):
+                    # 直接使用LangGraph生成的响应（问答或搜索策略）
+                    ai_response = langgraph_result["response"]
                 else:
                     error_msg = langgraph_result.get("error_message", "未知错误")
                     ai_response = f"很抱歉，搜索过程中出现问题：{error_msg}\n\n建议：\n1. 尝试使用不同的关键词\n2. 确保网络连接正常\n3. 稍后重试"
@@ -207,13 +157,23 @@ async def chat(request: ChatRequest):
                 traceback.print_exc()
                 ai_response = f"智能搜索系统暂时不可用: {str(search_error)}\n\n请稍后重试或联系管理员。"
         else:
-            # 普通聊天
+            # 简单问候的快速响应
             try:
-                qwen_client = await get_qwen_client()
-                ai_response = await qwen_client.simple_chat(request.message, history)
+                print(f"⚡ 快速问候响应: '{request.message}'")
+                
+                if "你好" in user_message or "您好" in user_message:
+                    ai_response = "你好！我是你的智能助手，很高兴为您服务。有什么可以帮助您的吗？"
+                elif any(word in user_message for word in ["谢谢", "thanks", "thank you"]):
+                    ai_response = "不客气！如果还有其他问题，随时都可以问我。"
+                elif any(word in user_message for word in ["再见", "bye", "goodbye"]):
+                    ai_response = "再见！祝您一切顺利，有需要时随时回来找我。"
+                else:
+                    # 其他简单问候的默认响应
+                    ai_response = "你好！我是你的智能学术助手。我可以帮助您解答问题、搜索文献，或者讨论学术话题。有什么可以帮助您的吗？"
+                    
             except Exception as chat_error:
-                print(f"聊天API出错: {chat_error}")
-                ai_response = "很抱歉，我现在无法正常回复。系统可能正在维护中，请稍后再试。如果问题持续存在，请检查网络连接或联系管理员。"
+                print(f"快速响应出错: {chat_error}")
+                ai_response = "你好！很高兴为您服务，有什么可以帮助您的吗？"
         
         # 构建完整的对话历史
         updated_history = history + [

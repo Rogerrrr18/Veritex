@@ -86,6 +86,9 @@ class QwenLLMForLangGraph:
                 
         except Exception as e:
             print(f"Qwen LLM调用错误: {e}")
+            import traceback
+            print(f"详细错误信息:")
+            traceback.print_exc()
             return f"LLM调用失败: {str(e)}"
     
     async def analyze_query(self, query: str, system_prompt: str) -> str:

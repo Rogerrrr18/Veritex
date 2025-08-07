@@ -114,6 +114,7 @@ class PaperSearchState(TypedDict):
     search_strategy: Optional[str]  # basic, advanced, comprehensive
     search_keywords: Optional[str]  # LLM优化后的搜索关键词
     need_tools: Optional[bool]  # 是否需要调用工具
+    need_search_strategy: Optional[bool]  # 是否需要搜索策略分析
     
     # 搜索结果 - 核心输出
     papers: Optional[List[Dict[str, Any]]]  # 论文结果列表

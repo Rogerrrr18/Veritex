@@ -60,6 +60,12 @@ class QwenAPIAsync:
                 
         except httpx.HTTPError as e:
             print(f"API调用失败: {e}")
+            print(f"HTTP状态码: {getattr(e, 'response', {}).get('status_code', 'N/A')}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    print(f"响应内容: {e.response.text[:500]}")
+                except:
+                    pass
             return None
         except Exception as e:
             print(f"处理响应时出错: {e}")
