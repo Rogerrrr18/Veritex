@@ -7,12 +7,15 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional, Any, Union
 import sys
 import os
+import re
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from qwen_api_async import get_qwen_client
 from universal_mcp import get_universal_client, universal_search
+from langchain_workflows.paper_search_graph_v2 import search_literature_simple
+from langchain_tools.mcp_google_scholar_tool import create_google_scholar_tools
 
 # FastAPI应用初始化
 app = FastAPI(
@@ -24,7 +27,7 @@ app = FastAPI(
 # CORS配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,59 +110,102 @@ async def chat(request: ChatRequest):
         # 转换历史记录格式
         history = [{"role": msg.role, "content": msg.content} for msg in request.history]
         
-        # 检查是否是MCP搜索请求
+        # 智能判断是否是学术搜索请求
         user_message = request.message.lower()
-        if any(keyword in user_message for keyword in ["搜索", "论文", "文献", "search", "paper", "甲烷", "methane"]):
-            # 如果是搜索请求，调用MCP并返回增强回复
+        
+        # 定义学术搜索的关键词组合
+        academic_keywords = [
+            ("搜索", ["论文", "文献", "研究", "paper"]),
+            ("查找", ["论文", "文献", "研究", "paper"]), 
+            ("找", ["论文", "文献", "研究", "paper"]),
+            ("机器学习", []),
+            ("甲烷", ["干重整", "reforming"]),
+            ("methane", ["reforming"]),
+            ("search", ["paper", "literature", "research"]),
+        ]
+        
+        # 明确的学术搜索词汇
+        explicit_academic = ["论文", "文献", "paper", "literature", "research"]
+        
+        # 数量 + 学术词汇的模式
+        quantity_academic_pattern = r'\d+\s*篇\s*(论文|文献|paper)'
+        
+        is_academic_query = False
+        
+        # 检查是否匹配学术搜索模式
+        if any(word in user_message for word in explicit_academic):
+            is_academic_query = True
+        elif re.search(quantity_academic_pattern, user_message):
+            is_academic_query = True
+        else:
+            # 检查关键词组合
+            for primary, secondary in academic_keywords:
+                if primary in user_message:
+                    if not secondary:  # 如"机器学习"这样的单独关键词
+                        is_academic_query = True
+                        break
+                    elif any(sec in user_message for sec in secondary):
+                        is_academic_query = True
+                        break
+        
+        if is_academic_query:
+            # 使用LangGraph v2进行智能搜索
             try:
-                # 提取关键词
+                # 提取搜索关键词和数量
                 search_query = request.message
+                max_results = 5  # 默认5篇
+                
+                # 智能提取搜索词
                 if "搜索" in user_message:
-                    search_query = user_message.split("搜索")[-1].strip()
+                    parts = user_message.split("搜索")
+                    if len(parts) > 1:
+                        search_query = parts[-1].strip()
                 elif "论文" in user_message:
-                    search_query = user_message.replace("论文", "").strip()
+                    search_query = user_message.replace("论文", "").replace("篇", "").strip()
+                elif "文献" in user_message:
+                    search_query = user_message.replace("文献", "").replace("篇", "").strip()
                 
-                # 处理中文查询词，转换为英文
+                # 提取数量信息
+                numbers = re.findall(r'(\d+)篇', user_message)
+                if numbers:
+                    try:
+                        max_results = min(int(numbers[0]), 20)  # 最多20篇
+                    except:
+                        pass
+                
+                # 处理特殊查询词
                 if "甲烷" in search_query or "干重整" in search_query:
-                    search_query = "methane dry reforming"
+                    search_query = "methane reforming"
                 
-                print(f"MCP搜索查询: {search_query}")
+                # 清理搜索词
+                search_query = re.sub(r'[我想要需要帮助查找]', '', search_query).strip()
+                if not search_query:
+                    search_query = "machine learning"  # 默认搜索
                 
-                # 使用MCP搜索
-                mcp_result = await universal_search(
+                print(f"LangGraph搜索查询: '{search_query}', 数量: {max_results}")
+                
+                # 使用新的LangGraph架构进行搜索
+                langgraph_result = await search_literature_simple(
                     query=search_query,
-                    strategy="fast",
-                    limit=5
+                    max_results=max_results
                 )
                 
-                print(f"MCP搜索结果: success={mcp_result.get('success')}, count={mcp_result.get('total_count', 0)}")
+                print(f"LangGraph搜索结果: success={langgraph_result.get('success')}, count={langgraph_result.get('total_found', 0)}")
                 
-                if mcp_result.get("success") and mcp_result.get("papers"):
-                    papers = mcp_result["papers"][:3]  # 取前3篇
-                    
-                    # 构建增强回复
-                    ai_response = f"我为你找到了{len(papers)}篇相关论文：\n\n"
-                    for i, paper in enumerate(papers, 1):
-                        title = paper.get("title", "无标题")[:80]
-                        authors_list = paper.get("authors", [])
-                        authors = ", ".join([a.get("name", "") for a in authors_list[:2]])
-                        if len(authors_list) > 2:
-                            authors += f" 等{len(authors_list)}人"
-                        year = paper.get("year") or "未知年份"
-                        source = paper.get("source", "未知来源")
-                        
-                        ai_response += f"{i}. **{title}**\n"
-                        ai_response += f"   作者: {authors}\n"
-                        ai_response += f"   年份: {year} | 来源: {source}\n\n"
-                    
-                    ai_response += f"共找到 {mcp_result.get('total_count', 0)} 篇相关论文。如需查看更多论文或获取详细信息，请告诉我！"
+                if langgraph_result.get("success") and langgraph_result.get("formatted_results"):
+                    # 直接使用LangGraph生成的标准化表格结果
+                    ai_response = langgraph_result["formatted_results"]
                 else:
-                    ai_response = f"很抱歉，没有找到关于'{search_query}'的相关论文。可能的原因：\n1. 搜索词过于具体\n2. 数据库中暂时没有相关内容\n3. 建议尝试使用英文关键词搜索\n\n你可以尝试搜索更通用的关键词，比如 'methane reforming' 或 'catalyst'。"
+                    error_msg = langgraph_result.get("error_message", "未知错误")
+                    ai_response = f"很抱歉，搜索过程中出现问题：{error_msg}\n\n建议：\n1. 尝试使用不同的关键词\n2. 确保网络连接正常\n3. 稍后重试"
                     
-            except Exception as mcp_error:
-                # MCP出错时提供友好的回复
-                print(f"MCP搜索出错: {mcp_error}")
-                ai_response = f"搜索过程中遇到了一些技术问题。让我为你提供一些关于甲烷干重整的基本信息：\n\n甲烷干重整(Dry Reforming of Methane, DRM)是一种重要的化学工艺，主要涉及：\n- 将甲烷(CH₄)和二氧化碳(CO₂)转化为合成气(H₂和CO)\n- 重要的催化剂研究领域\n- 在石化工业中有重要应用\n\n建议你稍后重试搜索功能，或者查看相关的学术数据库如arXiv、Google Scholar等。"
+            except Exception as search_error:
+                # 搜索出错时的处理
+                import traceback
+                print(f"LangGraph搜索出错: {search_error}")
+                print("详细错误堆栈:")
+                traceback.print_exc()
+                ai_response = f"智能搜索系统暂时不可用: {str(search_error)}\n\n请稍后重试或联系管理员。"
         else:
             # 普通聊天
             try:
@@ -232,6 +278,114 @@ async def universal_search_endpoint(request: UniversalSearchRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+
+# === Google Scholar MCP工具专门接口 ===
+class GoogleScholarKeywordRequest(BaseModel):
+    query: str
+    num_results: int = 10
+
+class GoogleScholarAdvancedRequest(BaseModel):
+    query: str
+    author: Optional[str] = None
+    year_low: Optional[int] = None
+    year_high: Optional[int] = None
+    num_results: int = 10
+
+class AuthorInfoRequest(BaseModel):
+    author_name: str
+
+@app.post("/google_scholar/search_keywords")
+async def google_scholar_keywords(request: GoogleScholarKeywordRequest):
+    """Google Scholar关键词搜索"""
+    try:
+        tools = create_google_scholar_tools()
+        keyword_tool = tools[0]  # GoogleScholarKeywordSearchTool
+        
+        result = await keyword_tool._arun(
+            query=request.query,
+            num_results=request.num_results
+        )
+        
+        return {"success": True, "result": result}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"关键词搜索失败: {str(e)}")
+
+@app.post("/google_scholar/search_advanced")
+async def google_scholar_advanced(request: GoogleScholarAdvancedRequest):
+    """Google Scholar高级搜索"""
+    try:
+        tools = create_google_scholar_tools()
+        advanced_tool = tools[1]  # GoogleScholarAdvancedSearchTool
+        
+        # 构建参数字典
+        params = {"query": request.query, "num_results": request.num_results}
+        if request.author:
+            params["author"] = request.author
+        if request.year_low:
+            params["year_low"] = request.year_low
+        if request.year_high:
+            params["year_high"] = request.year_high
+        
+        result = await advanced_tool._arun(**params)
+        
+        return {"success": True, "result": result}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"高级搜索失败: {str(e)}")
+
+@app.post("/google_scholar/author_info")
+async def google_scholar_author_info(request: AuthorInfoRequest):
+    """获取作者信息"""
+    try:
+        tools = create_google_scholar_tools()
+        author_tool = tools[2]  # AuthorInfoTool
+        
+        result = await author_tool._arun(author_name=request.author_name)
+        
+        return {"success": True, "result": result}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取作者信息失败: {str(e)}")
+
+@app.get("/google_scholar/test")
+async def test_google_scholar_tools():
+    """测试Google Scholar MCP工具功能"""
+    try:
+        tools = create_google_scholar_tools()
+        
+        # 简单测试三个工具
+        results = {
+            "tools_created": len(tools),
+            "tool_names": [tool.name for tool in tools],
+            "test_results": {}
+        }
+        
+        # 测试关键词搜索
+        try:
+            test_result1 = await tools[0]._arun(query="AI", num_results=2)
+            results["test_results"]["keyword_search"] = "success"
+        except Exception as e:
+            results["test_results"]["keyword_search"] = f"failed: {str(e)}"
+        
+        # 测试高级搜索
+        try:
+            test_result2 = await tools[1]._arun(query="machine learning", author="Smith", num_results=2)
+            results["test_results"]["advanced_search"] = "success"
+        except Exception as e:
+            results["test_results"]["advanced_search"] = f"failed: {str(e)}"
+        
+        # 测试作者信息
+        try:
+            test_result3 = await tools[2]._arun(author_name="Test Author")
+            results["test_results"]["author_info"] = "success"
+        except Exception as e:
+            results["test_results"]["author_info"] = f"failed: {str(e)}"
+        
+        return {"success": True, "results": results}
+        
+    except Exception as e:
+        return {"success": False, "error": f"工具测试失败: {str(e)}"}
 
 # 兼容性MCP接口
 @app.post("/search_papers", response_model=PaperSearchResponse)

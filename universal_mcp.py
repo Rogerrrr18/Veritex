@@ -197,12 +197,17 @@ class GenericMCPClient:
             query_template = search_config.get("query_template")
             category_template = search_config.get("category_template")
             
-            if kwargs.get("category") and category_template:
-                params[param_mapping.get("query", "query")] = category_template.format(
-                    query=query, category=kwargs["category"]
-                )
-            elif query_template:
-                params[param_mapping.get("query", "query")] = query_template.format(query=query)
+            try:
+                if kwargs.get("category") and category_template:
+                    params[param_mapping.get("query", "query")] = category_template.format(
+                        query=query, category=kwargs["category"]
+                    )
+                elif query_template:
+                    params[param_mapping.get("query", "query")] = query_template.format(query=query)
+            except KeyError as e:
+                # 如果模板格式化失败，使用原始查询
+                logger.warning(f"模板格式化失败: {e}, 使用原始查询")
+                params[param_mapping.get("query", "query")] = query
         
         return params
     

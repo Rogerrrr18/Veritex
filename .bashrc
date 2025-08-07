@@ -1,0 +1,14 @@
+export GOOGLE_CLOUD_PROJECT=gemini-api-466706
+export GOOGLE_API_KEY=gemini-api-466706
+export GOOGLE_API_KEY=gemini-api-466706
+export https_proxy=http://127.0.0.1:33210
+export GOOGLE_API_KEY=gemini-api-466706
+export GOOGLE_API_KEY=gemini-api-466706
+export https_proxy=http://127.0.0.1:33210
+export https_proxy=http://127.0.0.1:33210
+export GOOGLE_API_KEY=gemini-api-466706
+export GOOGLE_CLOUD_PROJECT=gemini-api-466706
+export GOOGLE_CLOUD_PROJECT="gemini-api-466706"
+export GOOGLE_CLOUD_PROJECT=gemini-api-466706
+export ANTHROPIC_BASE_URL="https://gaccode.com/claudecode"
+export ANTHROPIC_API_KEY="sk-ant-oat01-622a755cdd470a7a8b5298a82c2e476ac13b54ad084ed7b4f726f7cca9774649"

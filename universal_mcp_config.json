@@ -1,242 +1,149 @@
 {
-  "version": "2.0",
-  "description": "通用MCP服务配置 - 零代码添加新服务",
+  "version": "3.0",
+  "description": "Google Scholar MCP服务配置 - 专注于学术文献搜索",
   "mcpServices": {
-    "arxiv": {
-      "name": "arXiv",
-      "description": "arXiv预印本论文库",
+    "google_scholar": {
+      "name": "Google Scholar",
+      "description": "Google Scholar学术搜索服务",
       "enabled": true,
-      "base_url": "http://export.arxiv.org/api/query",
-      "method": "GET",
-      "auth": {
-        "type": "none"
+      "mcp_server": {
+        "command": "python",
+        "args": ["-m", "google_scholar_mcp_server"]
       },
-      "search_config": {
-        "endpoint": "",
-        "param_mapping": {
-          "query": "search_query",
-          "limit": "max_results",
-          "category": "category"
+      "tools": {
+        "search_google_scholar_key_words": {
+          "description": "使用关键词搜索Google Scholar论文",
+          "parameters": {
+            "query": {
+              "type": "string",
+              "description": "搜索关键词"
+            },
+            "num_results": {
+              "type": "integer",
+              "description": "返回结果数量",
+              "default": 10,
+              "maximum": 50
+            }
+          }
         },
-        "query_template": "all:{query}",
-        "category_template": "cat:{category} AND all:{query}",
-        "additional_params": {
-          "sortBy": "relevance",
-          "sortOrder": "descending"
+        "search_google_scholar_advanced": {
+          "description": "Google Scholar高级搜索",
+          "parameters": {
+            "query": {
+              "type": "string",
+              "description": "搜索查询"
+            },
+            "author": {
+              "type": "string",
+              "description": "作者名称",
+              "optional": true
+            },
+            "year_low": {
+              "type": "integer",
+              "description": "起始年份",
+              "optional": true
+            },
+            "year_high": {
+              "type": "integer",
+              "description": "结束年份",
+              "optional": true
+            },
+            "num_results": {
+              "type": "integer",
+              "description": "返回结果数量",
+              "default": 10,
+              "maximum": 50
+            }
+          }
+        },
+        "get_author_info": {
+          "description": "获取作者详细信息",
+          "parameters": {
+            "author_name": {
+              "type": "string",
+              "description": "作者姓名"
+            }
+          }
         }
       },
-      "response_config": {
-        "format": "rss",
-        "papers_path": "entries",
-        "field_mapping": {
-          "id": "id",
-          "title": "title", 
-          "abstract": "summary",
-          "authors": "authors",
-          "year": "published",
-          "published": "published",
-          "updated": "updated",
-          "url": "link",
-          "categories": "tags",
-          "doi": "doi"
-        },
-        "transform": {
-          "authors": "extract_names",
-          "categories": "extract_terms",
-          "arxiv_id": "extract_from_id",
-          "year": "extract_year_from_date"
-        }
+      "field_mapping": {
+        "title": "title",
+        "abstract": "abstract",
+        "authors": "authors",
+        "year": "year",
+        "venue": "venue",
+        "citations": "num_citations",
+        "url": "url",
+        "pdf_url": "pdf_link"
       },
       "rate_limit": {
-        "requests_per_minute": 60,
-        "delay_between_requests": 1.0
-      }
-    },
-    "semantic_scholar": {
-      "name": "Semantic Scholar",
-      "description": "Semantic Scholar学术搜索",
-      "enabled": false,
-      "base_url": "https://api.semanticscholar.org/graph/v1",
-      "method": "GET",
-      "auth": {
-        "type": "header",
-        "header_name": "x-api-key",
-        "env_var": "SEMANTIC_SCHOLAR_API_KEY"
-      },
-      "search_config": {
-        "endpoint": "/paper/search",
-        "param_mapping": {
-          "query": "query",
-          "limit": "limit",
-          "year": "year",
-          "venue": "venue"
-        },
-        "additional_params": {
-          "fields": "paperId,title,abstract,authors,venue,year,citationCount,url,openAccessPdf"
-        }
-      },
-      "response_config": {
-        "format": "json",
-        "papers_path": "data",
-        "field_mapping": {
-          "id": "paperId",
-          "title": "title",
-          "abstract": "abstract", 
-          "authors": "authors",
-          "year": "year",
-          "venue": "venue",
-          "citations": "citationCount",
-          "url": "url",
-          "pdf_url": "openAccessPdf.url"
-        },
-        "transform": {
-          "authors": "extract_author_names"
-        }
-      },
-      "rate_limit": {
-        "requests_per_minute": 100,
-        "delay_between_requests": 0.6
-      }
-    },
-    "crossref": {
-      "name": "CrossRef",
-      "description": "CrossRef学术文献数据库",
-      "enabled": true,
-      "base_url": "https://api.crossref.org",
-      "method": "GET", 
-      "auth": {
-        "type": "none"
-      },
-      "search_config": {
-        "endpoint": "/works",
-        "param_mapping": {
-          "query": "query.title",
-          "limit": "rows"
-        },
-        "additional_params": {
-          "sort": "relevance",
-          "order": "desc"
-        }
-      },
-      "response_config": {
-        "format": "json",
-        "papers_path": "message.items",
-        "field_mapping": {
-          "id": "DOI",
-          "title": "title[0]",
-          "abstract": "abstract",
-          "authors": "author",
-          "year": "published-print.date-parts[0][0]",
-          "venue": "container-title[0]",
-          "url": "URL"
-        },
-        "transform": {
-          "authors": "extract_given_family_names",
-          "title": "extract_first_element"
-        }
-      },
-      "rate_limit": {
-        "requests_per_minute": 50,
-        "delay_between_requests": 1.2
-      }
-    },
-    "pubmed": {
-      "name": "PubMed",
-      "description": "PubMed生物医学文献数据库",
-      "enabled": true,
-      "base_url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
-      "method": "GET",
-      "auth": {
-        "type": "none"
-      },
-      "search_config": {
-        "endpoint": "/esearch.fcgi",
-        "param_mapping": {
-          "query": "term",
-          "limit": "retmax"
-        },
-        "additional_params": {
-          "db": "pubmed",
-          "retmode": "json",
-          "sort": "relevance"
-        }
-      },
-      "response_config": {
-        "format": "json",
-        "papers_path": "esearchresult.idlist",
-        "requires_detail_fetch": true,
-        "detail_endpoint": "/efetch.fcgi",
-        "detail_params": {
-          "db": "pubmed",
-          "retmode": "xml",
-          "rettype": "abstract"
-        },
-        "field_mapping": {
-          "id": "PMID",
-          "title": "ArticleTitle",
-          "abstract": "Abstract",
-          "authors": "AuthorList.Author",
-          "year": "PubDate.Year",
-          "venue": "Journal.Title"
-        }
-      },
-      "rate_limit": {
-        "requests_per_minute": 100,
-        "delay_between_requests": 0.6
+        "requests_per_minute": 30,
+        "delay_between_requests": 2.0
       }
     }
   },
   "search_strategies": {
-    "fast": {
-      "description": "快速搜索策略",
-      "sources": ["arxiv"],
-      "parallel": true,
-      "timeout": 10,
-      "max_results_per_source": 10
+    "basic": {
+      "description": "基础关键词搜索",
+      "tool": "search_google_scholar_key_words",
+      "timeout": 15,
+      "max_results": 10
+    },
+    "advanced": {
+      "description": "高级搜索（支持作者、年份筛选）",
+      "tool": "search_google_scholar_advanced",
+      "timeout": 20,
+      "max_results": 15
     },
     "comprehensive": {
-      "description": "全面搜索策略", 
-      "sources": ["arxiv", "crossref", "pubmed"],
-      "parallel": true,
+      "description": "综合搜索（包含作者信息）",
+      "tools": ["search_google_scholar_advanced", "get_author_info"],
       "timeout": 30,
-      "max_results_per_source": 20
+      "max_results": 20
+    }
+  },
+  "workflow_config": {
+    "memory": {
+      "enabled": true,
+      "store_type": "memory",
+      "max_messages": 20,
+      "thread_id_generation": "uuid"
     },
-    "academic": {
-      "description": "学术搜索策略",
-      "sources": ["semantic_scholar", "crossref"],
-      "parallel": true,
-      "timeout": 20,
-      "max_results_per_source": 15
+    "human_in_loop": {
+      "enabled": true,
+      "approval_points": [
+        "before_search",
+        "after_analysis",
+        "before_final_output"
+      ],
+      "timeout_seconds": 300
+    },
+    "system_prompt": {
+      "enabled": true,
+      "template_path": "prompts/literature_search_agent.txt"
     }
   },
   "data_processing": {
     "deduplication": {
       "enabled": true,
       "similarity_threshold": 0.85,
-      "fields": ["title", "doi", "authors"]
+      "fields": ["title", "authors"]
     },
-    "relevance_scoring": {
-      "enabled": true,
-      "factors": {
-        "title_match": 0.4,
-        "abstract_match": 0.3,
-        "author_match": 0.1,
-        "venue_match": 0.1,
-        "citation_count": 0.1
-      }
-    },
-    "result_ranking": {
-      "primary": "relevance_score",
-      "secondary": "citation_count",
-      "order": "desc"
+    "result_formatting": {
+      "output_format": "table",
+      "required_fields": [
+        "title", "author", "doi", "year", "abstract", 
+        "journal", "keywords", "citation_count", 
+        "research_type", "access_status"
+      ]
     }
   },
   "global_settings": {
     "timeout_seconds": 30,
     "retry_attempts": 3,
     "enable_caching": true,
-    "cache_ttl_seconds": 3600,
-    "max_concurrent_requests": 5,
-    "default_limit": 20
+    "cache_ttl_seconds": 1800,
+    "max_concurrent_requests": 3,
+    "default_limit": 15
   }
 }
