@@ -48,6 +48,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     history: List[ChatMessage]
+    token_info: Optional[Dict[str, Any]] = None
 
 # MCP搜索相关模型
 class UniversalSearchRequest(BaseModel):
@@ -66,6 +67,37 @@ class PaperSearchResponse(BaseModel):
     count: Optional[int] = None
     source: Optional[str] = None
     source_counts: Optional[Dict[str, int]] = None
+
+# === 工具函数 ===
+def estimate_tokens(text: str) -> int:
+    """估算文本的token数量"""
+    if not text:
+        return 0
+    
+    import re
+    
+    # 中文字符按1.5个token计算，英文单词按1.3个token计算
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    english_words = len(re.findall(r'[a-zA-Z]+', text))
+    other_chars = len(text) - chinese_chars - english_words
+    
+    return int(chinese_chars * 1.5 + english_words * 1.3 + other_chars * 0.5)
+
+def calculate_total_tokens(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """计算对话历史的总token数"""
+    total_tokens = 0
+    message_count = len(history)
+    
+    for message in history:
+        content = message.get('content', '')
+        total_tokens += estimate_tokens(content)
+    
+    return {
+        "total_tokens": total_tokens,
+        "message_count": message_count,
+        "average_tokens_per_message": total_tokens / message_count if message_count > 0 else 0,
+        "estimated_cost_usd": total_tokens * 0.000002  # 估算成本，实际根据模型定价调整
+    }
 
 # === 基础路由 ===
 @app.get("/")
@@ -193,9 +225,13 @@ async def chat(request: ChatRequest):
             for msg in updated_history
         ]
         
+        # 计算token信息
+        token_info = calculate_total_tokens(updated_history)
+        
         return ChatResponse(
             response=ai_response,
-            history=response_history
+            history=response_history,
+            token_info=token_info
         )
         
     except Exception as e:

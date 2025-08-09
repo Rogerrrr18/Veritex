@@ -21,7 +21,18 @@
                         <h1>学术论文搜索系统</h1>
                     </div>
                     <div class="header-actions">
-                        <button id="clearBtn" class="clear-btn" title="清空聊天记录">
+                        <div class="token-meter">
+                            <div class="token-info" id="tokenInfo">0 / 4000 tokens</div>
+                            <div class="token-progress-container">
+                                <div class="token-progress-bar token-safe" id="tokenProgress" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <button id="historyBtn" class="header-btn" title="历史记录">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M13 3C9.23 3 6.19 5.95 6 9.66L4.34 8L3.07 9.27L6.5 12.7L9.93 9.27L8.66 8L7.34 9.32C7.52 6.81 9.71 4.81 12.4 4.81C15.24 4.81 17.6 7.17 17.6 10.01C17.6 12.85 15.24 15.21 12.4 15.21V17.21C16.35 17.21 19.6 13.96 19.6 10.01C19.6 6.06 16.35 2.81 12.4 2.81H13V3Z" fill="currentColor"/>
+                            </svg>
+                        </button>
+                        <button id="clearBtn" class="header-btn" title="清空聊天记录">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                 <path d="M6 19C6 20.1 6.9 21 8 21H16C17.1 21 18 20.1 18 19V7H6V19ZM19 4H15.5L14.5 3H9.5L8.5 4H5V6H19V4Z" fill="currentColor"/>
                             </svg>
@@ -60,7 +71,79 @@
             </main>
         </div>
         
-        <!-- 移除加载动画蒙版 -->
+        <!-- 聊天记录管理模态框 -->
+        <div id="historyModal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>📚 聊天记录管理</h2>
+                    <button id="closeHistoryModal" class="close-btn">&times;</button>
+                </div>
+                
+                <div class="modal-body">
+                    <div class="history-controls">
+                        <div class="search-box">
+                            <input type="text" id="historySearch" placeholder="搜索对话内容..." class="search-input">
+                            <svg width="20" height="20" class="search-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M21 21L16.5 16.5M19 11C19 15.4183 15.4183 19 11 19C6.58172 19 3 15.4183 3 11C3 6.58172 6.58172 3 11 3C15.4183 3 19 6.58172 19 11Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        
+                        <div class="filter-controls">
+                            <select id="sortOrder" class="filter-select">
+                                <option value="newest">最新优先</option>
+                                <option value="oldest">最旧优先</option>
+                                <option value="longest">最长对话</option>
+                                <option value="shortest">最短对话</option>
+                            </select>
+                            
+                            <button id="exportAllBtn" class="export-btn">导出全部</button>
+                            <button id="deleteAllBtn" class="delete-all-btn">清空历史</button>
+                        </div>
+                    </div>
+                    
+                    <div class="history-stats" id="historyStats">
+                        <span>总对话数: <strong>0</strong></span>
+                        <span>总消息数: <strong>0</strong></span>
+                        <span>总Token数: <strong>0</strong></span>
+                    </div>
+                    
+                    <div class="history-list" id="historyList">
+                        <div class="history-empty">
+                            <p>📭 暂无历史对话记录</p>
+                            <p>开始一段对话后，历史记录将在这里显示</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 对话详情查看模态框 -->
+        <div id="conversationModal" class="modal hidden">
+            <div class="modal-content conversation-modal">
+                <div class="modal-header">
+                    <h2 id="conversationTitle">对话详情</h2>
+                    <div class="conversation-actions">
+                        <button id="restoreConversationBtn" class="restore-btn">恢复对话</button>
+                        <button id="exportConversationBtn" class="export-btn">导出</button>
+                        <button id="deleteConversationBtn" class="delete-btn">删除</button>
+                        <button id="closeConversationModal" class="close-btn">&times;</button>
+                    </div>
+                </div>
+                
+                <div class="modal-body">
+                    <div class="conversation-info" id="conversationInfo">
+                        <!-- 对话统计信息 -->
+                    </div>
+                    
+                    <div class="conversation-content" id="conversationContent">
+                        <!-- 对话内容 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 模态框背景 -->
+        <div id="modalBackdrop" class="modal-backdrop hidden"></div>
     </div>
     
     <script type="module" src="/src/main.js"></script>
