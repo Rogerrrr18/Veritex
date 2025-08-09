@@ -12,7 +12,9 @@ import re
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from qwen_api_async import get_qwen_client
+# 使用新的统一LLM接口
+from llm_interface import get_universal_llm, get_llm_client
+from model_config import get_model_config_manager
 from universal_mcp import get_universal_client, universal_search
 from langchain_workflows.paper_search_graph_v2 import chat_with_search_strategy
 # 注释掉不再使用的MCP工具导入
@@ -84,9 +86,10 @@ async def root():
 async def health_check():
     """健康检查"""
     try:
-        # 检查千问API
-        qwen_client = await get_qwen_client()
-        test_response = await qwen_client.simple_chat("你好")
+        # 检查LLM API
+        llm_client = await get_universal_llm()
+        test_response = await llm_client.simple_chat("你好")
+        model_info = llm_client.get_model_info()
         
         # 检查MCP系统
         mcp_client = await get_universal_client()
@@ -95,7 +98,10 @@ async def health_check():
         
         return {
             "status": "healthy",
-            "qwen_api": "connected",
+            "llm_api": "connected",
+            "active_model": model_info.get("active_model", "unknown"),
+            "model_name": model_info.get("model_name", "unknown"),
+            "available_models": model_info.get("available_models", []),
             "mcp_services": enabled_count,
             "total_services": len(mcp_services),
             "response_preview": test_response[:20] + "..." if test_response else "N/A"
@@ -198,13 +204,35 @@ async def chat(request: ChatRequest):
 @app.get("/models")
 async def get_models():
     """获取可用模型列表"""
-    return {
-        "models": [
-            {"id": "qwen-turbo", "name": "千问Turbo", "description": "快速响应模型"},
-            {"id": "qwen-plus", "name": "千问Plus", "description": "高质量模型"},
-            {"id": "qwen-max", "name": "千问Max", "description": "顶级模型"}
-        ]
-    }
+    try:
+        config_manager = get_model_config_manager()
+        llm_client = await get_universal_llm()
+        model_info = llm_client.get_model_info()
+        
+        # 构建模型列表
+        models = []
+        for model_name in model_info.get("available_models", []):
+            models.append({
+                "id": model_name,
+                "name": model_name.title(),
+                "description": f"{model_name.title()} 模型",
+                "active": model_name == model_info.get("active_model")
+            })
+        
+        return {
+            "active_model": model_info.get("active_model"),
+            "models": models,
+            "model_info": {
+                "current_model_name": model_info.get("model_name"),
+                "temperature": model_info.get("temperature"),
+                "max_tokens": model_info.get("max_tokens")
+            }
+        }
+    except Exception as e:
+        return {
+            "error": f"获取模型信息失败: {str(e)}",
+            "models": []
+        }
 
 # === MCP功能 ===
 @app.post("/universal_search")

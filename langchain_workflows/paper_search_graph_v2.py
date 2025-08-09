@@ -17,8 +17,9 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-# 直接使用千问API，无需LangChain包装器
-# from langchain_llm_qwen import get_qwen_llm_for_langgraph
+# 使用统一LLM接口
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from llm_interface import get_llm_for_langgraph
 from langchain_workflows.state_schemas import PaperSearchState, create_initial_state
 
 
@@ -30,8 +31,8 @@ class SimplePaperSearchAgent:
     
     def __init__(self, enable_memory: bool = True):
         self.enable_memory = enable_memory
-        # 直接使用千问API，无需LangChain包装器
-        # self.llm = get_qwen_llm_for_langgraph()
+        # 使用统一LLM接口
+        self.llm = get_llm_for_langgraph()
         self.system_prompt = self._load_system_prompt()
         self.tools = self._initialize_tools()
         self.checkpointer = MemorySaver() if enable_memory else None
@@ -40,23 +41,15 @@ class SimplePaperSearchAgent:
     def _load_system_prompt(self) -> str:
         """加载系统提示词"""
         try:
-            prompt_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", "2.txt")
+            prompt_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", "3.txt")
             with open(prompt_path, 'r', encoding='utf-8') as f:
-                return f.read()
+                original_prompt = f.read().strip()
+                print(f"📄 成功加载系统提示词文件，长度: {len(original_prompt)}")
+                # 直接返回用户自定义的提示词内容
+                return original_prompt
         except Exception as e:
-            print(f"警告: 无法加载系统提示词: {e}")
-            return """
-# 智能文献管理与Agent
-
-## 角色定义  
-您是一个专业的智能文献管理和搜索助手。
-
-## 关键规则
-**当用户明确要求搜索文献时**，请在回答前添加：
-SEARCH_NEEDED: [优化的英文关键词]
-
-**其他情况请直接回答**。
-            """
+            print(f"❌ 无法加载系统提示词文件: {e}")
+            return """你是专业的智能学术助手。请提供准确、专业且有帮助的回答。对于学术和技术问题，请展现你的专业知识深度。始终用中文回答。"""
     
     def _initialize_tools(self) -> List:
         """初始化MCP工具 - 暂时注释掉"""
@@ -102,112 +95,51 @@ SEARCH_NEEDED: [优化的英文关键词]
         return workflow.compile(checkpointer=self.checkpointer)
     
     async def intent_analysis_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """简化版LLM意图分析节点 - 完全基于prompt驱动"""
+        """简化版LLM意图分析节点 - 完全基于prompt驱动，无回退机制"""
         try:
             query = state.get("query", "")
             user_message = state.get("messages", [])[-1].content if state.get("messages") else query
             
             print(f"🤖 LLM处理用户请求: {user_message}")
             
-            # 直接调用千问API，简化中间层
-            try:
-                # 导入千问API客户端
-                from qwen_api_async import get_qwen_client
-                qwen_client = await get_qwen_client()
-                
-                # 使用更短、更直接的prompt减少超时风险
-                simple_prompt = f"""你是专业的智能助手。请简洁明了地回答用户问题。
-
-问题: {user_message}
-
-请用中文回答:"""
-                
-                # 设置较短的超时时间
-                ai_response = await qwen_client.chat_completion(
-                    messages=[{"role": "user", "content": simple_prompt}],
-                    model="qwen-turbo",  # 使用较快的模型
-                    temperature=0.7,
-                    max_tokens=800  # 限制token数量
-                )
-                
-                # 如果API调用成功
-                if ai_response and len(ai_response) > 20:
-                    print(f"📊 直接API调用成功，响应长度: {len(ai_response)}")
-                    final_response = ai_response
-                else:
-                    print("⚠️ API响应为空或过短，使用回退机制")
-                    raise Exception("API响应无效")
-                    
-            except Exception as e:
-                print(f"⚠️ API调用失败: {e}，使用动态回退机制...")
-                # 直接使用动态回退，不再尝试复杂prompt
-                final_response = await self._generate_professional_fallback_response(user_message)
+            # 使用统一LLM接口 - 移除回退机制，完全依赖系统提示词
+            ai_response = await self.llm.simple_chat(
+                prompt=user_message,
+                system_prompt=self.system_prompt
+            )
             
-            print(f"📝 最终中文回复: {final_response[:100]}...")
+            print(f"📋 使用了系统提示词，长度: {len(self.system_prompt)}")
             
-            # 如果仍然是错误消息，提供专业的备用回复
-            if "抱歉" in final_response and "无法回复" in final_response:
-                final_response = await self._generate_professional_fallback_response(user_message)
+            # 如果API返回为空，直接报告错误而不是回退
+            if not ai_response:
+                error_msg = "LLM API返回为空，请检查API配置"
+                print(f"❌ {error_msg}")
+                return {
+                    "error_message": error_msg,
+                    "current_step": "failed",
+                    "is_completed": False,
+                    "messages": [AIMessage(content=f"抱歉，API调用失败：{error_msg}")]
+                }
             
-            # 返回处理后的中文响应
+            print(f"📝 LLM回复成功，响应长度: {len(ai_response)}")
+            
+            # 返回处理后的响应
             return {
                 "current_step": "completed",
                 "is_completed": True,
-                "messages": [AIMessage(content=final_response)]
+                "messages": [AIMessage(content=ai_response)]
             }
                 
         except Exception as e:
             error_msg = f"LLM处理失败: {str(e)}"
             print(f"❌ {error_msg}")
-            # 提供专业的回退响应而不是通用错误
-            fallback_response = await self._generate_professional_fallback_response(user_message)
             return {
                 "error_message": error_msg,
-                "current_step": "completed",
-                "is_completed": True,  # 标记为完成，因为我们提供了回退回复
-                "messages": [AIMessage(content=fallback_response)]
+                "current_step": "failed",
+                "is_completed": False,
+                "messages": [AIMessage(content=f"系统错误：{error_msg}")]
             }
     
-    async def _generate_professional_fallback_response(self, user_query: str) -> str:
-        """生成专业的备用回复 - 简化版避免超时"""
-        try:
-            # 尝试快速的动态回复生成
-            from qwen_api_async import get_qwen_client
-            qwen_client = await get_qwen_client()
-            
-            # 简化的prompt，减少token消耗和延迟
-            fallback_prompt = f"""简洁回答: {user_query}
-
-用中文专业回答，100字以内:"""
-
-            # 使用最快速的配置
-            dynamic_response = await qwen_client.chat_completion(
-                messages=[{"role": "user", "content": fallback_prompt}],
-                model="qwen-turbo",
-                temperature=0.3,
-                max_tokens=200
-            )
-            
-            if dynamic_response and len(dynamic_response) > 20:
-                print(f"✅ 快速回退响应生成成功")
-                return dynamic_response
-            else:
-                print("⚠️ 动态回退失败，使用静态回退")
-                raise Exception("动态回退无效")
-                
-        except Exception as e:
-            print(f"⚠️ 动态回退完全失败: {e}")
-            # 根据查询内容提供静态但相关的回复
-            query_lower = user_query.lower()
-            
-            if any(word in query_lower for word in ['机器学习', 'machine learning', 'ai', '人工智能']):
-                return """机器学习是人工智能的重要分支，让计算机从数据中学习模式。主要包括监督学习、无监督学习和强化学习。如需了解更多，建议查阅相关学术资料或在线课程。"""
-            elif any(word in query_lower for word in ['甲烷', 'methane', '重整', 'reforming']):
-                return """甲烷干重整是重要的化工过程，涉及甲烷与二氧化碳反应生成合成气。这个过程在清洁能源和化工行业有重要应用。建议查阅专业化工文献了解详细机理。"""
-            elif any(word in query_lower for word in ['论文', '文献', 'paper', 'research']):
-                return """对于学术文献搜索，建议使用专业数据库如Web of Science、Google Scholar等。关键是选择合适的关键词，关注权威期刊，并注意文献的引用情况。"""
-            else:
-                return f"""感谢您的问题。关于"{user_query}"，我理解您的需求。建议提供更多背景信息以便我给出更准确的回答，或者您可以稍后重试。"""
     
     def _extract_chinese_response(self, response: str) -> str:
         """从混合响应中提取中文回复部分"""

@@ -185,26 +185,31 @@ body {
   line-height: 1.6;
   white-space: pre-wrap;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 .user-message .message-content {
   background: var(--primary-color);
   color: white;
   margin-left: auto;
-  max-width: 70%;
+  max-width: 80%;
 }
 
 .assistant-message .message-content {
   background: var(--surface-color);
   border: 1px solid var(--border-color);
-  max-width: 85%;
+  max-width: 95%;
+  min-height: auto;
 }
 
 .system-message .message-content {
   background: #FEF3C7;
   color: #92400E;
   border: 1px solid #FCD34D;
-  max-width: 85%;
+  max-width: 95%;
 }
 
 .message-timestamp {
@@ -328,6 +333,60 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 长文本显示优化 */
+.assistant-message .message-content {
+  /* 确保表格和代码块能正确显示 */
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.message-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+
+.message-content th,
+.message-content td {
+  border: 1px solid var(--border-color);
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.message-content th {
+  background-color: var(--background-color);
+  font-weight: 600;
+}
+
+.message-content code {
+  background-color: var(--background-color);
+  padding: 0.125rem 0.25rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875em;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.message-content pre {
+  background-color: var(--background-color);
+  padding: 0.75rem;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  border: 1px solid var(--border-color);
+}
+
+.message-content pre code {
+  background: none;
+  padding: 0;
+}
+
+/* 确保长URL和长文本能够正确换行 */
+.message-content a {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
 /* 性能优化 - 减少重排重绘 */
 .chat-messages {
   will-change: scroll-position;
@@ -365,7 +424,15 @@ body {
   }
   
   .user-message .message-content {
-    max-width: 85%;
+    max-width: 90%;
+  }
+  
+  .assistant-message .message-content {
+    max-width: 98%;
+  }
+  
+  .system-message .message-content {
+    max-width: 98%;
   }
 }
 
