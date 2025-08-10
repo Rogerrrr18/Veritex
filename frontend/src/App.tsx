@@ -1,7 +1,7 @@
-import React, { useState, useEffect, createContext, useContext } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { supabase, registerUser, logUserAction } from './supabaseClient';
+import { registerUser, logUserAction } from './auth';
 import AdminDashboard from './AdminDashboard';
 import { api, APP_CONFIG, DEV_CONFIG } from './config';
 
@@ -209,7 +209,6 @@ function HomePage() {
           <ul>
             <li><a href="/products">Products</a></li>
             <li><a href="/features">Features</a></li>
-            <li><a href="#">Pricing</a></li>
             <li><a href="#">Support</a></li>
           </ul>
         </nav>
@@ -248,6 +247,7 @@ function HomePage() {
               {hasValidSession ? '🔍 Search' : 'Get Beta Code'}
             </button>
           </form>
+          
         </section>
         {/* 3D圆柱图片轮播 */}
         <div className="carousel-3d">
@@ -287,7 +287,7 @@ function KeywordCloudPage() {
   const [maxResults, setMaxResults] = useState<number>(location.state?.maxResults || APP_CONFIG.DEFAULT_MAX_RESULTS)
   const [yearLow, setYearLow] = useState<string>('')
   const [yearHigh, setYearHigh] = useState<string>('')
-  const [showLoading, setShowLoading] = useState(false)
+  // 移除扩展过程中的加载提示，保持页面简洁
   const [skipExpansion] = useState(location.state?.skipExpansion || false)
   
 
@@ -308,7 +308,6 @@ function KeywordCloudPage() {
   // 自动扩展关键词
   useEffect(() => {
     if (input && !skipExpansion) {
-      setShowLoading(true)
       handleExpand()
     }
     // eslint-disable-next-line
@@ -330,7 +329,6 @@ function KeywordCloudPage() {
     
     setError('')
     setLoading(true)
-    setShowLoading(true)
     
     try {
       // 记录行为
@@ -370,7 +368,6 @@ function KeywordCloudPage() {
       setError(e.message || '扩展关键词失败')
     }
     setLoading(false)
-    setShowLoading(false)
   }
 
   // 扩展结果可编辑
@@ -486,21 +483,19 @@ function KeywordCloudPage() {
         </div>
       </div>
       <div className="cloud-header">
-        <h2>Keyword Cloud</h2>
+        <h2>Keywords Cloud</h2>
         <p>Edit your keywords, then start searching</p>
         
       </div>
       
       {error && <p className="error-message">错误: {error}</p>}
       
-      {showLoading && <div className="loading-spinner">扩展关键词中...</div>}
-      
-      
+      {/* 移除扩展关键词加载提示，保持页面简洁 */}
       <div className="keyword-bubbles">
         {expanded.map((term, idx) => (
           <div
             key={idx}
-            className="keyword-bubble"
+            className="keyword-bubble keyword-bubble-elastic"
             style={{
               backgroundColor: getBubbleColor(idx),
               animationDelay: `${idx * 0.1}s`
@@ -571,9 +566,9 @@ function KeywordCloudPage() {
         <button
           onClick={handleSearch}
           disabled={loading || expanded.filter(k => k.trim()).length === 0}
-          className="search-button"
+          className={`search-button search-button-elastic ${loading ? 'loading-breathe' : ''}`}
         >
-          {loading ? 'Searching...' : 'Search Papers'}
+          {loading ? 'Searching...' : '🔍 Search Papers'}
         </button>
       </div>
     </div>
@@ -591,7 +586,6 @@ function ReportPage() {
   }, [theme])
   const location = useLocation()
   const [papers] = useState(location.state?.papers || [])
-  const [searchHistory] = useState(location.state?.searchHistory)
   const [expandedKeywords] = useState(location.state?.expandedKeywords || [])
   const [originalQuery] = useState(location.state?.originalQuery || '')
   const [maxResults] = useState(location.state?.maxResults || 20)
@@ -623,8 +617,9 @@ function ReportPage() {
     })
   }
 
+
   return (
-    <div className={`report-page ${theme === 'light' ? 'light' : 'dark'}`}> 
+    <div className={`report-page ${theme === 'light' ? 'light' : 'dark'} page-enter page-enter-active`}> 
       <div className="report-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button 
@@ -645,60 +640,67 @@ function ReportPage() {
             ← Back
           </button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {/* 仅保留导出和主题切换 */}
           <button onClick={handleExport} className="export-button">Export CSV</button>
           <ReportThemeToggle theme={theme} toggle={toggle} />
         </div>
       </div>
-      <div className="report-table-wrapper">
-        <table className="report-table">
-          <thead>
-            <tr>
-              <th className="col-title">标题</th>
-              <th className="col-authors">作者</th>
-              <th className="col-year">年份</th>
-              <th className="col-abstract">摘要</th>
-              <th className="col-link">链接</th>
-            </tr>
-          </thead>
-          <tbody>
-            {papers.map((paper: any, idx: number) => {
-              const abstract = paper.abstract || ''
-              const isLong = abstract.length > MAX_ABSTRACT
-              const showAll = expandedIdx[idx]
-              return (
-                <tr key={idx}>
-                  <td className="col-title">
-                    <div className="title-content">{paper.title}</div>
-                  </td>
-                  <td className="col-authors">
-                    <div className="authors-content">{paper.authors}</div>
-                  </td>
-                  <td className="col-year">
-                    <div className="year-content">{paper.year}</div>
-                  </td>
-                  <td className="col-abstract">
-                    <div className="abstract-content">
-                      {isLong && !showAll
-                        ? abstract.slice(0, MAX_ABSTRACT) + '...'
-                        : abstract}
-                      {isLong && (
-                        <button className="abstract-toggle" onClick={() => toggleAbstract(idx)}>
-                          {showAll ? 'Less' : 'More'}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                  <td className="col-link">
-                    <a href={paper.url} target="_blank" rel="noopener noreferrer" className="link-button">
-                      View
-                    </a>
-                  </td>
+      
+      {/* 仅保留表格视图，移除关系图 */}
+      <div className="view-switch-container">
+        <div className="view-content view-enter view-enter-active">
+          <div className="report-table-wrapper">
+            <table className="report-table">
+              <thead>
+                <tr>
+                  <th className="col-title">标题</th>
+                  <th className="col-authors">作者</th>
+                  <th className="col-year">年份</th>
+                  <th className="col-abstract">摘要</th>
+                  <th className="col-link">链接</th>
                 </tr>
-              )
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {papers.map((paper: any, idx: number) => {
+                  const abstract = paper.abstract || ''
+                  const isLong = abstract.length > MAX_ABSTRACT
+                  const showAll = expandedIdx[idx]
+                  return (
+                    <tr key={idx} style={{ animationDelay: `${idx * 0.05}s` }}>
+                      <td className="col-title">
+                        <div className="title-content">{paper.title}</div>
+                      </td>
+                      <td className="col-authors">
+                        <div className="authors-content">{paper.authors}</div>
+                      </td>
+                      <td className="col-year">
+                        <div className="year-content">{paper.year}</div>
+                      </td>
+                      <td className="col-abstract">
+                        <div className="abstract-content">
+                          {isLong && !showAll
+                            ? abstract.slice(0, MAX_ABSTRACT) + '...'
+                            : abstract}
+                          {isLong && (
+                            <button className="abstract-toggle" onClick={() => toggleAbstract(idx)}>
+                              {showAll ? 'Less' : 'More'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="col-link">
+                        <a href={paper.url} target="_blank" rel="noopener noreferrer" className="link-button">
+                          View
+                        </a>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -1149,6 +1151,7 @@ function App() {
       <Route path="/products" element={<ProductsPage />} />
       <Route path="/features" element={<FeaturesPage />} />
       <Route path="/admin" element={<AdminDashboard />} />
+      {/* 移除作者分析相关路由 */}
     </Routes>
   )
 }

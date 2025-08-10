@@ -216,6 +216,7 @@ class OptimizedKeywordExpander:
 要求：
 1. 术语必须是该领域的**专业技术术语**，不是通用词汇
 2. 包含缩写、全称、核心概念、相关技术
+
 3. 术语要在顶级期刊中常见，具有学术价值
 4. 避免：{guide['avoid']}
 5. 参考模式：{guide['examples']}

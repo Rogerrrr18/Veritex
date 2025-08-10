@@ -1,6 +1,7 @@
 """
 多源数据获取引擎 - Paper God核心搜索组件
-实现 Semantic Scholar + arXiv + Paperscraper 多源并行搜索
+实现 Semantic Scholar + arXiv + Paperscraper + MCP增强 多源并行搜索
+集成MCP协议提供更稳定的API访问和增强的搜索功能
 """
 
 import asyncio
@@ -531,14 +532,105 @@ class GoogleScholarAPI:
         if self.session and not self.session.closed:
             await self.session.close()
 
-# 更新MultiSourceEngine类以包含新的数据源
-class MultiSourceEngine:
-    """多源数据获取引擎 - 核心搜索组件"""
+# MCP增强的语义搜索引擎
+class MCPEnhancedSemanticAPI:
+    """MCP增强的Semantic Scholar API - 提供更稳定的搜索服务"""
     
     def __init__(self):
+        self.mcp_client = None
+        self.fallback_api = SemanticScholarAPI()  # 保留原API作为后备
+        
+    async def _get_mcp_client(self):
+        """获取MCP客户端 - 优先尝试MCP服务"""
+        if self.mcp_client is None:
+            try:
+                logger.info("尝试连接Paper God MCP Semantic Scholar服务...")
+                # 使用我们新的直接MCP客户端
+                from mcp_semantic_scholar_client import get_semantic_scholar_mcp_client
+                mcp_client = await get_semantic_scholar_mcp_client()
+                
+                # 测试连接
+                test_result = await mcp_client.search_papers("test", limit=1)
+                
+                if test_result.success:
+                    self.mcp_client = mcp_client
+                    logger.info("✓ Paper God MCP Semantic Scholar连接成功，优先使用MCP服务")
+                    return self.mcp_client
+                else:
+                    logger.warning(f"✗ MCP Semantic Scholar测试失败，回退到传统API: {test_result.error}")
+                    self.mcp_client = False  # 标记为MCP不可用
+            except Exception as e:
+                logger.warning(f"✗ MCP客户端初始化失败，回退到传统API: {str(e)[:100]}...")
+                self.mcp_client = False  # 标记为MCP不可用
+        
+        # 如果MCP不可用，返回None
+        return self.mcp_client if self.mcp_client is not False else None
+        
+    async def search(self, query: str, limit: int = 20) -> List[Paper]:
+        """使用MCP增强搜索，失败时回退到原API"""
+        try:
+            mcp_client = await self._get_mcp_client()
+            if mcp_client:
+                # 使用MCP增强搜索
+                result = await mcp_client.search_papers(query, limit)
+                if result.success and result.data:
+                    # 转换为标准Paper格式
+                    papers = []
+                    for paper_data in result.data:
+                        authors = paper_data.get('authors', [])
+                        if isinstance(authors, str):
+                            authors = [authors]
+                        elif isinstance(authors, list):
+                            authors = [author.get('name', author) if isinstance(author, dict) else str(author) for author in authors]
+                        
+                        paper = Paper(
+                            title=paper_data.get('title', ''),
+                            authors=authors,
+                            abstract=paper_data.get('abstract', ''),
+                            year=paper_data.get('year'),
+                            journal=paper_data.get('journal', {}).get('name', '') if isinstance(paper_data.get('journal'), dict) else str(paper_data.get('journal', '')),
+                            url=paper_data.get('url', ''),
+                            doi=paper_data.get('externalIds', {}).get('DOI') if paper_data.get('externalIds') else None,
+                            citations=paper_data.get('citationCount', 0),
+                            source='semantic_scholar_mcp'
+                        )
+                        papers.append(paper)
+                    
+                    logger.info(f"✓ MCP语义搜索成功: {len(papers)} 篇论文（优先级模式）")
+                    return papers
+                else:
+                    raise Exception(f"MCP搜索返回错误: {result.error}")
+            else:
+                raise Exception("MCP客户端不可用")
+                
+        except Exception as e:
+            logger.info(f"→ MCP搜索不可用({str(e)[:50]}...)，使用传统API作为后备")
+            # 回退到原始API
+            return await self.fallback_api.search(query, limit)
+    
+    async def close(self):
+        """关闭连接"""
+        try:
+            if self.mcp_client:
+                await self.mcp_client.close()
+        except Exception as e:
+            logger.warning(f"关闭MCP客户端时出错: {e}")
+        await self.fallback_api.close()
+
+# 更新MultiSourceEngine类以包含MCP增强的数据源
+class MultiSourceEngine:
+    """多源数据获取引擎 - 核心搜索组件（MCP增强版）"""
+    
+    def __init__(self, enable_mcp: bool = True):
+        # 强制使用直连 Semantic Scholar API（禁用 MCP）
         self.semantic_scholar = SemanticScholarAPI()
+        logger.info("使用直连 Semantic Scholar API（MCP 已禁用）")
+            
         self.arxiv = ArxivAPI()
-        self.paperscraper = PaperscraperClient()
+        # 可选：如无效则移除 paperscraper
+        # self.paperscraper = PaperscraperClient()
+        self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
+        self.enable_mcp = False
         
     async def search_parallel(self, query: str, max_results: int = 50) -> List[Paper]:
         """并行搜索多个数据源"""
@@ -551,9 +643,10 @@ class MultiSourceEngine:
             # 并行调用所有搜索源
             tasks = [
                 self.semantic_scholar.search(query, per_source_limit),
-                self.arxiv.search(query, per_source_limit),
-                self.paperscraper.search(query, per_source_limit)
+                self.arxiv.search(query, per_source_limit)
             ]
+            if self.pubmed:
+                tasks.append(self.pubmed.search(query, per_source_limit))
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -619,11 +712,11 @@ class MultiSourceEngine:
                 year_bonus = max(0, (paper.year - (current_year - 10)) / 10.0)
                 score += year_bonus
             
-            # 数据源权重
+            # 数据源权重（MCP增强版本权重更高）
             source_weights = {
                 'semantic_scholar': 1.3,
                 'arxiv': 1.1,
-                'paperscraper': 0.9
+                'pubmed': 1.2
             }
             score *= source_weights.get(paper.source, 1.0)
             
@@ -634,31 +727,50 @@ class MultiSourceEngine:
     
     async def close(self):
         """关闭所有连接"""
-        await asyncio.gather(
-            self.semantic_scholar.close(),
-            self.arxiv.close(),
-            self.paperscraper.close()
-        )
+        coros = [self.semantic_scholar.close(), self.arxiv.close()]
+        if self.pubmed:
+            coros.append(self.pubmed.close())
+        await asyncio.gather(*coros)
+        
+    async def search_with_mcp_fallback(self, query: str, max_results: int = 50) -> List[Paper]:
+        """带MCP后备的搜索方法 - 确保高可用性"""
+        # 直接并行搜索（不再使用 MCP 回退）
+        try:
+            return await self.search_parallel(query, max_results)
+        except Exception as e:
+            logger.error(f"并行搜索失败: {e}")
+            return []
 
 # 使用示例
 async def main():
-    """测试多源搜索引擎"""
-    engine = MultiSourceEngine()
+    """测试多源搜索引擎（MCP增强版）"""
+    # 测试MCP增强版本
+    engine_mcp = MultiSourceEngine(enable_mcp=True)
     
     try:
-        # 测试搜索
-        results = await engine.search_parallel("machine learning", max_results=20)
+        print("=== MCP增强搜索测试 ===")
+        # 使用MCP增强搜索
+        results = await engine_mcp.search_with_mcp_fallback("machine learning", max_results=10)
         
-        print(f"找到 {len(results)} 篇论文:")
-        for i, paper in enumerate(results[:5], 1):
+        print(f"MCP增强搜索找到 {len(results)} 篇论文:")
+        for i, paper in enumerate(results[:3], 1):
             print(f"\n{i}. {paper.title}")
             print(f"   作者: {', '.join(paper.authors[:3])}")
             print(f"   来源: {paper.source}")
             print(f"   年份: {paper.year}")
             print(f"   相关性得分: {paper.relevance_score:.2f}")
             
+        print("\n=== 传统搜索对比测试 ===")
+        # 测试传统版本对比
+        engine_traditional = MultiSourceEngine(enable_mcp=False)
+        results_traditional = await engine_traditional.search_parallel("machine learning", max_results=10)
+        
+        print(f"传统搜索找到 {len(results_traditional)} 篇论文")
+        
+        await engine_traditional.close()
+            
     finally:
-        await engine.close()
+        await engine_mcp.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

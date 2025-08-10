@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 
 from main import PaperGodSearchEngine
 from multi_source_engine import Paper
+# 作者分析功能已移除
 
 app = FastAPI(
     title="Paper God API",
-    description="学术文献智能搜索系统 - 多源融合版本",
-    version="2.0.0"
+    description="学术文献智能搜索系统 - MCP增强多源融合版本",
+    version="2.1.0"
 )
 
 app.add_middleware(
@@ -33,8 +34,9 @@ search_engine = None
 def get_search_engine():
     global search_engine
     if search_engine is None:
-        search_engine = PaperGodSearchEngine()
-        logger.info("搜索引擎初始化成功")
+        # 禁用 MCP，使用直连文献库 API
+        search_engine = PaperGodSearchEngine(enable_mcp=False)
+        logger.info("搜索引擎初始化成功（直连API模式，MCP已禁用）")
     return search_engine
 
 class SearchRequest(BaseModel):
@@ -45,6 +47,20 @@ class SearchRequest(BaseModel):
 class ExpandKeywordsRequest(BaseModel):
     keywords: str
     max_keywords: int = 5
+
+# 轻量埋点与注册请求模型
+class RegisterRequest(BaseModel):
+    invite_code: str
+    user_id: str
+
+class LogActionRequest(BaseModel):
+    user_id: str
+    action: str
+    payload: Optional[str] = None
+    ts: Optional[int] = None
+
+# 作者分析相关请求模型
+"""作者分析相关请求模型已移除"""
 
 def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
     return {
@@ -59,6 +75,8 @@ def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
         "source": paper.source,
         "relevance_score": paper.relevance_score or 0.0
     }
+
+"""作者数据格式化方法已移除"""
 
 @app.post("/expand_keywords")
 async def expand_keywords_api(req: ExpandKeywordsRequest):
@@ -102,6 +120,26 @@ async def expand_keywords_api(req: ExpandKeywordsRequest):
             }
         }
 
+@app.post("/analytics/register")
+async def analytics_register(req: RegisterRequest):
+    """前端邀请码注册上报（轻量，无持久化）"""
+    try:
+        logger.info(f"[analytics] register user={req.user_id} code={req.invite_code}")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"analytics register error: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/analytics/log_action")
+async def analytics_log_action(req: LogActionRequest):
+    """前端用户行为上报（轻量，无持久化）"""
+    try:
+        logger.info(f"[analytics] action user={req.user_id} type={req.action} payload={req.payload} ts={req.ts}")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"analytics log_action error: {e}")
+        return {"success": False, "error": str(e)}
+
 @app.post("/search_papers")
 async def search_papers_api(req: SearchRequest):
     try:
@@ -128,14 +166,23 @@ async def search_papers_api(req: SearchRequest):
             "data": {"papers": [], "total_found": 0}
         }
 
+"""作者分析API接口已移除"""
+
+# ================ 原有API接口 ================
+
 @app.get("/health")
 async def health_check():
     try:
         engine = get_search_engine()
         return {
             "status": "healthy",
-            "version": "2.0.0",
-            "data_sources": ["semantic_scholar", "arxiv", "paperscraper"]
+            "version": "2.1.0",
+            "features": {
+                "paper_search": True,
+                "author_analysis": False,
+                "mcp_enhanced": False
+            },
+            "data_sources": ["semantic_scholar", "arxiv", "pubmed"]
         }
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}

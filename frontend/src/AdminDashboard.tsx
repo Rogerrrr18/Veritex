@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 interface UserStats {
   total_users: number;
@@ -194,7 +194,7 @@ function AdminDashboard() {
           <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
             <h3 style={{ fontSize: '1.2rem', marginBottom: '15px', color: '#2d3748' }}>最活跃用户</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {dashboardData.action_stats.most_active_users.slice(0, 8).map(([userId, count], index) => (
+              {dashboardData.action_stats.most_active_users.slice(0, 8).map(([userId, count]) => (
                 <div key={userId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
                   <span>{userId.substring(0, 8)}...</span>
                   <strong>{count}次</strong>
@@ -235,7 +235,7 @@ function AdminDashboard() {
         <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <h3 style={{ fontSize: '1.2rem', marginBottom: '15px', color: '#2d3748' }}>最近活跃用户</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '10px' }}>
-            {dashboardData.real_time_stats.recent_active_users.map((user, index) => (
+            {dashboardData.real_time_stats.recent_active_users.map((user) => (
               <div key={user.user_id} style={{ 
                 background: '#f7fafc', 
                 padding: '10px', 

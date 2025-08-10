@@ -47,13 +47,19 @@ class PaperGodSearchEngine:
     集成多源数据获取 + 智能关键词扩展 + 结果优化
     """
     
-    def __init__(self):
+    def __init__(self, enable_mcp: bool = True):
         """初始化搜索引擎组件"""
         try:
             self.keyword_expander = EnhancedKeywordExpander(GROQ_API_KEY, GROQ_MODEL)
-            self.multi_source_engine = MultiSourceEngine()
+            # 使用MCP增强的多源引擎
+            self.multi_source_engine = MultiSourceEngine(enable_mcp=enable_mcp)
             self.discipline_detector = DisciplineDetector()
-            logger.info("搜索引擎组件初始化成功")
+            self.enable_mcp = enable_mcp
+            
+            if enable_mcp:
+                logger.info("搜索引擎组件初始化成功（MCP增强模式）")
+            else:
+                logger.info("搜索引擎组件初始化成功（传统模式）")
         except Exception as e:
             logger.error(f"搜索引擎初始化失败: {e}")
             raise
@@ -95,17 +101,28 @@ class PaperGodSearchEngine:
                     logger.warning(f"关键词扩展失败，使用原始查询: {e}")
                     enable_expansion = False
             
-            # 步骤2: 多源并行搜索
+            # 步骤2: 多源并行搜索（MCP增强）
             logger.info(f"开始多源搜索: {expanded_query}")
-            papers = await self.multi_source_engine.search_parallel(
-                expanded_query, initial_search_limit
-            )
+            if self.enable_mcp:
+                # 使用MCP增强搜索，带有自动降级功能
+                papers = await self.multi_source_engine.search_with_mcp_fallback(
+                    expanded_query, initial_search_limit
+                )
+            else:
+                papers = await self.multi_source_engine.search_parallel(
+                    expanded_query, initial_search_limit
+                )
             
             if not papers:
                 logger.warning("未找到任何论文，尝试不使用关键词扩展重新搜索")
-                papers = await self.multi_source_engine.search_parallel(
-                    query, initial_search_limit
-                )
+                if self.enable_mcp:
+                    papers = await self.multi_source_engine.search_with_mcp_fallback(
+                        query, initial_search_limit
+                    )
+                else:
+                    papers = await self.multi_source_engine.search_parallel(
+                        query, initial_search_limit
+                    )
             
             # 步骤3: 结果后处理和优化
             optimized_papers = self._optimize_results(papers, query, search_terms)
@@ -113,9 +130,14 @@ class PaperGodSearchEngine:
             # 如果结果不足，尝试降低相关性阈值进行第二次搜索
             if len(optimized_papers) < max_results:
                 logger.info("结果数量不足，扩大搜索范围")
-                papers = await self.multi_source_engine.search_parallel(
-                    expanded_query, initial_search_limit * 2
-                )
+                if self.enable_mcp:
+                    papers = await self.multi_source_engine.search_with_mcp_fallback(
+                        expanded_query, initial_search_limit * 2
+                    )
+                else:
+                    papers = await self.multi_source_engine.search_parallel(
+                        expanded_query, initial_search_limit * 2
+                    )
                 optimized_papers = self._optimize_results(papers, query, search_terms)
             
             # 确保返回精确的结果数量
@@ -135,7 +157,8 @@ class PaperGodSearchEngine:
                 },
                 'performance': {
                     'processing_time': processing_time,
-                    'sources_used': ['semantic_scholar', 'arxiv', 'paperscraper'],
+                    'sources_used': ['semantic_scholar_mcp', 'semantic_scholar', 'arxiv', 'paperscraper'] if self.enable_mcp else ['semantic_scholar', 'arxiv', 'paperscraper'],
+                    'mcp_enabled': self.enable_mcp,
                     'expansion_enabled': enable_expansion,
                     'average_relevance': sum(p.relevance_score for p in final_papers) / len(final_papers) if final_papers else 0
                 }
