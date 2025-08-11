@@ -369,7 +369,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               color: '#3bb0e6',
               fontWeight: '600'
             }}>
-              🤖 Paper God AI Assistant
+              Paper God AI Assistant
             </h2>
             <p style={{ 
               margin: '4px 0 0 0', 
@@ -406,7 +406,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               }}
               title="开始新的搜索对话"
             >
-              ✨ New Search
+              New Search
             </button>
             <button
               onClick={() => navigate('/my')}
@@ -421,7 +421,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               }}
               title="查看历史记录"
             >
-              📚 My
+              My
             </button>
             <button
               onClick={() => navigate('/')}
@@ -612,7 +612,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 disabled={isLoading}
                 style={{
                   width: '100%',
-                  padding: '12px 50px 12px 16px', // 右边留空给token进度
+                  padding: '12px 16px',
                   borderRadius: '12px',
                   border: '1px solid #333',
                   backgroundColor: '#1a1a1a',
@@ -632,16 +632,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   target.style.height = Math.min(target.scrollHeight, 120) + 'px';
                 }}
               />
-              
-              {/* Token进度环显示在输入框右下角 */}
-              <div style={{
-                position: 'absolute',
-                bottom: '8px',
-                right: '8px',
-                zIndex: 2
-              }}>
-                <TokenProgress messages={messages} size={32} showText={false} />
-              </div>
             </div>
             
             <button
@@ -722,10 +712,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           
           <div style={{
             width: `${keywordPanelWidth}px`,
+            height: '100vh',
             borderLeft: '1px solid #333',
             backgroundColor: '#0a0a0a',
             position: 'relative',
-            transition: isResizing ? 'none' : 'width 0.3s ease'
+            transition: isResizing ? 'none' : 'width 0.3s ease',
+            display: 'flex',
+            flexDirection: 'column'
           }}>
             {/* 关键词云面板头部 */}
             <div style={{
@@ -742,7 +735,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 fontWeight: '600',
                 color: '#fff'
               }}>
-                🔍 Keywords & Search
+                Keywords & Search
               </h3>
               <button
                 onClick={() => setIsKeywordPanelCollapsed(true)}
@@ -760,48 +753,51 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               </button>
             </div>
             
-            <KeywordCloudWidget 
-              hierarchicalKeywords={currentAnalysis?.hierarchical_keywords || null}
-              originalQuery=""
-              isDraggable={true}
-            />
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <KeywordCloudWidget 
+                hierarchicalKeywords={currentAnalysis?.hierarchical_keywords || null}
+                originalQuery=""
+                isDraggable={true}
+              />
+            </div>
           </div>
         </>
       )}
       
       {/* 折叠后的展开按钮 */}
       {isKeywordPanelCollapsed && (
-        <div
+        <button
           style={{
             position: 'fixed',
-            right: 0,
-            top: '50%',
-            transform: 'translateY(-50%)',
+            top: '20px',
+            right: '20px',
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#333',
             border: '1px solid #666',
-            borderRight: 'none',
-            borderRadius: '8px 0 0 8px',
-            padding: '12px 8px',
+            color: '#3bb0e6',
             cursor: 'pointer',
             zIndex: 1000,
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
-            gap: 4
+            justifyContent: 'center',
+            fontSize: '16px',
+            transition: 'all 0.2s'
           }}
           onClick={() => setIsKeywordPanelCollapsed(false)}
           title="显示关键词面板"
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#444';
+            e.currentTarget.style.borderColor = '#3bb0e6';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = '#333';
+            e.currentTarget.style.borderColor = '#666';
+          }}
         >
-          <span style={{ 
-            fontSize: '14px', 
-            color: '#3bb0e6',
-            transform: 'rotate(-90deg)',
-            whiteSpace: 'nowrap'
-          }}>
-            Keywords
-          </span>
-          <span style={{ fontSize: '12px', color: '#a1a1aa' }}>◀</span>
-        </div>
+          ◀
+        </button>
       )}
 
       {/* 动画样式 */}

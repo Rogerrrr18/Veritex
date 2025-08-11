@@ -200,7 +200,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             color: '#fff',
             fontWeight: '600'
           }}>
-            📊 Search Parameters
+            Search Parameters
           </h4>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -311,7 +311,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           alignItems: 'center',
           justifyContent: 'center'
         }}>
-          <div style={{ fontSize: '32px', marginBottom: '12px' }}>🔍</div>
+          <div style={{ fontSize: '32px', marginBottom: '12px' }}>⌕</div>
           <div>Send academic queries</div>
           <div>Keywords cloud will appear here</div>
         </div>
@@ -338,7 +338,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           color: '#fff',
           fontWeight: '600'
         }}>
-          📊 Search Parameters
+          Search Parameters
         </h4>
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -456,7 +456,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             color: '#fff',
             fontWeight: '600'
           }}>
-            🏷️ Keywords Cloud
+            Keywords Cloud
           </h4>
           <div style={{ fontSize: '12px', color: '#a1a1aa' }}>
             {keywords.length} keywords • Click to remove
@@ -478,35 +478,136 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               No keywords available
             </div>
           ) : (
-            <div style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '8px'
-            }}>
-              {keywords.map((keyword, index) => (
-                <div
-                  key={index}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 12px',
-                    backgroundColor: keyword.color + '20',
-                    border: `1px solid ${keyword.color}40`,
-                    borderRadius: '16px',
-                    fontSize: '13px',
-                    color: keyword.color,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    userSelect: 'none'
-                  }}
-                  onClick={() => removeKeyword(index)}
-                  title={`${levelNames[keyword.level as keyof typeof levelNames] || keyword.level} - Click to remove`}
-                >
-                  <span>{keyword.term}</span>
-                  <span style={{ fontSize: '11px', opacity: 0.7 }}>✕</span>
-                </div>
-              ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {Object.keys(levelNames).map(level => {
+                const levelKeywords = keywords.filter(k => k.level === level);
+                if (levelKeywords.length === 0) return null;
+                
+                return (
+                  <div key={level}>
+                    {/* 层级标题 */}
+                    <div style={{
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: levelColors[level as keyof typeof levelColors],
+                      marginBottom: '8px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px'
+                    }}>
+                      {levelNames[level as keyof typeof levelNames]} ({levelKeywords.length})
+                    </div>
+                    
+                    {/* 该层级的关键词 */}
+                    <div style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '6px',
+                      marginBottom: '4px'
+                    }}>
+                      {levelKeywords.map((keyword, index) => {
+                        const globalIndex = keywords.findIndex(k => k === keyword);
+                        return (
+                          <div
+                            key={globalIndex}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '4px 8px',
+                              backgroundColor: keyword.color + '15',
+                              border: `1px solid ${keyword.color}30`,
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              color: keyword.color,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s',
+                              userSelect: 'none'
+                            }}
+                            onClick={() => removeKeyword(globalIndex)}
+                            title={`Click to remove`}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = keyword.color + '25';
+                              e.currentTarget.style.borderColor = keyword.color + '50';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = keyword.color + '15';
+                              e.currentTarget.style.borderColor = keyword.color + '30';
+                            }}
+                          >
+                            <span>{keyword.term}</span>
+                            <span style={{ fontSize: '10px', opacity: 0.7 }}>×</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })
+              }
+              
+              {/* 自定义关键词单独显示 */}
+              {(() => {
+                const customKeywords = keywords.filter(k => k.level === 'custom');
+                if (customKeywords.length === 0) return null;
+                
+                return (
+                  <div>
+                    <div style={{
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#6366f1',
+                      marginBottom: '8px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px'
+                    }}>
+                      CUSTOM KEYWORDS ({customKeywords.length})
+                    </div>
+                    
+                    <div style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '6px'
+                    }}>
+                      {customKeywords.map((keyword, index) => {
+                        const globalIndex = keywords.findIndex(k => k === keyword);
+                        return (
+                          <div
+                            key={globalIndex}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '4px 8px',
+                              backgroundColor: '#6366f115',
+                              border: '1px solid #6366f130',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              color: '#6366f1',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s',
+                              userSelect: 'none'
+                            }}
+                            onClick={() => removeKeyword(globalIndex)}
+                            title="Click to remove"
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = '#6366f125';
+                              e.currentTarget.style.borderColor = '#6366f150';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = '#6366f115';
+                              e.currentTarget.style.borderColor = '#6366f130';
+                            }}
+                          >
+                            <span>{keyword.term}</span>
+                            <span style={{ fontSize: '10px', opacity: 0.7 }}>×</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()
+              }
             </div>
           )}
         </div>
@@ -589,7 +690,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               </>
             ) : (
               <>
-                <span>🔍 Search Papers</span>
+                <span>Search Papers</span>
               </>
             )}
           </button>

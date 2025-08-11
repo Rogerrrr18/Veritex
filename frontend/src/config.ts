@@ -105,9 +105,6 @@ export const api = {
   searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true) =>
     apiCall(API_CONFIG.ENDPOINTS.SEARCH_PAPERS, { query, max_results: maxResults, enable_expansion: enableExpansion }),
     
-  expandKeywords: (query: string, maxKeywords: number = 5) =>
-    apiCall(API_CONFIG.ENDPOINTS.EXPAND_KEYWORDS, { query, max_keywords: maxKeywords }),
-    
   multiSourceSearch: (query: string, maxResults: number = 50, sources?: string[]) =>
     apiCall(API_CONFIG.ENDPOINTS.MULTI_SOURCE_SEARCH, { query, max_results: maxResults, sources }),
     

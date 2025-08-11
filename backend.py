@@ -117,6 +117,18 @@ def calculate_total_tokens(history: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 # === 新的聊天接口 ===
+@app.get("/chat")
+async def chat_get_info():
+    """处理意外的GET请求到chat端点"""
+    return {
+        "message": "Chat endpoint only supports POST requests",
+        "usage": "Send POST request with message and history fields",
+        "example": {
+            "message": "your question here",
+            "history": []
+        }
+    }
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """统一聊天接口 - 智能判断学术搜索还是普通对话"""
