@@ -771,8 +771,21 @@ class MultiSourceEngine:
         return count
         
     async def search_parallel(self, query: str, max_results: int = 50) -> List[Paper]:
-        """并行搜索多个数据源"""
+        """并行搜索多个数据源（兼容旧接口）"""
+        return await self.search_parallel_with_filters(query, max_results)
+    
+    async def search_parallel_with_filters(
+        self, 
+        query: str, 
+        max_results: int = 50, 
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+        sources: Optional[List[str]] = None
+    ) -> List[Paper]:
+        """并行搜索多个数据源（带筛选参数）"""
         logger.info(f"开始多源并行搜索: {query}")
+        if year_from or year_to:
+            logger.info(f"年份筛选: {year_from} - {year_to}")
         
         # 计算每个源的搜索数量
         active_sources = self._count_enabled_sources()
@@ -806,7 +819,15 @@ class MultiSourceEngine:
             
             # 去重和排序
             deduplicated_papers = self._deduplicate_papers(all_papers)
-            ranked_papers = self._rank_papers(deduplicated_papers, query)
+            
+            # 应用年份筛选
+            if year_from is not None or year_to is not None:
+                filtered_papers = self._filter_papers_by_year(deduplicated_papers, year_from, year_to)
+                logger.info(f"年份筛选后剩余 {len(filtered_papers)} 篇论文")
+            else:
+                filtered_papers = deduplicated_papers
+            
+            ranked_papers = self._rank_papers(filtered_papers, query)
             
             logger.info(f"多源搜索完成，获得 {len(ranked_papers)} 篇论文")
             return ranked_papers[:max_results]
@@ -828,6 +849,31 @@ class MultiSourceEngine:
                 unique_papers.append(paper)
         
         return unique_papers
+    
+    def _filter_papers_by_year(self, papers: List[Paper], year_from: Optional[int], year_to: Optional[int]) -> List[Paper]:
+        """按年份筛选论文"""
+        if year_from is None and year_to is None:
+            return papers
+        
+        filtered_papers = []
+        for paper in papers:
+            if paper.year is None:
+                # 如果论文没有年份信息，根据筛选策略决定是否保留
+                # 这里选择保留，避免丢失有价值的论文
+                filtered_papers.append(paper)
+                continue
+            
+            # 检查年份范围
+            include_paper = True
+            if year_from is not None and paper.year < year_from:
+                include_paper = False
+            if year_to is not None and paper.year > year_to:
+                include_paper = False
+            
+            if include_paper:
+                filtered_papers.append(paper)
+        
+        return filtered_papers
     
     def _rank_papers(self, papers: List[Paper], query: str) -> List[Paper]:
         """论文相关性排序"""
@@ -877,11 +923,18 @@ class MultiSourceEngine:
             coros.append(self.pubmed.close())
         await asyncio.gather(*coros)
         
-    async def search_with_mcp_fallback(self, query: str, max_results: int = 50) -> List[Paper]:
+    async def search_with_mcp_fallback(
+        self, 
+        query: str, 
+        max_results: int = 50,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+        sources: Optional[List[str]] = None
+    ) -> List[Paper]:
         """带MCP后备的搜索方法 - 确保高可用性"""
         # 直接并行搜索（不再使用 MCP 回退）
         try:
-            return await self.search_parallel(query, max_results)
+            return await self.search_parallel_with_filters(query, max_results, year_from, year_to, sources)
         except Exception as e:
             logger.error(f"并行搜索失败: {e}")
             return []

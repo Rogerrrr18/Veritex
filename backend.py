@@ -40,6 +40,8 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[ChatMessage]] = []
+    # 新增：搜索参数（可选）
+    search_params: Optional[Dict[str, Any]] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -54,6 +56,9 @@ class SearchRequest(BaseModel):
     query: str
     max_results: int = 20
     enable_expansion: bool = True
+    year_from: Optional[int] = None  # 起始年份筛选
+    year_to: Optional[int] = None    # 结束年份筛选
+    sources: Optional[List[str]] = None  # 指定数据源
 
 # 轻量埋点与注册请求模型
 class RegisterRequest(BaseModel):
@@ -138,8 +143,22 @@ async def chat(request: ChatRequest):
         
         logger.info(f"收到聊天请求: {request.message}")
         
-        # 调用智能工作流
-        result = await chat_with_search_strategy(request.message)
+        # 提取搜索参数
+        search_params = request.search_params or {}
+        max_results = search_params.get('max_results', 10)
+        year_from = search_params.get('year_from')
+        year_to = search_params.get('year_to')
+        sources = search_params.get('sources')
+        
+        # 调用智能工作流（仅分析，不强制搜索）
+        result = await chat_with_search_strategy(
+            query=request.message, 
+            force_search=False,
+            max_results=max_results,
+            year_from=year_from,
+            year_to=year_to,
+            sources=sources
+        )
         
         # 处理新的响应格式
         ai_response = result.get('response', '')
@@ -203,8 +222,15 @@ async def search_papers_api(req: SearchRequest):
     try:
         logger.info(f"搜索请求 (兼容模式): {req.query}")
         
-        # 使用智能工作流执行搜索
-        result = await chat_with_search_strategy(req.query)
+        # 使用智能工作流执行搜索（强制搜索）
+        result = await chat_with_search_strategy(
+            query=req.query, 
+            force_search=True,
+            max_results=req.max_results,
+            year_from=req.year_from,
+            year_to=req.year_to,
+            sources=req.sources
+        )
         
         if result.get('success') and result.get('search_results'):
             return {

@@ -102,8 +102,14 @@ export const api = {
   chat: (message: string, history: any[] = []) => 
     apiCall(API_CONFIG.ENDPOINTS.CHAT, { message, history }),
     
-  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true) =>
-    apiCall(API_CONFIG.ENDPOINTS.SEARCH_PAPERS, { query, max_results: maxResults, enable_expansion: enableExpansion }),
+  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true, yearFrom?: string, yearTo?: string) =>
+    apiCall(API_CONFIG.ENDPOINTS.SEARCH_PAPERS, { 
+      query, 
+      max_results: maxResults, 
+      enable_expansion: enableExpansion,
+      year_from: yearFrom ? parseInt(yearFrom) : undefined,
+      year_to: yearTo ? parseInt(yearTo) : undefined
+    }),
     
   multiSourceSearch: (query: string, maxResults: number = 50, sources?: string[]) =>
     apiCall(API_CONFIG.ENDPOINTS.MULTI_SOURCE_SEARCH, { query, max_results: maxResults, sources }),

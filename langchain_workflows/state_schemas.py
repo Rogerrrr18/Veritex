@@ -18,6 +18,11 @@ class PaperSearchState(TypedDict):
     query: str
     max_results: int
     
+    # 新增：搜索筛选参数
+    year_from: Optional[int]  # 起始年份
+    year_to: Optional[int]    # 结束年份
+    sources: Optional[List[str]]  # 指定数据源
+    
     # 工作流控制
     current_step: str  # "analyzing", "searching", "completed", "failed"
     is_completed: bool
@@ -26,10 +31,14 @@ class PaperSearchState(TypedDict):
     analysis_result: Optional[Dict[str, Any]]
     is_academic_query: Optional[bool]
     need_search_strategy: Optional[bool]
+    force_search: Optional[bool]  # 强制执行搜索标志
     
     # 搜索相关
     search_keywords: Optional[List[str]]
     search_results: Optional[List[Dict[str, Any]]]
+    year_from: Optional[int]  # 年份筛选
+    year_to: Optional[int]
+    sources: Optional[List[str]]  # 数据源筛选
     
     # 错误处理
     error_message: Optional[str]
@@ -38,7 +47,11 @@ class PaperSearchState(TypedDict):
 def create_initial_state(
     query: str,
     user_message: str = None,
-    max_results: int = 10
+    max_results: int = 10,
+    force_search: bool = False,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+    sources: Optional[List[str]] = None
 ) -> PaperSearchState:
     """
     创建初始状态
@@ -47,6 +60,7 @@ def create_initial_state(
         query: 用户查询
         user_message: 用户消息（如果为空则使用query）
         max_results: 最大结果数量
+        force_search: 是否强制执行搜索
         
     Returns:
         PaperSearchState: 初始化的状态对象
@@ -60,11 +74,15 @@ def create_initial_state(
         messages=[HumanMessage(content=user_message)],
         query=query,
         max_results=max_results,
+        year_from=year_from,
+        year_to=year_to,
+        sources=sources,
         current_step="initialized",
         is_completed=False,
         analysis_result=None,
         is_academic_query=None,
         need_search_strategy=None,
+        force_search=force_search,
         search_keywords=None,
         search_results=None,
         error_message=None,

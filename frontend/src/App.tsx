@@ -285,7 +285,7 @@ function HomePage() {
   const [input, setInput] = useState('')
   const [currentSlide, setCurrentSlide] = useState(0)
   const navigate = useNavigate()
-  const { t } = useGlobal()
+  // const { t } = useGlobal() - not currently needed
 
   // 3D轮播图片
   const carouselImages = [
@@ -404,7 +404,7 @@ function HomePage() {
 // 报告页组件
 function ReportPage() {
   const navigate = useNavigate()
-  const { theme, t } = useGlobal()
+  const { theme, t, toggleTheme } = useGlobal()
   const location = useLocation()
   const [papers] = useState(location.state?.papers || [])
   const [expandedKeywords] = useState(location.state?.expandedKeywords || [])
@@ -455,9 +455,9 @@ function ReportPage() {
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {/* 导出和主题语言切换 */}
+          {/* 导出和主题切换 */}
           <button onClick={handleExport} className="export-button">{t('report.export')}</button>
-          <ThemeLanguageSwitcher compact={true} />
+          <ReportThemeToggle theme={theme} toggle={toggleTheme} />
         </div>
       </div>
       
@@ -619,7 +619,7 @@ function MyPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectAll, setSelectAll] = useState(false)
   const [filter, setFilter] = useState<'all' | 'search' | 'chat'>('all')
-  const { t } = useGlobal()
+  // useGlobal hook available but not currently needed
 
   // 检查登录状态
   useEffect(() => {
@@ -783,7 +783,7 @@ function MyPage() {
                 </button>
               ))}
             </div>
-            <ThemeLanguageSwitcher style={{ marginRight: 8 }} />
+            <ThemeLanguageSwitcher className="my-page-switcher" />
             <button
               onClick={() => navigate('/')}
               style={{

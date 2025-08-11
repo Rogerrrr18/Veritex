@@ -55,18 +55,32 @@ class IntelligentPaperSearchAgent:
     def _load_system_prompt(self) -> str:
         """加载专业学术分析系统提示词"""
         try:
+            # 优先使用增强版prompt
             prompt_path = os.path.join(
                 os.path.dirname(os.path.dirname(__file__)), 
                 "prompts", 
-                "refined_system_prompt.txt"
+                "enhanced_system_prompt.txt"
             )
             with open(prompt_path, 'r', encoding='utf-8') as f:
                 original_prompt = f.read().strip()
-                print(f"📄 成功加载专业学术分析提示词，长度: {len(original_prompt)}")
+                print(f"📄 成功加载增强版学术分析提示词，长度: {len(original_prompt)}")
                 return original_prompt
         except Exception as e:
-            print(f"❌ 无法加载学术分析提示词: {e}")
-            return """你是专业的学术检索分析专家。请分析用户查询，判断是否为学术需求，并提供专业的关键词扩展分析。始终用中文回答。"""
+            print(f"❌ 无法加载增强版提示词，尝试原版: {e}")
+            # 回退到原版prompt
+            try:
+                prompt_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), 
+                    "prompts", 
+                    "refined_system_prompt.txt"
+                )
+                with open(prompt_path, 'r', encoding='utf-8') as f:
+                    original_prompt = f.read().strip()
+                    print(f"📄 回退到原版学术分析提示词，长度: {len(original_prompt)}")
+                    return original_prompt
+            except Exception as e2:
+                print(f"❌ 无法加载任何版本的学术分析提示词: {e2}")
+                return """你是专业的学术检索分析专家。请分析用户查询，判断是否为学术需求，并提供专业的关键词扩展分析。始终用中文回答。"""
     
     def _build_graph(self) -> StateGraph:
         """构建LangGraph工作流"""
@@ -126,7 +140,9 @@ class IntelligentPaperSearchAgent:
             is_academic = analysis_result is not None
             
             # 清理最终回复格式
+            print(f"🔍 调试：LLM原始响应: {ai_response[:200]}...")
             final_response = self._final_clean_response(ai_response)
+            print(f"🔍 调试：清理后响应: {final_response[:200]}...")
             
             print(f"📊 分析结果: 学术查询={is_academic}")
             
@@ -202,52 +218,123 @@ class IntelligentPaperSearchAgent:
     def _final_clean_response(self, response: str) -> str:
         """最终清理响应，智能处理JSON和用户友好内容"""
         try:
-            # 首先检查是否包含JSON（学术查询的标志）
-            json_match = re.search(r'\{[\s\S]*?\}', response)
+            # 使用与JSON提取相同的智能逻辑检查是否包含JSON
+            json_end_pos = None
+            if '"query_analysis"' in response or '"core_concepts"' in response:
+                # 查找完整的JSON块（从第一个{到最后一个}）
+                json_start = response.find('{')
+                if json_start != -1:
+                    brace_count = 0
+                    
+                    for i in range(json_start, len(response)):
+                        if response[i] == '{':
+                            brace_count += 1
+                        elif response[i] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                json_end_pos = i + 1
+                                break
             
-            if json_match:
+            if json_end_pos:
                 # 学术查询：提取JSON后面的解释部分
-                json_end_pos = json_match.end()
                 explanation_part = response[json_end_pos:].strip()
                 
-                # 清理代码块标记
+                # 清理代码块标记和多余格式
                 explanation_part = re.sub(r'```[\s\S]*?```', '', explanation_part)
                 explanation_part = explanation_part.strip()
                 
-                if explanation_part and len(explanation_part) > 10:
-                    print(f"✅ 学术查询响应清理完成，提取解释部分，长度: {len(explanation_part)}")
-                    return explanation_part
+                # 检查解释内容的质量和长度
+                if explanation_part and len(explanation_part) > 100:
+                    # 验证是否包含四个必要部分的标识符
+                    required_sections = ['🎓', '📊', '🔍', '💡']
+                    missing_sections = [section for section in required_sections if section not in explanation_part]
+                    
+                    if len(missing_sections) == 0:
+                        print(f"✅ 学术查询响应完整，包含所有四个部分，长度: {len(explanation_part)}")
+                        return explanation_part
+                    else:
+                        print(f"⚠️ 学术查询解释缺少部分: {missing_sections}")
+                        # 如果缺少的部分很少，尝试补充
+                        if len(missing_sections) <= 2:
+                            return self._enhance_incomplete_explanation(explanation_part, missing_sections)
+                        else:
+                            print("⚠️ 学术查询解释不完整，使用原始响应")
+                            return explanation_part if explanation_part else response.strip()
                 else:
-                    print("⚠️ 学术查询缺少解释部分，使用默认回复")
-                    return "已完成学术分析。如需查看具体论文搜索结果，请等待搜索完成。"
+                    print("⚠️ 学术查询解释内容不足，使用原始JSON后内容")
+                    return explanation_part if explanation_part else "抱歉，未能生成完整的学术分析。"
             else:
                 # 普通对话：直接清理格式标记
                 cleaned = response.strip()
                 # 移除可能的代码块标记
-                cleaned = re.sub(r'```[\s\S]*?```', '', cleaned)
-                cleaned = cleaned.strip()
-                
-                if cleaned and len(cleaned) > 5:
-                    print(f"✅ 普通对话响应清理完成，长度: {len(cleaned)}")
-                    return cleaned
-                else:
-                    print("⚠️ 普通对话响应为空，使用默认回复")
-                    return "你好！有什么可以帮助你的吗？"
+                cleaned = re.sub(r'```[\s\S]*?```', '', cleaned).strip()
+                print(f"✅ 普通对话清理完成，长度: {len(cleaned)}")
+                return cleaned if cleaned else "抱歉，我无法理解您的问题，请重新表述。"
                     
         except Exception as e:
             print(f"⚠️ 最终清理失败: {e}")
             return "你好！有什么可以帮助你的吗？"
     
+    def _enhance_incomplete_explanation(self, explanation: str, missing_sections: List[str]) -> str:
+        """增强不完整的学术解释"""
+        enhanced = explanation
+        
+        for section in missing_sections:
+            if section == '🎓':
+                enhanced += "\n\n🎓 **专业解读**\n已为您完成专业术语分析，相关概念已在上述关键词中体现。"
+            elif section == '📊':
+                enhanced += "\n\n📊 **现状分析**\n该研究领域目前发展活跃，建议关注最新的研究进展和方法创新。"
+            elif section == '🔍':
+                enhanced += "\n\n🔍 **搜索策略**\n已采用层次化关键词扩展策略，确保检索的全面性和精准度。"
+            elif section == '💡':
+                enhanced += "\n\n💡 **学术指导**\n建议从核心概念入手，逐步深入到具体的技术细节和应用场景。"
+        
+        print(f"✅ 已补充缺失的解释部分: {missing_sections}")
+        return enhanced
+    
+    def _generate_fallback_explanation(self, original_response: str) -> str:
+        """生成备用的学术解释"""
+        try:
+            # 尝试从JSON中提取一些信息来生成解释
+            analysis = self._extract_json_analysis(original_response)
+            if analysis:
+                domain = analysis.get('domain', '学术研究')
+                core_concepts = analysis.get('core_concepts', [])
+                concepts_text = "、".join(core_concepts[:3]) if core_concepts else "相关概念"
+                
+                return f"""🎓 **专业解读**
+已为您分析了{concepts_text}等核心概念，这些术语在{domain}领域中具有重要意义。
+
+📊 **现状分析**
+该研究方向目前处于活跃发展阶段，相关研究不断涌现，建议关注最新进展。
+
+🔍 **搜索策略**
+采用了多层次关键词扩展方法，结合精确术语和相关概念，确保检索结果的完整性。
+
+💡 **学术指导**
+建议从基础概念开始深入学习，逐步扩展到具体应用和前沿研究方向。"""
+            else:
+                return "✅ 已完成学术分析和关键词扩展。请查看右侧关键词云进行进一步的文献搜索。"
+        except:
+            return "✅ 已完成学术分析。如需了解更多信息，请提供更详细的查询内容。"
+    
     def should_execute_search(self, state: PaperSearchState) -> str:
         """判断是否需要执行搜索"""
         is_academic = state.get("is_academic_query", False)
         need_search = state.get("need_search_strategy", False)
+        force_search = state.get("force_search", False)  # 新增强制搜索标志
         
+        # 如果设置了强制搜索，直接执行搜索（用于Search Papers按钮）
+        if force_search:
+            print("🔍 强制搜索模式，执行搜索")
+            return "search"
+        
+        # 正常模式：需要学术分析且需要搜索策略时才执行搜索
         if is_academic and need_search:
             print("🔍 判断为学术查询，执行搜索")
             return "search"
         else:
-            print("💬 判断为普通对话，直接回复")
+            print("💬 判断为学术分析或普通对话，返回分析结果")
             return "direct_reply"
     
     async def search_execution_node(self, state: PaperSearchState) -> Dict[str, Any]:
@@ -256,6 +343,9 @@ class IntelligentPaperSearchAgent:
             query = state.get("query", "")
             max_results = state.get("max_results", 10)
             analysis = state.get("analysis_result", {})
+            year_from = state.get("year_from")
+            year_to = state.get("year_to")
+            sources = state.get("sources")
             
             print(f"🔍 开始执行搜索: query={query}, max_results={max_results}")
             
@@ -267,7 +357,16 @@ class IntelligentPaperSearchAgent:
             search_engine = await self._get_search_engine()
             
             # MultiSourceEngine使用不同的搜索接口
-            if hasattr(search_engine, 'search_parallel'):
+            if hasattr(search_engine, 'search_parallel_with_filters'):
+                # 使用新的带筛选的搜索方法
+                papers = await search_engine.search_parallel_with_filters(
+                    query=search_query,
+                    max_results=max_results,
+                    year_from=year_from,
+                    year_to=year_to,
+                    sources=sources
+                )
+            elif hasattr(search_engine, 'search_parallel'):
                 papers = await search_engine.search_parallel(search_query, max_results)
             else:
                 # MockSearchEngine的接口
@@ -372,25 +471,33 @@ class IntelligentPaperSearchAgent:
         return formatted_results
     
     async def result_formatting_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """结果格式化节点 - 生成用户友好的回复"""
+        """结果格式化节点 - 保持原有的学术分析内容，不覆盖"""
         try:
             search_results = state.get("search_results", [])
             analysis = state.get("analysis_result", {})
             keywords = state.get("search_keywords", [])
             
-            print(f"📋 开始格式化 {len(search_results)} 个搜索结果")
+            print(f"📋 保持原有学术分析内容，搜索到 {len(search_results)} 个结果")
             
-            # 构建回复消息
-            if search_results:
-                response = self._build_search_response(search_results, analysis, keywords)
+            # 🔑 重要修改：不覆盖intent_analysis_node生成的详细学术指导
+            # 保持原有的详细分析内容，让用户看到完整的专业解读
+            existing_messages = state.get("messages", [])
+            if existing_messages:
+                print(f"✅ 保持现有的详细学术分析内容")
+                return {
+                    "current_step": "completed",
+                    "is_completed": True
+                    # 🔑 关键：不设置messages字段，保持原有内容
+                }
             else:
-                response = "抱歉，未找到相关的学术论文。建议：\n- 尝试不同的关键词\n- 使用更通用的术语\n- 检查关键词拼写"
-            
-            return {
-                "current_step": "completed",
-                "is_completed": True,
-                "messages": [AIMessage(content=response)]
-            }
+                # 备用响应（正常情况下不会到这里）
+                fallback_response = "✅ 已完成学术分析和关键词扩展。请查看右侧关键词云进行进一步的文献搜索。"
+                print(f"⚠️ 使用备用响应")
+                return {
+                    "current_step": "completed",  
+                    "is_completed": True,
+                    "messages": [AIMessage(content=fallback_response)]
+                }
             
         except Exception as e:
             error_msg = f"结果格式化失败: {str(e)}"
@@ -476,7 +583,7 @@ class IntelligentPaperSearchAgent:
             print(f"❌ 构建搜索回复失败: {e}")
             return f"搜索完成，找到 {len(results)} 篇论文，但格式化过程出现问题。"
     
-    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None) -> Dict[str, Any]:
+    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None) -> Dict[str, Any]:
         """主要搜索接口"""
         if thread_id is None:
             thread_id = f"thread_{uuid.uuid4().hex[:8]}"
@@ -484,7 +591,11 @@ class IntelligentPaperSearchAgent:
         initial_state = create_initial_state(
             query=query,
             user_message=query,
-            max_results=max_results
+            max_results=max_results,
+            force_search=force_search,  # 传递强制搜索标志
+            year_from=year_from,
+            year_to=year_to,
+            sources=sources
         )
         
         print(f"🚀 启动智能学术搜索工作流 - 查询: {query}")
@@ -576,10 +687,10 @@ def get_intelligent_paper_search_agent(enable_memory: bool = True) -> Intelligen
         _intelligent_agent = IntelligentPaperSearchAgent(enable_memory=enable_memory)
     return _intelligent_agent
 
-async def chat_with_search_strategy(query: str, thread_id: str = None) -> Dict[str, Any]:
+async def chat_with_search_strategy(query: str, thread_id: str = None, force_search: bool = False, max_results: int = 10, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None) -> Dict[str, Any]:
     """智能聊天与搜索策略分析的统一入口"""
     agent = get_intelligent_paper_search_agent()
-    return await agent.search_papers(query, 10, thread_id)
+    return await agent.search_papers(query, max_results, thread_id, force_search, year_from, year_to, sources)
 
 
 # 测试功能

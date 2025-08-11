@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 import { api } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
 import TokenProgress from './components/TokenProgress';
@@ -38,50 +39,56 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const initialInput = location.state?.input || '';
   const preserveChat = location.state?.preserveChat || false;
 
-  // 保存聊天记录到localStorage
+  // 保存聊天记录到localStorage（会话级别）
   const saveChatHistory = (messages: Message[], analysis: any = null) => {
     localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
     if (analysis) {
       localStorage.setItem(CHAT_ANALYSIS_KEY, JSON.stringify(analysis));
     }
     
-    // 同时保存到My页面的统一历史记录
-    saveChatToHistory(messages);
+    // 保存完整对话会话到统一历史记录
+    saveChatSessionToHistory(messages);
   };
   
-  // 保存聊天记录到统一历史
-  const saveChatToHistory = (messages: Message[]) => {
+  // 会话级别的聊天记录保存（整个对话会话）
+  const saveChatSessionToHistory = (messages: Message[]) => {
     if (messages.length <= 1) return; // 只有欢迎消息时不保存
     
     const userMessages = messages.filter(m => m.isUser);
     if (userMessages.length === 0) return;
     
-    const title = userMessages[0].text.slice(0, 50) + (userMessages[0].text.length > 50 ? '...' : '');
-    const chatId = 'chat_' + Date.now();
+    // 使用第一个用户消息作为标题，但检查是否有更有意义的学术查询
+    const academicMessages = userMessages.filter(m => 
+      m.text.includes('研究') || m.text.includes('论文') || m.text.includes('学术') ||
+      m.text.includes('research') || m.text.includes('paper') || m.text.includes('study')
+    );
+    const representativeMessage = academicMessages.length > 0 ? academicMessages[0] : userMessages[0];
     
-    const chatHistory = {
-      id: chatId,
+    const title = representativeMessage.text.slice(0, 50) + (representativeMessage.text.length > 50 ? '...' : '');
+    const sessionId = 'chat_session_' + messages[0].timestamp; // 使用第一条消息时间戳作为会话ID
+    
+    const chatSession = {
+      id: sessionId,
       timestamp: messages[0].timestamp,
       title: title,
       messages: messages,
-      lastActivity: messages[messages.length - 1].timestamp
+      lastActivity: messages[messages.length - 1].timestamp,
+      messageCount: userMessages.length,
+      type: 'session'
     };
     
-    // 使用现有的聊天历史保存函数
     try {
       const CHAT_STORAGE_KEY_UNIFIED = 'paper_god_chat_history';
       const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
       
-      // 保存聊天记录
+      // 更新或创建聊天会话记录
       const existingChatHistory = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY_UNIFIED) || '[]');
-      const existingIndex = existingChatHistory.findIndex((item: any) => 
-        item.messages && item.messages[0] && item.messages[0].timestamp === messages[0].timestamp
-      );
+      const existingIndex = existingChatHistory.findIndex((item: any) => item.id === sessionId);
       
       if (existingIndex >= 0) {
-        existingChatHistory[existingIndex] = chatHistory;
+        existingChatHistory[existingIndex] = chatSession;
       } else {
-        existingChatHistory.unshift(chatHistory);
+        existingChatHistory.unshift(chatSession);
       }
       
       if (existingChatHistory.length > 50) {
@@ -91,15 +98,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       
       // 保存到统一历史
       const unifiedItem = {
-        id: chatId,
-        timestamp: chatHistory.lastActivity,
+        id: sessionId,
+        timestamp: chatSession.lastActivity,
         type: 'chat' as const,
         title: title,
-        data: chatHistory
+        data: chatSession
       };
       
       const existingUnifiedHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
-      const unifiedIndex = existingUnifiedHistory.findIndex((h: any) => h.id === chatId);
+      const unifiedIndex = existingUnifiedHistory.findIndex((h: any) => h.id === sessionId);
       
       if (unifiedIndex >= 0) {
         existingUnifiedHistory[unifiedIndex] = unifiedItem;
@@ -115,7 +122,62 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
       
     } catch (error) {
-      console.error('Error saving chat to history:', error);
+      console.error('Error saving chat session to history:', error);
+    }
+  };
+
+  // 保存学术搜索结果到Search历史
+  const saveSearchResultToHistory = (userQuery: string, response: any) => {
+    if (!response.is_academic_query || !response.search_results || response.search_results.length === 0) {
+      return;
+    }
+
+    const searchId = 'search_' + Date.now();
+    const searchHistory = {
+      id: searchId,
+      timestamp: Date.now(),
+      originalQuery: userQuery,
+      expandedKeywords: response.analysis_result?.hierarchical_keywords ? 
+        Object.values(response.analysis_result.hierarchical_keywords).flatMap((level: any) => level.terms || []) : [],
+      papers: response.search_results,
+      maxResults: response.search_results.length,
+      domain: response.analysis_result?.domain || 'unknown'
+    };
+
+    try {
+      const SEARCH_STORAGE_KEY = 'paper_god_search_history';
+      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+      
+      // 保存到搜索历史
+      const existingSearchHistory = JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
+      existingSearchHistory.unshift(searchHistory);
+      
+      if (existingSearchHistory.length > 50) {
+        existingSearchHistory.splice(50);
+      }
+      localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(existingSearchHistory));
+      
+      // 保存到统一历史
+      const unifiedItem = {
+        id: searchId,
+        timestamp: searchHistory.timestamp,
+        type: 'search' as const,
+        title: userQuery.slice(0, 50) + (userQuery.length > 50 ? '...' : ''),
+        data: searchHistory
+      };
+      
+      const existingUnifiedHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      existingUnifiedHistory.unshift(unifiedItem);
+      
+      existingUnifiedHistory.sort((a: any, b: any) => b.timestamp - a.timestamp);
+      
+      if (existingUnifiedHistory.length > 100) {
+        existingUnifiedHistory.splice(100);
+      }
+      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      
+    } catch (error) {
+      console.error('Error saving search result to history:', error);
     }
   };
 
@@ -293,17 +355,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       setMessages(finalMessages);
       saveChatHistory(finalMessages, analysisResult);
 
-      // 如果有搜索结果，可以选择直接跳转到报告页面
-      if (response.search_results && response.search_results.length > 0) {
-        // 可选：自动跳转到报告页面
-        // navigate('/report', {
-        //   state: {
-        //     papers: response.search_results,
-        //     expandedKeywords: extractKeywordsFromAnalysis(analysisResult),
-        //     originalQuery: userMessage.text,
-        //     maxResults: response.search_results.length
-        //   }
-        // });
+      // 如果是学术查询并有搜索结果，保存到Search历史
+      if (response.is_academic_query && response.search_results && response.search_results.length > 0) {
+        saveSearchResultToHistory(userMessage.text, response);
       }
 
     } catch (error: any) {
@@ -485,10 +539,60 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 borderRadius: message.isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
                 fontSize: '14px',
                 lineHeight: '1.6',
-                whiteSpace: 'pre-wrap',
+                whiteSpace: message.isUser ? 'pre-wrap' : 'normal',
                 border: message.isUser ? 'none' : '1px solid #333'
               }}>
-                <div>{message.text}</div>
+                {message.isUser ? (
+                  <div>{message.text}</div>
+                ) : (
+                  <ReactMarkdown
+                    components={{
+                      // 自定义组件样式，适配深色主题
+                      h1: ({ children }) => <h1 style={{ color: '#e5e5e5', fontSize: '18px', marginBottom: '12px' }}>{children}</h1>,
+                      h2: ({ children }) => <h2 style={{ color: '#e5e5e5', fontSize: '16px', marginBottom: '10px' }}>{children}</h2>,
+                      h3: ({ children }) => <h3 style={{ color: '#e5e5e5', fontSize: '15px', marginBottom: '8px' }}>{children}</h3>,
+                      p: ({ children }) => <p style={{ color: '#e5e5e5', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
+                      strong: ({ children }) => <strong style={{ color: '#fff', fontWeight: '600' }}>{children}</strong>,
+                      em: ({ children }) => <em style={{ color: '#e5e5e5', fontStyle: 'italic' }}>{children}</em>,
+                      ul: ({ children }) => <ul style={{ color: '#e5e5e5', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ul>,
+                      ol: ({ children }) => <ol style={{ color: '#e5e5e5', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ol>,
+                      li: ({ children }) => <li style={{ color: '#e5e5e5', marginBottom: '4px' }}>{children}</li>,
+                      code: ({ children }) => (
+                        <code style={{
+                          backgroundColor: '#333',
+                          color: '#fff',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontSize: '13px',
+                          fontFamily: 'monospace'
+                        }}>{children}</code>
+                      ),
+                      pre: ({ children }) => (
+                        <pre style={{
+                          backgroundColor: '#333',
+                          color: '#fff',
+                          padding: '12px',
+                          borderRadius: '8px',
+                          overflow: 'auto',
+                          fontSize: '13px',
+                          fontFamily: 'monospace',
+                          marginBottom: '12px'
+                        }}>{children}</pre>
+                      ),
+                      blockquote: ({ children }) => (
+                        <blockquote style={{
+                          borderLeft: '3px solid #3bb0e6',
+                          paddingLeft: '12px',
+                          margin: '8px 0',
+                          color: '#ccc',
+                          fontStyle: 'italic'
+                        }}>{children}</blockquote>
+                      )
+                    }}
+                  >
+                    {message.text}
+                  </ReactMarkdown>
+                )}
                 
                 {/* 时间戳 */}
                 <div style={{

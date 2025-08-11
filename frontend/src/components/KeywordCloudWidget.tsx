@@ -133,7 +133,13 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       const searchQuery = keywords.map(k => k.term).join(' OR ');
 
       // 调用搜索API，使用用户设置的参数
-      const searchResult = await api.searchPapers(searchQuery, searchSettings.maxResults, false);
+      const searchResult = await api.searchPapers(
+        searchQuery, 
+        searchSettings.maxResults, 
+        false, // enable_expansion
+        searchSettings.yearFrom, 
+        searchSettings.yearTo
+      );
       
       // 处理搜索结果
       const papers = searchResult.success && searchResult.data 
@@ -210,7 +216,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 display: 'block', 
                 fontSize: '12px', 
                 color: '#a1a1aa', 
-                marginBottom: '6px' 
+                marginBottom: '4px' 
               }}>
                 Max Papers
               </label>
@@ -225,7 +231,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 max="100"
                 style={{
                   width: '100%',
-                  padding: '8px',
+                  padding: '6px 8px',
                   fontSize: '13px',
                   border: '1px solid #333',
                   borderRadius: '6px',
@@ -243,7 +249,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                   display: 'block', 
                   fontSize: '12px', 
                   color: '#a1a1aa', 
-                  marginBottom: '6px' 
+                  marginBottom: '4px' 
                 }}>
                   From Year
                 </label>
@@ -272,7 +278,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                   display: 'block', 
                   fontSize: '12px', 
                   color: '#a1a1aa', 
-                  marginBottom: '6px' 
+                  marginBottom: '4px' 
                 }}>
                   To Year
                 </label>
@@ -328,27 +334,27 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     }}>
       {/* 搜索参数设置区域 - 移至顶部 */}
       <div style={{
-        padding: '16px',
+        padding: '12px',
         backgroundColor: '#111',
         borderBottom: '1px solid #333'
       }}>
         <h4 style={{ 
-          margin: '0 0 12px 0', 
-          fontSize: '14px', 
+          margin: '0 0 8px 0', 
+          fontSize: '13px', 
           color: '#fff',
           fontWeight: '600'
         }}>
           Search Parameters
         </h4>
         
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {/* 论文数量 */}
           <div>
             <label style={{ 
               display: 'block', 
               fontSize: '12px', 
               color: '#a1a1aa', 
-              marginBottom: '6px' 
+              marginBottom: '4px' 
             }}>
               Max Papers
             </label>
@@ -363,7 +369,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               max="100"
               style={{
                 width: '100%',
-                padding: '8px',
+                padding: '6px 8px',
                 fontSize: '13px',
                 border: '1px solid #333',
                 borderRadius: '6px',
@@ -381,7 +387,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 display: 'block', 
                 fontSize: '12px', 
                 color: '#a1a1aa', 
-                marginBottom: '6px' 
+                marginBottom: '4px' 
               }}>
                 From Year
               </label>
@@ -395,7 +401,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 }))}
                 style={{
                   width: '100%',
-                  padding: '8px',
+                  padding: '6px 8px',
                   fontSize: '13px',
                   border: '1px solid #333',
                   borderRadius: '6px',
@@ -410,7 +416,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 display: 'block', 
                 fontSize: '12px', 
                 color: '#a1a1aa', 
-                marginBottom: '6px' 
+                marginBottom: '4px' 
               }}>
                 To Year
               </label>
@@ -424,7 +430,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 }))}
                 style={{
                   width: '100%',
-                  padding: '8px',
+                  padding: '6px 8px',
                   fontSize: '13px',
                   border: '1px solid #333',
                   borderRadius: '6px',

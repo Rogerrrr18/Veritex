@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    historyApiFallback: true,
     proxy: {
       // 代理到后端（端口8000）
       '/chat': 'http://localhost:8000',
