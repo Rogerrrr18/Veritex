@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
+import TokenProgress from './components/TokenProgress';
 
 interface Message {
   id: string;
@@ -28,6 +29,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [currentAnalysis, setCurrentAnalysis] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
+  // 关键词云面板状态
+  const [isKeywordPanelCollapsed, setIsKeywordPanelCollapsed] = useState(false);
+  const [keywordPanelWidth, setKeywordPanelWidth] = useState(350);
+  const [isResizing, setIsResizing] = useState(false);
+  
   // 从首页传来的初始输入
   const initialInput = location.state?.input || '';
   const preserveChat = location.state?.preserveChat || false;
@@ -37,6 +43,79 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
     if (analysis) {
       localStorage.setItem(CHAT_ANALYSIS_KEY, JSON.stringify(analysis));
+    }
+    
+    // 同时保存到My页面的统一历史记录
+    saveChatToHistory(messages);
+  };
+  
+  // 保存聊天记录到统一历史
+  const saveChatToHistory = (messages: Message[]) => {
+    if (messages.length <= 1) return; // 只有欢迎消息时不保存
+    
+    const userMessages = messages.filter(m => m.isUser);
+    if (userMessages.length === 0) return;
+    
+    const title = userMessages[0].text.slice(0, 50) + (userMessages[0].text.length > 50 ? '...' : '');
+    const chatId = 'chat_' + Date.now();
+    
+    const chatHistory = {
+      id: chatId,
+      timestamp: messages[0].timestamp,
+      title: title,
+      messages: messages,
+      lastActivity: messages[messages.length - 1].timestamp
+    };
+    
+    // 使用现有的聊天历史保存函数
+    try {
+      const CHAT_STORAGE_KEY_UNIFIED = 'paper_god_chat_history';
+      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+      
+      // 保存聊天记录
+      const existingChatHistory = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY_UNIFIED) || '[]');
+      const existingIndex = existingChatHistory.findIndex((item: any) => 
+        item.messages && item.messages[0] && item.messages[0].timestamp === messages[0].timestamp
+      );
+      
+      if (existingIndex >= 0) {
+        existingChatHistory[existingIndex] = chatHistory;
+      } else {
+        existingChatHistory.unshift(chatHistory);
+      }
+      
+      if (existingChatHistory.length > 50) {
+        existingChatHistory.splice(50);
+      }
+      localStorage.setItem(CHAT_STORAGE_KEY_UNIFIED, JSON.stringify(existingChatHistory));
+      
+      // 保存到统一历史
+      const unifiedItem = {
+        id: chatId,
+        timestamp: chatHistory.lastActivity,
+        type: 'chat' as const,
+        title: title,
+        data: chatHistory
+      };
+      
+      const existingUnifiedHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      const unifiedIndex = existingUnifiedHistory.findIndex((h: any) => h.id === chatId);
+      
+      if (unifiedIndex >= 0) {
+        existingUnifiedHistory[unifiedIndex] = unifiedItem;
+      } else {
+        existingUnifiedHistory.unshift(unifiedItem);
+      }
+      
+      existingUnifiedHistory.sort((a: any, b: any) => b.timestamp - a.timestamp);
+      
+      if (existingUnifiedHistory.length > 100) {
+        existingUnifiedHistory.splice(100);
+      }
+      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      
+    } catch (error) {
+      console.error('Error saving chat to history:', error);
     }
   };
 
@@ -96,6 +175,37 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // 处理拖拽调整宽度
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      
+      const newWidth = window.innerWidth - e.clientX;
+      const minWidth = 280;
+      const maxWidth = window.innerWidth * 0.6;
+      
+      setKeywordPanelWidth(Math.min(Math.max(newWidth, minWidth), maxWidth));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
 
   // 检查登录状态
   useEffect(() => {
@@ -287,15 +397,31 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               style={{
                 padding: '6px 12px',
                 borderRadius: '6px',
+                border: '1px solid #10b981',
+                background: 'rgba(16,185,129,0.1)',
+                color: '#10b981',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: '600'
+              }}
+              title="开始新的搜索对话"
+            >
+              ✨ New Search
+            </button>
+            <button
+              onClick={() => navigate('/my')}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
                 border: '1px solid #666',
                 background: 'transparent',
                 color: '#a1a1aa',
                 cursor: 'pointer',
                 fontSize: '12px'
               }}
-              title="清除聊天记录并重新开始"
+              title="查看历史记录"
             >
-              🗑️ 清除
+              📚 My
             </button>
             <button
               onClick={() => navigate('/')}
@@ -474,36 +600,50 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           <div style={{
             display: 'flex',
             gap: '12px',
-            alignItems: 'flex-end'
+            alignItems: 'flex-end',
+            position: 'relative'
           }}>
-            <textarea
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              onKeyDown={handleKeyPress}
-              placeholder="输入您的学术问题或研究主题..."
-              disabled={isLoading}
-              style={{
-                flex: 1,
-                padding: '12px 16px',
-                borderRadius: '12px',
-                border: '1px solid #333',
-                backgroundColor: '#1a1a1a',
-                color: '#fff',
-                fontSize: '14px',
-                lineHeight: '1.5',
-                resize: 'none',
-                minHeight: '44px',
-                maxHeight: '120px',
-                outline: 'none',
-                fontFamily: 'inherit'
-              }}
-              rows={1}
-              onInput={(e) => {
-                const target = e.target as HTMLTextAreaElement;
-                target.style.height = 'auto';
-                target.style.height = Math.min(target.scrollHeight, 120) + 'px';
-              }}
-            />
+            <div style={{ position: 'relative', flex: 1 }}>
+              <textarea
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                onKeyDown={handleKeyPress}
+                placeholder="输入您的学术问题或研究主题..."
+                disabled={isLoading}
+                style={{
+                  width: '100%',
+                  padding: '12px 50px 12px 16px', // 右边留空给token进度
+                  borderRadius: '12px',
+                  border: '1px solid #333',
+                  backgroundColor: '#1a1a1a',
+                  color: '#fff',
+                  fontSize: '14px',
+                  lineHeight: '1.5',
+                  resize: 'none',
+                  minHeight: '44px',
+                  maxHeight: '120px',
+                  outline: 'none',
+                  fontFamily: 'inherit'
+                }}
+                rows={1}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                  target.style.height = Math.min(target.scrollHeight, 120) + 'px';
+                }}
+              />
+              
+              {/* Token进度环显示在输入框右下角 */}
+              <div style={{
+                position: 'absolute',
+                bottom: '8px',
+                right: '8px',
+                zIndex: 2
+              }}>
+                <TokenProgress messages={messages} size={32} showText={false} />
+              </div>
+            </div>
+            
             <button
               onClick={handleSendMessage}
               disabled={isLoading || !inputMessage.trim()}
@@ -526,27 +666,143 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           
           <div style={{
             marginTop: '8px',
-            fontSize: '11px',
-            color: '#666',
-            textAlign: 'center'
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
           }}>
-            💡 提示：按 Enter 发送，Shift+Enter 换行
+            <div style={{
+              fontSize: '11px',
+              color: '#666'
+            }}>
+              💡 提示：按 Enter 发送，Shift+Enter 换行
+            </div>
+            
+            {/* 详细的token使用情况 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <TokenProgress messages={messages} size={20} showText={true} />
+            </div>
           </div>
         </div>
       </div>
 
       {/* 右侧关键词云区域 */}
-      <div style={{
-        width: '350px',
-        borderLeft: '1px solid #333',
-        backgroundColor: '#0a0a0a'
-      }}>
-        <KeywordCloudWidget 
-          hierarchicalKeywords={currentAnalysis?.hierarchical_keywords || null}
-          originalQuery=""
-          isDraggable={true}
-        />
-      </div>
+      {!isKeywordPanelCollapsed && (
+        <>
+          {/* 拖拽分隔条 */}
+          <div
+            style={{
+              width: '4px',
+              cursor: 'ew-resize',
+              backgroundColor: isResizing ? '#3bb0e6' : 'transparent',
+              borderLeft: '1px solid #333',
+              transition: 'background-color 0.2s',
+              position: 'relative'
+            }}
+            onMouseDown={() => setIsResizing(true)}
+          >
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '20px',
+              height: '40px',
+              background: isResizing ? '#3bb0e6' : '#666',
+              borderRadius: '10px',
+              opacity: 0.6,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '12px',
+              color: '#fff'
+            }}>
+              ⋮
+            </div>
+          </div>
+          
+          <div style={{
+            width: `${keywordPanelWidth}px`,
+            borderLeft: '1px solid #333',
+            backgroundColor: '#0a0a0a',
+            position: 'relative',
+            transition: isResizing ? 'none' : 'width 0.3s ease'
+          }}>
+            {/* 关键词云面板头部 */}
+            <div style={{
+              padding: '12px 16px',
+              borderBottom: '1px solid #333',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              backgroundColor: '#111'
+            }}>
+              <h3 style={{ 
+                margin: 0, 
+                fontSize: '14px', 
+                fontWeight: '600',
+                color: '#fff'
+              }}>
+                🔍 Keywords & Search
+              </h3>
+              <button
+                onClick={() => setIsKeywordPanelCollapsed(true)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#a1a1aa',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                  padding: '4px'
+                }}
+                title="隐藏关键词面板"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <KeywordCloudWidget 
+              hierarchicalKeywords={currentAnalysis?.hierarchical_keywords || null}
+              originalQuery=""
+              isDraggable={true}
+            />
+          </div>
+        </>
+      )}
+      
+      {/* 折叠后的展开按钮 */}
+      {isKeywordPanelCollapsed && (
+        <div
+          style={{
+            position: 'fixed',
+            right: 0,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            backgroundColor: '#333',
+            border: '1px solid #666',
+            borderRight: 'none',
+            borderRadius: '8px 0 0 8px',
+            padding: '12px 8px',
+            cursor: 'pointer',
+            zIndex: 1000,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 4
+          }}
+          onClick={() => setIsKeywordPanelCollapsed(false)}
+          title="显示关键词面板"
+        >
+          <span style={{ 
+            fontSize: '14px', 
+            color: '#3bb0e6',
+            transform: 'rotate(-90deg)',
+            whiteSpace: 'nowrap'
+          }}>
+            Keywords
+          </span>
+          <span style={{ fontSize: '12px', color: '#a1a1aa' }}>◀</span>
+        </div>
+      )}
 
       {/* 动画样式 */}
       <style>

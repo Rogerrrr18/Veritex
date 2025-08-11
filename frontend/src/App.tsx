@@ -18,30 +18,142 @@ interface SearchHistory {
   maxResults: number;
 }
 
-const STORAGE_KEY = 'paper_god_search_history';
+// 聊天记录接口
+interface ChatHistory {
+  id: string;
+  timestamp: number;
+  title: string; // 聊天标题，取第一个用户消息
+  messages: any[]; // 聊天消息数组
+  lastActivity: number; // 最后活动时间
+}
 
+// 统一的历史记录接口
+interface HistoryItem {
+  id: string;
+  timestamp: number;
+  type: 'search' | 'chat';
+  title: string;
+  data: SearchHistory | ChatHistory;
+}
+
+const SEARCH_STORAGE_KEY = 'paper_god_search_history';
+const CHAT_STORAGE_KEY = 'paper_god_chat_history';
+const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+
+// 搜索历史管理
 const saveSearchHistory = (history: SearchHistory) => {
-  const existingHistory = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  existingHistory.unshift(history); // 最新的在前面
-  // 只保留最近50次搜索
+  const existingHistory = JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
+  existingHistory.unshift(history);
   if (existingHistory.length > 50) {
     existingHistory.splice(50);
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(existingHistory));
+  localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(existingHistory));
+  
+  // 同时保存到统一历史记录
+  saveToUnifiedHistory({
+    id: history.id,
+    timestamp: history.timestamp,
+    type: 'search',
+    title: history.originalQuery,
+    data: history
+  });
 };
 
 const getSearchHistory = (): SearchHistory[] => {
-  return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  return JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
 };
 
 const deleteSearchHistory = (ids: string[]) => {
   const existingHistory = getSearchHistory();
   const filteredHistory = existingHistory.filter(item => !ids.includes(item.id));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(filteredHistory));
+  localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(filteredHistory));
 };
 
 const clearAllSearchHistory = () => {
-  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(SEARCH_STORAGE_KEY);
+};
+
+// 聊天历史管理
+const saveChatHistory = (chat: ChatHistory) => {
+  const existingHistory = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
+  const existingIndex = existingHistory.findIndex((item: ChatHistory) => item.id === chat.id);
+  
+  if (existingIndex >= 0) {
+    existingHistory[existingIndex] = chat;
+  } else {
+    existingHistory.unshift(chat);
+  }
+  
+  if (existingHistory.length > 50) {
+    existingHistory.splice(50);
+  }
+  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(existingHistory));
+  
+  // 同时保存到统一历史记录
+  saveToUnifiedHistory({
+    id: chat.id,
+    timestamp: chat.lastActivity,
+    type: 'chat',
+    title: chat.title,
+    data: chat
+  });
+};
+
+const getChatHistory = (): ChatHistory[] => {
+  return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
+};
+
+// 统一历史记录管理
+const saveToUnifiedHistory = (item: HistoryItem) => {
+  const existingHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+  const existingIndex = existingHistory.findIndex((h: HistoryItem) => h.id === item.id);
+  
+  if (existingIndex >= 0) {
+    existingHistory[existingIndex] = item;
+  } else {
+    existingHistory.unshift(item);
+  }
+  
+  // 按时间排序
+  existingHistory.sort((a: HistoryItem, b: HistoryItem) => b.timestamp - a.timestamp);
+  
+  if (existingHistory.length > 100) {
+    existingHistory.splice(100);
+  }
+  localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(existingHistory));
+};
+
+const getUnifiedHistory = (): HistoryItem[] => {
+  return JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+};
+
+const deleteUnifiedHistory = (ids: string[]) => {
+  const existingHistory = getUnifiedHistory();
+  const filteredHistory = existingHistory.filter(item => !ids.includes(item.id));
+  localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(filteredHistory));
+  
+  // 同时删除对应的搜索和聊天历史
+  const searchIds = ids.filter(id => {
+    const item = existingHistory.find(h => h.id === id);
+    return item?.type === 'search';
+  });
+  const chatIds = ids.filter(id => {
+    const item = existingHistory.find(h => h.id === id);
+    return item?.type === 'chat';
+  });
+  
+  if (searchIds.length > 0) deleteSearchHistory(searchIds);
+  if (chatIds.length > 0) {
+    const chatHistory = getChatHistory();
+    const filteredChatHistory = chatHistory.filter(item => !chatIds.includes(item.id));
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(filteredChatHistory));
+  }
+};
+
+const clearAllHistory = () => {
+  localStorage.removeItem(SEARCH_STORAGE_KEY);
+  localStorage.removeItem(CHAT_STORAGE_KEY);
+  localStorage.removeItem(UNIFIED_HISTORY_KEY);
 };
 
 // 简洁主题切换icon，仅用于报告页
@@ -225,30 +337,22 @@ function HomePage() {
             <>
               <button 
                 className="btn btn-primary" 
-                onClick={() => navigate('/chat')}
-                style={{ marginRight: 8, backgroundColor: '#10b981' }}
-              >
-                {t('home.button.searchChat')}
-              </button>
-              <button 
-                className="btn btn-primary" 
                 onClick={() => navigate('/my')}
                 style={{ marginRight: 8 }}
               >
-                {t('home.button.my')}
+                My
               </button>
             </>
           ) : null}
-          <ThemeLanguageSwitcher style={{ marginRight: 12 }} />
-          <button className="btn btn-primary" onClick={() => navigate('/invite')}>{t('home.button.startTrial')}</button>
+          <button className="btn btn-primary" onClick={() => navigate('/invite')}>Start free trial</button>
         </div>
       </header>
       {/* 主体内容整体左移 */}
       <main className="main" style={{ justifyContent: 'flex-start', paddingLeft: '7vw' }}>
         <section className="hero">
-          <h1 className="hero-title">{t('home.title')}</h1>
+          <h1 className="hero-title">Smart Academic Literature Search & Management Platform</h1>
           <p className="hero-desc">
-            {t('home.desc')}
+            Veritex 依托大模型与智能算法，支持关键词扩展、批量论文检索、摘要智能提取与报告导出，帮你快速定位当前的研究进展。
           </p>
           
           
@@ -256,14 +360,14 @@ function HomePage() {
             <input
               type="text"
               className="input"
-              placeholder={hasValidSession ? t('home.placeholder.loggedIn') : t('home.placeholder.notLoggedIn')}
+              placeholder={hasValidSession ? "请输入关键词或学术问题..." : "请先获取内测邀请码"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={!hasValidSession}
             />
             <div style={{ display: 'flex', gap: '12px' }}>
               <button type="submit" className="btn btn-secondary">
-                {hasValidSession ? t('home.button.searchChat') : t('home.button.getBetaCode')}
+                {hasValidSession ? '🔍 Search & Chat' : 'Get Beta Code'}
               </button>
             </div>
           </form>
@@ -508,12 +612,13 @@ function FeaturesPage() {
   )
 }
 
-// "我的"页面 - 搜索历史管理
+// "我的"页面 - 历史记录管理  
 function MyPage() {
   const navigate = useNavigate()
-  const [searchHistory, setSearchHistory] = useState<SearchHistory[]>([])
+  const [unifiedHistory, setUnifiedHistory] = useState<HistoryItem[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectAll, setSelectAll] = useState(false)
+  const [filter, setFilter] = useState<'all' | 'search' | 'chat'>('all')
   const { t } = useGlobal()
 
   // 检查登录状态
@@ -528,20 +633,22 @@ function MyPage() {
       return
     }
     
-    // 加载搜索历史
-    loadSearchHistory()
+    // 加载历史记录
+    loadHistory()
   }, [navigate])
 
-  const loadSearchHistory = () => {
-    const history = getSearchHistory()
-    setSearchHistory(history)
+  const loadHistory = () => {
+    const history = getUnifiedHistory()
+    setUnifiedHistory(history)
   }
+
+  const filteredHistory = filter === 'all' ? unifiedHistory : unifiedHistory.filter(item => item.type === filter)
 
   const handleSelectAll = () => {
     if (selectAll) {
       setSelectedIds([])
     } else {
-      setSelectedIds(searchHistory.map(item => item.id))
+      setSelectedIds(filteredHistory.map(item => item.id))
     }
     setSelectAll(!selectAll)
   }
@@ -557,44 +664,60 @@ function MyPage() {
   const handleDeleteSelected = () => {
     if (selectedIds.length === 0) return
     
-    if (confirm(`确定要删除选中的 ${selectedIds.length} 条搜索记录吗？`)) {
-      deleteSearchHistory(selectedIds)
+    if (confirm(`确定要删除选中的 ${selectedIds.length} 条记录吗？`)) {
+      deleteUnifiedHistory(selectedIds)
       setSelectedIds([])
       setSelectAll(false)
-      loadSearchHistory()
+      loadHistory()
     }
   }
 
   const handleClearAll = () => {
-    if (confirm('确定要清空所有搜索历史吗？此操作不可恢复。')) {
-      clearAllSearchHistory()
-      setSearchHistory([])
+    if (confirm('确定要清空所有历史记录吗？此操作不可恢复。')) {
+      clearAllHistory()
+      setUnifiedHistory([])
       setSelectedIds([])
       setSelectAll(false)
     }
   }
 
-  const handleViewReport = (history: SearchHistory) => {
-    // 直接查看历史报告
-    navigate('/report', {
-      state: {
-        papers: history.papers,
-        searchHistory: history,
-        expandedKeywords: history.expandedKeywords,
-        originalQuery: history.originalQuery,
-        maxResults: history.maxResults
-      }
-    })
+  const handleViewItem = (item: HistoryItem) => {
+    if (item.type === 'search') {
+      const searchData = item.data as SearchHistory;
+      // 直接查看历史报告
+      navigate('/report', {
+        state: {
+          papers: searchData.papers,
+          searchHistory: searchData,
+          expandedKeywords: searchData.expandedKeywords,
+          originalQuery: searchData.originalQuery,
+          maxResults: searchData.maxResults
+        }
+      })
+    } else if (item.type === 'chat') {
+      // 恢复聊天记录并跳转
+      const chatData = item.data as ChatHistory;
+      // 先保存聊天记录到当前会话
+      localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
+      navigate('/chat');
+    }
   }
 
-  const handleReSearch = (history: SearchHistory) => {
-    // 返回聊天页面重新搜索，保留现有对话并添加新查询
-    navigate('/chat', {
-      state: {
-        input: history.originalQuery,
-        preserveChat: true  // 标记保留聊天记录
-      }
-    })
+  const handleReSearch = (item: HistoryItem) => {
+    if (item.type === 'search') {
+      const searchData = item.data as SearchHistory;
+      navigate('/chat', {
+        state: {
+          input: searchData.originalQuery,
+          preserveChat: true
+        }
+      })
+    } else if (item.type === 'chat') {
+      const chatData = item.data as ChatHistory;
+      // 恢复聊天记录
+      localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
+      navigate('/chat');
+    }
   }
 
   const formatDate = (timestamp: number) => {
@@ -632,13 +755,34 @@ function MyPage() {
           paddingBottom: '16px'
         }}>
           <div>
-            <h2 style={{ fontSize: 28, color: 'var(--accent-primary)', margin: 0 }}>My Search History</h2>
+            <h2 style={{ fontSize: 28, color: 'var(--accent-primary)', margin: 0 }}>My History</h2>
             <p style={{ color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
-              Total {searchHistory.length} records
+              Total {filteredHistory.length} records ({filter})
               {selectedIds.length > 0 && ` · Selected ${selectedIds.length} items`}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            {/* 过滤器 */}
+            <div style={{ display: 'flex', gap: 4, marginRight: 12 }}>
+              {(['all', 'search', 'chat'] as const).map(filterType => (
+                <button
+                  key={filterType}
+                  onClick={() => setFilter(filterType)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 4,
+                    border: '1px solid var(--border-primary)',
+                    background: filter === filterType ? 'var(--accent-primary)' : 'transparent',
+                    color: filter === filterType ? '#fff' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    textTransform: 'capitalize'
+                  }}
+                >
+                  {filterType}
+                </button>
+              ))}
+            </div>
             <ThemeLanguageSwitcher style={{ marginRight: 8 }} />
             <button
               onClick={() => navigate('/')}
@@ -658,7 +802,7 @@ function MyPage() {
         </div>
 
         {/* 操作栏 */}
-        {searchHistory.length > 0 && (
+        {filteredHistory.length > 0 && (
           <div style={{ 
             display: 'flex', 
             justifyContent: 'space-between', 
@@ -712,8 +856,8 @@ function MyPage() {
           </div>
         )}
 
-        {/* 搜索历史列表 */}
-        {searchHistory.length === 0 ? (
+        {/* 历史记录列表 */}
+        {filteredHistory.length === 0 ? (
           <div style={{ 
             textAlign: 'center', 
             padding: '60px 20px',
@@ -740,7 +884,7 @@ function MyPage() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {searchHistory.map((item) => (
+            {filteredHistory.map((item) => (
               <div
                 key={item.id}
                 style={{
@@ -760,15 +904,28 @@ function MyPage() {
                   />
                   
                   <div style={{ flex: 1 }}>
-                    {/* 搜索信息 */}
+                    {/* 记录信息 */}
                     <div style={{ marginBottom: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <span style={{
+                          padding: '2px 8px',
+                          borderRadius: 12,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          background: item.type === 'search' ? 'rgba(34,197,94,0.2)' : 'rgba(147,51,234,0.2)',
+                          color: item.type === 'search' ? '#22c55e' : '#9333ea',
+                          border: `1px solid ${item.type === 'search' ? 'rgba(34,197,94,0.3)' : 'rgba(147,51,234,0.3)'}`
+                        }}>
+                          {item.type === 'search' ? '🔍 SEARCH' : '💬 CHAT'}
+                        </span>
+                      </div>
                       <h4 style={{ 
                         margin: '0 0 8px 0', 
                         fontSize: 16, 
                         color: '#fff',
                         fontWeight: 600 
                       }}>
-                        "{item.originalQuery}"
+                        "{item.title}"
                       </h4>
                       <div style={{ 
                         display: 'flex', 
@@ -779,49 +936,84 @@ function MyPage() {
                       }}>
                         <span>{formatDate(item.timestamp)}</span>
                         <span>•</span>
-                        <span>{item.papers.length} papers</span>
-                        <span>•</span>
-                        <span>Target count: {item.maxResults}</span>
+                        {item.type === 'search' ? (
+                          <>
+                            <span>{(item.data as SearchHistory).papers.length} papers</span>
+                            <span>•</span>
+                            <span>Target: {(item.data as SearchHistory).maxResults}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>{(item.data as ChatHistory).messages.length} messages</span>
+                            <span>•</span>
+                            <span>Last: {formatDate((item.data as ChatHistory).lastActivity)}</span>
+                          </>
+                        )}
                       </div>
                     </div>
 
-                    {/* 扩展关键词 */}
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Expanded Keywords:</div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {item.expandedKeywords.map((keyword, idx) => (
-                          <span
-                            key={idx}
-                            style={{
-                              padding: '2px 8px',
-                              background: 'rgba(59,176,230,0.1)',
-                              borderRadius: 12,
-                              fontSize: 12,
-                              color: 'var(--accent-primary)',
-                              border: '1px solid rgba(59,176,230,0.2)'
-                            }}
-                          >
-                            {keyword}
-                          </span>
-                        ))}
+                    {/* 搜索记录的扩展关键词 */}
+                    {item.type === 'search' && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Expanded Keywords:</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {(item.data as SearchHistory).expandedKeywords.map((keyword, idx) => (
+                            <span
+                              key={idx}
+                              style={{
+                                padding: '2px 8px',
+                                background: 'rgba(59,176,230,0.1)',
+                                borderRadius: 12,
+                                fontSize: 12,
+                                color: 'var(--accent-primary)',
+                                border: '1px solid rgba(59,176,230,0.2)'
+                              }}
+                            >
+                              {keyword}
+                            </span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
+
+                    {/* 聊天记录的消息预览 */}
+                    {item.type === 'chat' && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Recent Messages:</div>
+                        <div style={{ 
+                          maxHeight: 60, 
+                          overflowY: 'auto',
+                          fontSize: 13,
+                          color: '#ccc',
+                          lineHeight: 1.4
+                        }}>
+                          {(item.data as ChatHistory).messages.slice(-3).map((msg: any, idx: number) => (
+                            <div key={idx} style={{ marginBottom: 4 }}>
+                              <span style={{ color: msg.isUser ? '#3bb0e6' : '#a1a1aa' }}>
+                                {msg.isUser ? 'You: ' : 'AI: '}
+                              </span>
+                              {msg.text.slice(0, 50)}{msg.text.length > 50 ? '...' : ''}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* 操作按钮 */}
                     <div style={{ display: 'flex', gap: 12 }}>
                       <button
-                        onClick={() => handleViewReport(item)}
+                        onClick={() => handleViewItem(item)}
                         style={{
                           padding: '6px 16px',
                           borderRadius: 6,
-                          border: '1px solid #3bb0e6',
-                          background: 'rgba(59,176,230,0.1)',
-                          color: '#3bb0e6',
+                          border: `1px solid ${item.type === 'search' ? '#22c55e' : '#9333ea'}`,
+                          background: `rgba(${item.type === 'search' ? '34,197,94' : '147,51,234'},0.1)`,
+                          color: item.type === 'search' ? '#22c55e' : '#9333ea',
                           cursor: 'pointer',
                           fontSize: 13
                         }}
                       >
-                        View Report
+                        {item.type === 'search' ? 'View Report' : 'Open Chat'}
                       </button>
                       <button
                         onClick={() => handleReSearch(item)}
@@ -835,7 +1027,7 @@ function MyPage() {
                           fontSize: 13
                         }}
                       >
-                        Re-search
+                        {item.type === 'search' ? 'Re-search' : 'Continue Chat'}
                       </button>
                     </div>
                   </div>
