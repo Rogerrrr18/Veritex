@@ -25,12 +25,26 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 获取API密钥
+# 获取API密钥和配置
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
 PUBMED_ENABLED = PUBMED_API_KEY and PUBMED_API_KEY.lower() != "disabled"
 
-if not PUBMED_ENABLED:
-    logger.info("PubMed API 已禁用或未配置API密钥")
+GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "true").lower() == "true"
+CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "true").lower() == "true" 
+IEEE_API_KEY = os.getenv("IEEE_API_KEY")
+IEEE_ENABLED = IEEE_API_KEY and IEEE_API_KEY.lower() != "disabled"
+SPRINGER_API_KEY = os.getenv("SPRINGER_API_KEY") 
+SPRINGER_ENABLED = SPRINGER_API_KEY and SPRINGER_API_KEY.lower() != "disabled"
+
+# 日志输出API状态
+logger.info(f"数据源状态:")
+logger.info(f"  - Semantic Scholar: 启用")
+logger.info(f"  - arXiv: 启用")  
+logger.info(f"  - PubMed: {'启用' if PUBMED_ENABLED else '禁用'}")
+logger.info(f"  - Google Scholar: {'启用' if GOOGLE_SCHOLAR_ENABLED else '禁用'}")
+logger.info(f"  - Crossref: {'启用' if CROSSREF_ENABLED else '禁用'}")
+logger.info(f"  - IEEE Xplore: {'启用' if IEEE_ENABLED else '禁用'}")
+logger.info(f"  - Springer: {'启用' if SPRINGER_ENABLED else '禁用'}")
 
 @dataclass
 class Paper:
@@ -533,6 +547,115 @@ class GoogleScholarAPI:
             await self.session.close()
 
 # MCP增强的语义搜索引擎
+class CrossrefAPI:
+    """Crossref API客户端 - 开放获取学术文献数据源"""
+    
+    def __init__(self):
+        self.base_url = "https://api.crossref.org/works"
+        self.session = None
+        self._last_request_time = 0
+        self._min_delay = float(os.getenv("CROSSREF_REQUEST_DELAY", "1.0"))
+        
+    async def _get_session(self):
+        """获取异步HTTP会话"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+        
+    async def search(self, query: str, limit: int = 20) -> List[Paper]:
+        """搜索论文"""
+        if not CROSSREF_ENABLED:
+            logger.info("Crossref API 已禁用")
+            return []
+            
+        try:
+            # 确保请求间隔
+            current_time = time.time()
+            time_since_last = current_time - self._last_request_time
+            if time_since_last < self._min_delay:
+                await asyncio.sleep(self._min_delay - time_since_last)
+            
+            session = await self._get_session()
+            
+            # 构建请求参数
+            params = {
+                'query': query,
+                'rows': limit,
+                'select': 'DOI,title,author,published,abstract,URL,is-referenced-by-count,publisher'
+            }
+            
+            self._last_request_time = time.time()
+            
+            async with session.get(self.base_url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    items = data.get('message', {}).get('items', [])
+                    return self._parse_papers(items)
+                else:
+                    logger.error(f"Crossref API请求失败: {response.status}")
+                    return []
+                    
+        except Exception as e:
+            logger.error(f"Crossref搜索出错: {str(e)}")
+            return []
+            
+    def _parse_papers(self, items: List[Dict]) -> List[Paper]:
+        """解析Crossref响应数据"""
+        papers = []
+        for item in items:
+            try:
+                # 提取标题
+                title_list = item.get('title', [])
+                title = title_list[0] if title_list else "未知标题"
+                
+                # 提取作者
+                authors = []
+                for author in item.get('author', []):
+                    if 'given' in author and 'family' in author:
+                        authors.append(f"{author['given']} {author['family']}")
+                    elif 'family' in author:
+                        authors.append(author['family'])
+                
+                # 提取年份
+                year = None
+                published = item.get('published-print') or item.get('published-online')
+                if published and 'date-parts' in published:
+                    date_parts = published['date-parts'][0]
+                    if date_parts:
+                        year = date_parts[0]
+                
+                # 提取其他信息
+                abstract = item.get('abstract', '')
+                doi = item.get('DOI', '')
+                url = item.get('URL', f"https://doi.org/{doi}" if doi else '')
+                citations = item.get('is-referenced-by-count', 0)
+                journal = item.get('publisher', '')
+                
+                paper = Paper(
+                    title=title,
+                    authors=authors,
+                    abstract=abstract,
+                    year=year,
+                    journal=journal,
+                    url=url,
+                    doi=doi,
+                    citations=citations,
+                    source="crossref",
+                    relevance_score=1.0
+                )
+                papers.append(paper)
+                
+            except Exception as e:
+                logger.warning(f"解析Crossref论文数据失败: {str(e)}")
+                continue
+                
+        return papers
+        
+    async def close(self):
+        """关闭会话"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+
 class MCPEnhancedSemanticAPI:
     """MCP增强的Semantic Scholar API - 提供更稳定的搜索服务"""
     
@@ -622,31 +745,53 @@ class MultiSourceEngine:
     """多源数据获取引擎 - 核心搜索组件（MCP增强版）"""
     
     def __init__(self, enable_mcp: bool = True):
-        # 强制使用直连 Semantic Scholar API（禁用 MCP）
+        # 初始化所有可用的数据源
         self.semantic_scholar = SemanticScholarAPI()
-        logger.info("使用直连 Semantic Scholar API（MCP 已禁用）")
-            
         self.arxiv = ArxivAPI()
-        # 可选：如无效则移除 paperscraper
-        # self.paperscraper = PaperscraperClient()
+        
+        # 初始化新增的数据源
+        self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
+        
+        # 可选数据源（需要API密钥）
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
+        self.google_scholar = GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
+        
         self.enable_mcp = False
+        logger.info(f"多源搜索引擎初始化完成，启用数据源数量: {self._count_enabled_sources()}")
+        
+    def _count_enabled_sources(self) -> int:
+        """计算启用的数据源数量"""
+        count = 2  # Semantic Scholar 和 arXiv 总是启用
+        if self.crossref:
+            count += 1
+        if self.pubmed:
+            count += 1  
+        if self.google_scholar:
+            count += 1
+        return count
         
     async def search_parallel(self, query: str, max_results: int = 50) -> List[Paper]:
         """并行搜索多个数据源"""
         logger.info(f"开始多源并行搜索: {query}")
         
         # 计算每个源的搜索数量
-        per_source_limit = max(10, max_results // 3)  # 现在有3个数据源
+        active_sources = self._count_enabled_sources()
+        per_source_limit = max(10, max_results // active_sources)
         
         try:
-            # 并行调用所有搜索源
+            # 并行调用所有启用的搜索源
             tasks = [
                 self.semantic_scholar.search(query, per_source_limit),
                 self.arxiv.search(query, per_source_limit)
             ]
+            
+            # 添加可选数据源
+            if self.crossref:
+                tasks.append(self.crossref.search(query, per_source_limit))
             if self.pubmed:
                 tasks.append(self.pubmed.search(query, per_source_limit))
+            if self.google_scholar:
+                tasks.append(self.google_scholar.search(query, per_source_limit))
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             

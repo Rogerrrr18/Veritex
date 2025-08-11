@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       // 代理到后端（端口8000）
+      '/chat': 'http://localhost:8000',
       '/expand_keywords': 'http://localhost:8000',
       '/search_papers': 'http://localhost:8000',
       '/multi_source_search': 'http://localhost:8000',

@@ -16,8 +16,9 @@ export const API_CONFIG = {
   
   // API端点
   ENDPOINTS: {
-    EXPAND_KEYWORDS: '/expand_keywords',
+    CHAT: '/chat',
     SEARCH_PAPERS: '/search_papers',
+    EXPAND_KEYWORDS: '/expand_keywords',
     MULTI_SOURCE_SEARCH: '/multi_source_search',
     ANALYZE_DISCIPLINE: '/analyze_discipline',
     PERFORMANCE: '/performance',
@@ -98,11 +99,14 @@ export const apiCall = async (endpoint: string, data: any, method: 'GET' | 'POST
 
 // 便捷的API调用方法
 export const api = {
-  expandKeywords: (keywords: string, maxKeywords: number = 5) => 
-    apiCall(API_CONFIG.ENDPOINTS.EXPAND_KEYWORDS, { keywords, max_keywords: maxKeywords }),
+  chat: (message: string, history: any[] = []) => 
+    apiCall(API_CONFIG.ENDPOINTS.CHAT, { message, history }),
     
   searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true) =>
     apiCall(API_CONFIG.ENDPOINTS.SEARCH_PAPERS, { query, max_results: maxResults, enable_expansion: enableExpansion }),
+    
+  expandKeywords: (query: string, maxKeywords: number = 5) =>
+    apiCall(API_CONFIG.ENDPOINTS.EXPAND_KEYWORDS, { query, max_keywords: maxKeywords }),
     
   multiSourceSearch: (query: string, maxResults: number = 50, sources?: string[]) =>
     apiCall(API_CONFIG.ENDPOINTS.MULTI_SOURCE_SEARCH, { query, max_results: maxResults, sources }),

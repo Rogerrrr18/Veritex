@@ -1,0 +1,564 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { api } from './config';
+import KeywordCloudWidget from './components/KeywordCloudWidget';
+
+interface Message {
+  id: string;
+  text: string;
+  isUser: boolean;
+  timestamp: number;
+  analysisResult?: any;
+  hierarchicalKeywords?: any;
+}
+
+interface ChatInterfaceProps {
+  className?: string;
+}
+
+const CHAT_STORAGE_KEY = 'veritex_chat_history';
+const CHAT_ANALYSIS_KEY = 'veritex_current_analysis';
+
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputMessage, setInputMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [currentAnalysis, setCurrentAnalysis] = useState<any>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // 从首页传来的初始输入
+  const initialInput = location.state?.input || '';
+  const preserveChat = location.state?.preserveChat || false;
+
+  // 保存聊天记录到localStorage
+  const saveChatHistory = (messages: Message[], analysis: any = null) => {
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+    if (analysis) {
+      localStorage.setItem(CHAT_ANALYSIS_KEY, JSON.stringify(analysis));
+    }
+  };
+
+  // 从localStorage恢复聊天记录
+  const loadChatHistory = (): { messages: Message[], analysis: any } => {
+    try {
+      const savedMessages = localStorage.getItem(CHAT_STORAGE_KEY);
+      const savedAnalysis = localStorage.getItem(CHAT_ANALYSIS_KEY);
+      return {
+        messages: savedMessages ? JSON.parse(savedMessages) : [],
+        analysis: savedAnalysis ? JSON.parse(savedAnalysis) : null
+      };
+    } catch (error) {
+      console.error('Error loading chat history:', error);
+      return { messages: [], analysis: null };
+    }
+  };
+
+  // 清除聊天历史
+  const clearChatHistory = () => {
+    localStorage.removeItem(CHAT_STORAGE_KEY);
+    localStorage.removeItem(CHAT_ANALYSIS_KEY);
+  };
+
+  // 初始化聊天记录
+  useEffect(() => {
+    const { messages: savedMessages, analysis: savedAnalysis } = loadChatHistory();
+    
+    // 如果有保存的聊天记录，恢复它们
+    if (savedMessages.length > 0) {
+      setMessages(savedMessages);
+      setCurrentAnalysis(savedAnalysis);
+    } else {
+      // 否则显示欢迎消息
+      const welcomeMessage: Message = {
+        id: 'welcome',
+        text: '👋 您好！我是Paper God智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
+        isUser: false,
+        timestamp: Date.now()
+      };
+      const initialMessages = [welcomeMessage];
+      setMessages(initialMessages);
+      saveChatHistory(initialMessages);
+    }
+    
+    // 如果有来自首页的初始输入，设置到输入框中
+    if (initialInput && !preserveChat) {
+      // 只有在不保留聊天记录的情况下才设置初始输入
+      setInputMessage(initialInput);
+    } else if (initialInput && preserveChat) {
+      // 如果需要保留聊天记录且有新输入，直接设置到输入框
+      setInputMessage(initialInput);
+    }
+  }, [initialInput, preserveChat]);
+
+  // 自动滚动到底部
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // 检查登录状态
+  useEffect(() => {
+    const isLoggedIn = localStorage.getItem('invite_logged_in') === '1';
+    const userId = localStorage.getItem('user_id');
+    
+    if (!isLoggedIn || !userId) {
+      localStorage.removeItem('invite_logged_in');
+      localStorage.removeItem('user_id');
+      navigate('/invite');
+    }
+  }, [navigate]);
+
+  // 发送消息
+  const handleSendMessage = async () => {
+    if (!inputMessage.trim() || isLoading) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      text: inputMessage.trim(),
+      isUser: true,
+      timestamp: Date.now()
+    };
+
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    saveChatHistory(newMessages, currentAnalysis);
+    setInputMessage('');
+    setIsLoading(true);
+
+    try {
+      // 调用后端chat API
+      const response = await api.chat(userMessage.text, []);
+      
+      // 检查是否是学术查询（有搜索结果）
+      let analysisResult = null;
+      let hierarchicalKeywords = null;
+      
+      // 尝试从多个来源提取分析结果和关键词
+      if (response.analysis_result) {
+        analysisResult = response.analysis_result;
+        
+        // 尝试从分析结果中提取层次化关键词
+        if (analysisResult && analysisResult.hierarchical_keywords) {
+          hierarchicalKeywords = analysisResult.hierarchical_keywords;
+          setCurrentAnalysis(analysisResult);
+        }
+      }
+      
+      // 如果没有hierarchical_keywords，尝试从响应文本中提取关键词
+      if (!hierarchicalKeywords && response.is_academic_query && response.response) {
+        const keywordsMatch = response.response.match(/🏷️\s*\*\*关键词\*\*:\s*([^\n]+)/);
+        if (keywordsMatch) {
+          const keywordsText = keywordsMatch[1];
+          const keywords = keywordsText.split(/[,，]\s*/).map(k => k.trim()).filter(k => k);
+          
+          // 创建简化的hierarchical_keywords结构
+          hierarchicalKeywords = {
+            core_synonyms: {
+              terms: keywords,
+              weight: 1.0
+            }
+          };
+          
+          // 创建分析结果
+          analysisResult = {
+            hierarchical_keywords: hierarchicalKeywords,
+            domain: 'academic_research'
+          };
+          
+          setCurrentAnalysis(analysisResult);
+        }
+      }
+
+      const assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: response.response || '抱歉，我无法处理您的请求。',
+        isUser: false,
+        timestamp: Date.now() + 1,
+        analysisResult,
+        hierarchicalKeywords
+      };
+
+      const finalMessages = [...newMessages, assistantMessage];
+      setMessages(finalMessages);
+      saveChatHistory(finalMessages, analysisResult);
+
+      // 如果有搜索结果，可以选择直接跳转到报告页面
+      if (response.search_results && response.search_results.length > 0) {
+        // 可选：自动跳转到报告页面
+        // navigate('/report', {
+        //   state: {
+        //     papers: response.search_results,
+        //     expandedKeywords: extractKeywordsFromAnalysis(analysisResult),
+        //     originalQuery: userMessage.text,
+        //     maxResults: response.search_results.length
+        //   }
+        // });
+      }
+
+    } catch (error: any) {
+      console.error('Chat error:', error);
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: `抱歉，发生了错误：${error.message || '未知错误'}`,
+        isUser: false,
+        timestamp: Date.now() + 1
+      };
+      const errorMessages = [...newMessages, errorMessage];
+      setMessages(errorMessages);
+      saveChatHistory(errorMessages, currentAnalysis);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+
+  // 处理键盘事件
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  // 格式化时间
+  const formatTime = (timestamp: number) => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('zh-CN', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  };
+
+  return (
+    <div className={`chat-interface ${className}`} style={{
+      display: 'flex',
+      height: '100vh',
+      backgroundColor: '#000',
+      color: '#fff'
+    }}>
+      {/* 左侧聊天区域 */}
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: '400px'
+      }}>
+        {/* 顶部标题栏 */}
+        <div style={{
+          padding: '16px 20px',
+          borderBottom: '1px solid #333',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <div>
+            <h2 style={{ 
+              margin: 0, 
+              fontSize: '20px', 
+              color: '#3bb0e6',
+              fontWeight: '600'
+            }}>
+              🤖 Paper God AI Assistant
+            </h2>
+            <p style={{ 
+              margin: '4px 0 0 0', 
+              fontSize: '12px', 
+              color: '#a1a1aa' 
+            }}>
+              智能学术助手 • 关键词扩展 • 文献搜索
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => {
+                clearChatHistory();
+                const welcomeMessage: Message = {
+                  id: 'welcome',
+                  text: '👋 您好！我是Paper God智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
+                  isUser: false,
+                  timestamp: Date.now()
+                };
+                const resetMessages = [welcomeMessage];
+                setMessages(resetMessages);
+                setCurrentAnalysis(null);
+                saveChatHistory(resetMessages);
+              }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                border: '1px solid #666',
+                background: 'transparent',
+                color: '#a1a1aa',
+                cursor: 'pointer',
+                fontSize: '12px'
+              }}
+              title="清除聊天记录并重新开始"
+            >
+              🗑️ 清除
+            </button>
+            <button
+              onClick={() => navigate('/')}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '6px',
+                border: '1px solid #666',
+                background: 'transparent',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              返回首页
+            </button>
+          </div>
+        </div>
+
+        {/* 消息区域 */}
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px'
+        }}>
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              style={{
+                display: 'flex',
+                justifyContent: message.isUser ? 'flex-end' : 'flex-start',
+                alignItems: 'flex-start',
+                gap: '12px'
+              }}
+            >
+              {/* 头像 */}
+              {!message.isUser && (
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  backgroundColor: '#3bb0e6',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '16px',
+                  flexShrink: 0
+                }}>
+                  🤖
+                </div>
+              )}
+
+              {/* 消息气泡 */}
+              <div style={{
+                maxWidth: '70%',
+                backgroundColor: message.isUser ? '#3bb0e6' : '#1a1a1a',
+                color: message.isUser ? '#fff' : '#e5e5e5',
+                padding: '12px 16px',
+                borderRadius: message.isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                fontSize: '14px',
+                lineHeight: '1.6',
+                whiteSpace: 'pre-wrap',
+                border: message.isUser ? 'none' : '1px solid #333'
+              }}>
+                <div>{message.text}</div>
+                
+                {/* 时间戳 */}
+                <div style={{
+                  fontSize: '11px',
+                  color: message.isUser ? 'rgba(255,255,255,0.7)' : '#666',
+                  marginTop: '8px',
+                  textAlign: message.isUser ? 'right' : 'left'
+                }}>
+                  {formatTime(message.timestamp)}
+                </div>
+
+                {/* 如果有学术分析结果，显示提示 */}
+                {message.hierarchicalKeywords && (
+                  <div style={{
+                    marginTop: '12px',
+                    padding: '8px 12px',
+                    backgroundColor: 'rgba(59,176,230,0.1)',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(59,176,230,0.2)',
+                    fontSize: '12px'
+                  }}>
+                    💡 已为您分析并扩展关键词，请查看右侧关键词云进行搜索
+                  </div>
+                )}
+              </div>
+
+              {/* 用户头像 */}
+              {message.isUser && (
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  backgroundColor: '#666',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '16px',
+                  flexShrink: 0
+                }}>
+                  👤
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* 加载指示器 */}
+          {isLoading && (
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-start',
+              alignItems: 'center',
+              gap: '12px'
+            }}>
+              <div style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '50%',
+                backgroundColor: '#3bb0e6',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '16px'
+              }}>
+                🤖
+              </div>
+              <div style={{
+                backgroundColor: '#1a1a1a',
+                padding: '12px 16px',
+                borderRadius: '16px 16px 16px 4px',
+                border: '1px solid #333'
+              }}>
+                <div style={{
+                  display: 'flex',
+                  gap: '4px',
+                  alignItems: 'center'
+                }}>
+                  <div style={{ fontSize: '12px', color: '#666' }}>AI正在思考</div>
+                  <div style={{
+                    display: 'flex',
+                    gap: '2px'
+                  }}>
+                    {[0, 1, 2].map(i => (
+                      <div
+                        key={i}
+                        style={{
+                          width: '4px',
+                          height: '4px',
+                          backgroundColor: '#3bb0e6',
+                          borderRadius: '50%',
+                          animation: `pulse 1.5s ease-in-out ${i * 0.3}s infinite`
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* 输入区域 */}
+        <div style={{
+          padding: '16px 20px',
+          borderTop: '1px solid #333',
+          backgroundColor: '#0a0a0a'
+        }}>
+          <div style={{
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'flex-end'
+          }}>
+            <textarea
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyDown={handleKeyPress}
+              placeholder="输入您的学术问题或研究主题..."
+              disabled={isLoading}
+              style={{
+                flex: 1,
+                padding: '12px 16px',
+                borderRadius: '12px',
+                border: '1px solid #333',
+                backgroundColor: '#1a1a1a',
+                color: '#fff',
+                fontSize: '14px',
+                lineHeight: '1.5',
+                resize: 'none',
+                minHeight: '44px',
+                maxHeight: '120px',
+                outline: 'none',
+                fontFamily: 'inherit'
+              }}
+              rows={1}
+              onInput={(e) => {
+                const target = e.target as HTMLTextAreaElement;
+                target.style.height = 'auto';
+                target.style.height = Math.min(target.scrollHeight, 120) + 'px';
+              }}
+            />
+            <button
+              onClick={handleSendMessage}
+              disabled={isLoading || !inputMessage.trim()}
+              style={{
+                padding: '12px 20px',
+                borderRadius: '12px',
+                border: 'none',
+                backgroundColor: inputMessage.trim() && !isLoading ? '#3bb0e6' : '#666',
+                color: '#fff',
+                cursor: inputMessage.trim() && !isLoading ? 'pointer' : 'not-allowed',
+                fontSize: '14px',
+                fontWeight: '600',
+                transition: 'all 0.2s',
+                minWidth: '80px'
+              }}
+            >
+              {isLoading ? '...' : '发送'}
+            </button>
+          </div>
+          
+          <div style={{
+            marginTop: '8px',
+            fontSize: '11px',
+            color: '#666',
+            textAlign: 'center'
+          }}>
+            💡 提示：按 Enter 发送，Shift+Enter 换行
+          </div>
+        </div>
+      </div>
+
+      {/* 右侧关键词云区域 */}
+      <div style={{
+        width: '350px',
+        borderLeft: '1px solid #333',
+        backgroundColor: '#0a0a0a'
+      }}>
+        <KeywordCloudWidget 
+          hierarchicalKeywords={currentAnalysis?.hierarchical_keywords || null}
+          originalQuery=""
+          isDraggable={true}
+        />
+      </div>
+
+      {/* 动画样式 */}
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 0.4; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.2); }
+          }
+        `}
+      </style>
+    </div>
+  );
+};
+
+export default ChatInterface;

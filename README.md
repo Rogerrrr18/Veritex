@@ -114,6 +114,9 @@ isort .
 python -m uvicorn backend:app --reload
 ```
 
+# 停止后端服务（如需）
+lsof -ti:8000 | xargs kill -9
+
 ### 前端开发
 ```bash
 cd frontend

@@ -3,7 +3,10 @@ import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { registerUser, logUserAction } from './auth';
 import AdminDashboard from './AdminDashboard';
+import ChatInterface from './ChatInterface';
 import { api, APP_CONFIG, DEV_CONFIG } from './config';
+import { useGlobal } from './contexts/GlobalContext';
+import ThemeLanguageSwitcher from './components/ThemeLanguageSwitcher';
 
 // 搜索历史管理
 interface SearchHistory {
@@ -110,13 +113,14 @@ function InviteCodePage() {
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const { t } = useGlobal()
 
   // 校验邀请码并注册用户
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     if (!code.trim()) {
-      setError('请输入内测邀请码')
+      setError(t('invite.error.required'))
       return
     }
     setLoading(true)
@@ -130,11 +134,11 @@ function InviteCodePage() {
         setLoading(false)
         navigate('/')
       } else {
-        setError(result.error || '注册失败')
+        setError(result.error || t('invite.error.register'))
         setLoading(false)
       }
     } catch (error) {
-      setError('注册过程中出错')
+      setError(t('invite.error.network'))
       setLoading(false)
     }
   }
@@ -142,19 +146,22 @@ function InviteCodePage() {
   return (
     <div className="invite-page" style={{ minHeight: '100vh', background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ background: 'rgba(30,30,30,0.98)', borderRadius: 18, padding: '48px 32px', boxShadow: '0 4px 32px rgba(0,0,0,0.18)', minWidth: 320, maxWidth: 360 }}>
-        <h2 style={{ fontWeight: 700, fontSize: '2rem', marginBottom: 24, textAlign: 'center' }}>填写内测邀请码</h2>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 24 }}>
+          <ThemeLanguageSwitcher />
+        </div>
+        <h2 style={{ fontWeight: 700, fontSize: '2rem', marginBottom: 24, textAlign: 'center' }}>{t('invite.title')}</h2>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <input
             type="text"
             value={code}
             onChange={e => setCode(e.target.value)}
-            placeholder="请输入6位内测码"
+            placeholder={t('invite.placeholder')}
             style={{ padding: '16px', borderRadius: 10, border: 'none', fontSize: 18, background: '#18181b', color: '#fff', textAlign: 'center', outline: 'none', marginBottom: 8 }}
             autoFocus
             disabled={loading}
           />
           {error && <div style={{ color: '#ff4d4f', marginBottom: 8, textAlign: 'center' }}>{error}</div>}
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', fontSize: 18 }} disabled={loading}>{loading ? 'Verifying...' : 'Start Beta'}</button>
+          <button type="submit" className="btn btn-primary" style={{ width: '100%', fontSize: 18 }} disabled={loading}>{loading ? t('invite.verifying') : t('invite.submit')}</button>
         </form>
       </div>
     </div>
@@ -166,6 +173,7 @@ function HomePage() {
   const [input, setInput] = useState('')
   const [currentSlide, setCurrentSlide] = useState(0)
   const navigate = useNavigate()
+  const { t } = useGlobal()
 
   // 3D轮播图片
   const carouselImages = [
@@ -196,7 +204,7 @@ function HomePage() {
       return
     }
     if (input.trim()) {
-      navigate('/keywords', { state: { input } })
+      navigate('/chat', { state: { input } })
     }
   }
 
@@ -214,23 +222,33 @@ function HomePage() {
         </nav>
         <div className="header-right">
           {hasValidSession ? (
-            <button 
-              className="btn btn-primary" 
-              onClick={() => navigate('/my')}
-              style={{ marginRight: 8 }}
-            >
-              My
-            </button>
+            <>
+              <button 
+                className="btn btn-primary" 
+                onClick={() => navigate('/chat')}
+                style={{ marginRight: 8, backgroundColor: '#10b981' }}
+              >
+                {t('home.button.searchChat')}
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={() => navigate('/my')}
+                style={{ marginRight: 8 }}
+              >
+                {t('home.button.my')}
+              </button>
+            </>
           ) : null}
-          <button className="btn btn-primary" onClick={() => navigate('/invite')}>Start free trial</button>
+          <ThemeLanguageSwitcher style={{ marginRight: 12 }} />
+          <button className="btn btn-primary" onClick={() => navigate('/invite')}>{t('home.button.startTrial')}</button>
         </div>
       </header>
       {/* 主体内容整体左移 */}
       <main className="main" style={{ justifyContent: 'flex-start', paddingLeft: '7vw' }}>
         <section className="hero">
-          <h1 className="hero-title">Smart Academic Literature Search & Management Platform</h1>
+          <h1 className="hero-title">{t('home.title')}</h1>
           <p className="hero-desc">
-            Veritex 依托大模型与智能算法，支持关键词扩展、批量论文检索、摘要智能提取与报告导出，帮你快速定位当前的研究进展。
+            {t('home.desc')}
           </p>
           
           
@@ -238,14 +256,16 @@ function HomePage() {
             <input
               type="text"
               className="input"
-              placeholder={hasValidSession ? "请输入关键词(请放心,我会帮你自动拓展)." : "请先获取内测邀请码"}
+              placeholder={hasValidSession ? t('home.placeholder.loggedIn') : t('home.placeholder.notLoggedIn')}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={!hasValidSession}
             />
-            <button type="submit" className="btn btn-secondary">
-              {hasValidSession ? '🔍 Search' : 'Get Beta Code'}
-            </button>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button type="submit" className="btn btn-secondary">
+                {hasValidSession ? t('home.button.searchChat') : t('home.button.getBetaCode')}
+              </button>
+            </div>
           </form>
           
         </section>
@@ -276,314 +296,11 @@ function HomePage() {
   )
 }
 
-// 关键词云页面组件
-function KeywordCloudPage() {
-  const navigate = useNavigate()
-  const location = useLocation()
-  const [input] = useState(location.state?.input || '')
-  const [expanded, setExpanded] = useState<string[]>(location.state?.expandedKeywords ? [...location.state.expandedKeywords, ''] : [])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [maxResults, setMaxResults] = useState<number>(location.state?.maxResults || APP_CONFIG.DEFAULT_MAX_RESULTS)
-  const [yearLow, setYearLow] = useState<string>('')
-  const [yearHigh, setYearHigh] = useState<string>('')
-  // 移除扩展过程中的加载提示，保持页面简洁
-  const [skipExpansion] = useState(location.state?.skipExpansion || false)
-  
-
-  // 检查登录状态，未登录强制跳转/invite
-  useEffect(() => {
-    const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
-    const userId = localStorage.getItem('user_id')
-    
-    if (!isLoggedIn || !userId) {
-      // 清除可能的无效状态
-      localStorage.removeItem('invite_logged_in')
-      localStorage.removeItem('user_id')
-      navigate('/invite')
-    }
-    // eslint-disable-next-line
-  }, [])
-
-  // 自动扩展关键词
-  useEffect(() => {
-    if (input && !skipExpansion) {
-      handleExpand()
-    }
-    // eslint-disable-next-line
-  }, [input])
-
-  // 关键词扩展
-  const handleExpand = async () => {
-    if (localStorage.getItem('invite_logged_in') !== '1') {
-      navigate('/invite')
-      return
-    }
-    
-    const userId = localStorage.getItem('user_id')
-    if (!userId) {
-      localStorage.removeItem('invite_logged_in')
-      navigate('/invite')
-      return
-    }
-    
-    setError('')
-    setLoading(true)
-    
-    try {
-      // 记录行为
-      await logUserAction(userId, 'expand_keywords', input)
-      
-      // 使用配置化的API调用
-      const maxKeywords = 5
-      const data = await api.expandKeywords(input, maxKeywords)
-      
-      // 适配优化后端响应格式
-      if (data.success && data.data) {
-        const responseData = data.data
-        
-        // 调试日志
-        if (DEV_CONFIG.ENABLE_DEBUG_LOGS) {
-          console.log('[前端] 后端响应数据:', responseData)
-          console.log('[前端] 扩展关键词:', responseData.expanded_keywords)
-        }
-        
-        // 设置扩展的关键词
-        const keywords = responseData.expanded_keywords || []
-        // 添加一个空字符串用于新增输入
-        const expandedWithEmpty = keywords.length > 0 ? [...keywords, ''] : ['']
-        
-        setExpanded(expandedWithEmpty)
-      } else {
-        // 兼容旧格式响应
-        const keywords = data.expanded_terms || data.expanded_keywords || []
-        const expandedWithEmpty = keywords.length > 0 ? [...keywords, ''] : ['']
-        setExpanded(expandedWithEmpty)
-        
-        if (DEV_CONFIG.ENABLE_DEBUG_LOGS) {
-          console.log('[前端] 使用兼容格式，关键词:', keywords)
-        }
-      }
-    } catch (e: any) {
-      setError(e.message || '扩展关键词失败')
-    }
-    setLoading(false)
-  }
-
-  // 扩展结果可编辑
-  const handleExpandedChange = (idx: number, value: string) => {
-    let newExpanded = [...expanded]
-    if (value.trim() === '') {
-      newExpanded.splice(idx, 1)
-    } else {
-      newExpanded[idx] = value
-    }
-    if (newExpanded.length === 0 || newExpanded[newExpanded.length - 1].trim() !== '') {
-      newExpanded.push('')
-    }
-    setExpanded(newExpanded)
-  }
-
-  const handleRemoveExpanded = (idx: number) => {
-    setExpanded(expanded.filter((_, i) => i !== idx))
-  }
-
-  const handleAddExpanded = () => {
-    setExpanded([...expanded, ''])
-  }
-
-  // 生成泡泡颜色
-  const getBubbleColor = (idx: number) => {
-    const hue = (idx * 47) % 360
-    return `hsl(${hue}, 70%, 60%)`
-  }
-
-  // 开始检索
-  const handleSearch = async () => {
-    if (localStorage.getItem('invite_logged_in') !== '1') {
-      navigate('/invite')
-      return
-    }
-    
-    const userId = localStorage.getItem('user_id')
-    if (!userId) {
-      // 如果没有用户ID，清除登录状态并跳转
-      localStorage.removeItem('invite_logged_in')
-      navigate('/invite')
-      return
-    }
-    
-    setError('')
-    const validKeywords = expanded.filter(k => k.trim())
-    if (validKeywords.length === 0) {
-      setError('请至少输入一个关键词')
-      return
-    }
-    
-    setLoading(true)
-    try {
-      // 记录行为
-      await logUserAction(userId, 'search_papers', validKeywords.join(','))
-      
-      // 构造查询字符串，适配优化后端格式
-      const queryString = validKeywords.join(' OR ')
-      
-      // 使用配置化的API调用
-      const data = await api.searchPapers(queryString, maxResults, false)
-      
-      // 适配优化后端响应格式
-      const papers = data.success && data.data ? data.data.papers : (data.papers || [])
-      
-      // 保存搜索历史
-      const searchHistory: SearchHistory = {
-        id: Date.now().toString(),
-        timestamp: Date.now(),
-        originalQuery: input,
-        expandedKeywords: validKeywords,
-        papers: papers,
-        maxResults: maxResults
-      };
-      saveSearchHistory(searchHistory);
-      
-      navigate('/report', { 
-        state: { 
-          papers,
-          searchHistory,
-          expandedKeywords: validKeywords,
-          originalQuery: input,
-          maxResults: maxResults
-        } 
-      })
-    } catch (e: any) {
-      setError(e.message || '检索论文失败')
-    }
-    setLoading(false)
-  }
-
-  return (
-    <div className="keyword-cloud-page">
-      <div className="keyword-page-header">
-        <div 
-          className="logo"
-          onClick={() => navigate('/')}
-          style={{ 
-            cursor: 'pointer',
-            fontSize: '2.5rem',
-            fontWeight: 'bold',
-            letterSpacing: '2px',
-            color: '#fff',
-            fontFamily: "'IBM Plex Sans', 'Inter', 'Plus Jakarta Sans', Arial, sans-serif",
-            position: 'absolute',
-            top: '20px',
-            left: '32px',
-            zIndex: 10
-          }}
-        >
-          Veritex
-        </div>
-      </div>
-      <div className="cloud-header">
-        <h2>Keywords Cloud</h2>
-        <p>Edit your keywords, then start searching</p>
-        
-      </div>
-      
-      {error && <p className="error-message">错误: {error}</p>}
-      
-      {/* 移除扩展关键词加载提示，保持页面简洁 */}
-      <div className="keyword-bubbles">
-        {expanded.map((term, idx) => (
-          <div
-            key={idx}
-            className="keyword-bubble keyword-bubble-elastic"
-            style={{
-              backgroundColor: getBubbleColor(idx),
-              animationDelay: `${idx * 0.1}s`
-            }}
-          >
-            <input
-              type="text"
-              value={term}
-              onChange={(e) => handleExpandedChange(idx, e.target.value)}
-              placeholder="输入关键词"
-              className="bubble-input"
-              disabled={loading}
-            />
-            {expanded.length > 1 && (
-              <button
-                onClick={() => handleRemoveExpanded(idx)}
-                className="remove-bubble-btn"
-                disabled={loading}
-              >
-                ×
-              </button>
-            )}
-          </div>
-        ))}
-        <button
-          onClick={handleAddExpanded}
-          className="add-bubble-btn"
-          disabled={loading}
-        >
-          + Add
-        </button>
-      </div>
-      
-      <div className="search-controls">
-        <div className="search-options">
-          <label>
-            最大检索数:
-            <input
-              type="number"
-              value={maxResults}
-              onChange={e => setMaxResults(parseInt(e.target.value, 10) || 1)}
-              min="1"
-              max="500"
-              disabled={loading}
-            />
-          </label>
-          <label>
-            起始年份 (选填):
-            <input
-              type="number"
-              placeholder="YYYY"
-              value={yearLow}
-              onChange={e => setYearLow(e.target.value)}
-              disabled={loading}
-            />
-          </label>
-          <label>
-            结束年份 (选填):
-            <input
-              type="number"
-              placeholder="YYYY"
-              value={yearHigh}
-              onChange={e => setYearHigh(e.target.value)}
-              disabled={loading}
-            />
-          </label>
-        </div>
-        <button
-          onClick={handleSearch}
-          disabled={loading || expanded.filter(k => k.trim()).length === 0}
-          className={`search-button search-button-elastic ${loading ? 'loading-breathe' : ''}`}
-        >
-          {loading ? 'Searching...' : '🔍 Search Papers'}
-        </button>
-      </div>
-    </div>
-  )
-}
 
 // 报告页组件
 function ReportPage() {
   const navigate = useNavigate()
-  const [theme, setTheme] = useState('dark')
-  const toggle = () => setTheme(t => (t === 'dark' ? 'light' : 'dark'))
-  useEffect(() => {
-    document.body.setAttribute('data-theme', theme)
-    return () => { document.body.setAttribute('data-theme', 'dark') }
-  }, [theme])
+  const { theme, t } = useGlobal()
   const location = useLocation()
   const [papers] = useState(location.state?.papers || [])
   const [expandedKeywords] = useState(location.state?.expandedKeywords || [])
@@ -595,7 +312,7 @@ function ReportPage() {
 
   const handleExport = () => {
     const csvContent = [
-      ['标题', '作者', '年份', '摘要', '链接'],
+      [t('report.table.title'), t('report.table.authors'), t('report.table.year'), t('report.table.abstract'), t('report.table.link')],
       ...papers.map((p: any) => [p.title, p.authors, p.year, p.abstract, p.url])
     ].map(row => row.map((cell: any) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -605,16 +322,9 @@ function ReportPage() {
     link.click()
   }
 
-  const handleBackToKeywords = () => {
-    // 返回关键词页面，带上历史数据，不重新调用后端
-    navigate('/keywords', { 
-      state: { 
-        input: originalQuery,
-        expandedKeywords: expandedKeywords,
-        maxResults: maxResults,
-        skipExpansion: true // 标记跳过扩展
-      } 
-    })
+  const handleBackToChat = () => {
+    // 返回聊天页面，不传递状态以保持现有聊天记录
+    navigate('/chat')
   }
 
 
@@ -623,7 +333,7 @@ function ReportPage() {
       <div className="report-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button 
-            onClick={handleBackToKeywords}
+            onClick={handleBackToChat}
             style={{
               padding: '8px 16px',
               borderRadius: 6,
@@ -637,13 +347,13 @@ function ReportPage() {
               gap: 6
             }}
           >
-            ← Back
+            {t('report.back')}
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {/* 仅保留导出和主题切换 */}
-          <button onClick={handleExport} className="export-button">Export CSV</button>
-          <ReportThemeToggle theme={theme} toggle={toggle} />
+          {/* 导出和主题语言切换 */}
+          <button onClick={handleExport} className="export-button">{t('report.export')}</button>
+          <ThemeLanguageSwitcher compact={true} />
         </div>
       </div>
       
@@ -654,11 +364,11 @@ function ReportPage() {
             <table className="report-table">
               <thead>
                 <tr>
-                  <th className="col-title">标题</th>
-                  <th className="col-authors">作者</th>
-                  <th className="col-year">年份</th>
-                  <th className="col-abstract">摘要</th>
-                  <th className="col-link">链接</th>
+                  <th className="col-title">{t('report.table.title')}</th>
+                  <th className="col-authors">{t('report.table.authors')}</th>
+                  <th className="col-year">{t('report.table.year')}</th>
+                  <th className="col-abstract">{t('report.table.abstract')}</th>
+                  <th className="col-link">{t('report.table.link')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -684,14 +394,14 @@ function ReportPage() {
                             : abstract}
                           {isLong && (
                             <button className="abstract-toggle" onClick={() => toggleAbstract(idx)}>
-                              {showAll ? 'Less' : 'More'}
+                              {showAll ? t('report.abstract.less') : t('report.abstract.more')}
                             </button>
                           )}
                         </div>
                       </td>
                       <td className="col-link">
                         <a href={paper.url} target="_blank" rel="noopener noreferrer" className="link-button">
-                          View
+                          {t('common.view')}
                         </a>
                       </td>
                     </tr>
@@ -804,6 +514,7 @@ function MyPage() {
   const [searchHistory, setSearchHistory] = useState<SearchHistory[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectAll, setSelectAll] = useState(false)
+  const { t } = useGlobal()
 
   // 检查登录状态
   useEffect(() => {
@@ -877,13 +588,11 @@ function MyPage() {
   }
 
   const handleReSearch = (history: SearchHistory) => {
-    // 返回关键词页面重新搜索
-    navigate('/keywords', {
+    // 返回聊天页面重新搜索，保留现有对话并添加新查询
+    navigate('/chat', {
       state: {
         input: history.originalQuery,
-        expandedKeywords: history.expandedKeywords,
-        maxResults: history.maxResults,
-        skipExpansion: true
+        preserveChat: true  // 标记保留聊天记录
       }
     })
   }
@@ -895,13 +604,13 @@ function MyPage() {
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
     
     if (diffDays === 0) {
-      return '今天 ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      return 'Today ' + date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
     } else if (diffDays === 1) {
-      return '昨天 ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      return 'Yesterday ' + date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
     } else if (diffDays < 7) {
-      return `${diffDays}天前`
+      return `${diffDays} days ago`
     } else {
-      return date.toLocaleDateString('zh-CN')
+      return date.toLocaleDateString('en-US')
     }
   }
 
@@ -919,25 +628,26 @@ function MyPage() {
           justifyContent: 'space-between', 
           alignItems: 'center', 
           marginBottom: '24px',
-          borderBottom: '1px solid #333',
+          borderBottom: '1px solid var(--border-primary)',
           paddingBottom: '16px'
         }}>
           <div>
-            <h2 style={{ fontSize: 28, color: '#3bb0e6', margin: 0 }}>我的搜索历史</h2>
-            <p style={{ color: '#a1a1aa', margin: '4px 0 0 0' }}>
-              共 {searchHistory.length} 条记录
-              {selectedIds.length > 0 && ` · 已选择 ${selectedIds.length} 条`}
+            <h2 style={{ fontSize: 28, color: 'var(--accent-primary)', margin: 0 }}>My Search History</h2>
+            <p style={{ color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
+              Total {searchHistory.length} records
+              {selectedIds.length > 0 && ` · Selected ${selectedIds.length} items`}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
+            <ThemeLanguageSwitcher style={{ marginRight: 8 }} />
             <button
               onClick={() => navigate('/')}
               style={{
                 padding: '8px 16px',
                 borderRadius: 6,
-                border: '1px solid #666',
+                border: '1px solid var(--border-primary)',
                 background: 'transparent',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 cursor: 'pointer',
                 fontSize: 14
               }}
@@ -967,7 +677,7 @@ function MyPage() {
                   onChange={handleSelectAll}
                   style={{ cursor: 'pointer' }}
                 />
-                全选
+                Select All
               </label>
               <button
                 onClick={handleDeleteSelected}
@@ -1010,8 +720,8 @@ function MyPage() {
             color: '#666'
           }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>📚</div>
-            <h3 style={{ margin: '0 0 8px 0' }}>还没有搜索历史</h3>
-            <p style={{ margin: 0 }}>开始你的第一次文献搜索吧！</p>
+            <h3 style={{ margin: '0 0 8px 0' }}>No search history yet</h3>
+            <p style={{ margin: 0 }}>Start your first literature search!</p>
             <button
               onClick={() => navigate('/')}
               style={{
@@ -1069,15 +779,15 @@ function MyPage() {
                       }}>
                         <span>{formatDate(item.timestamp)}</span>
                         <span>•</span>
-                        <span>{item.papers.length} 篇文献</span>
+                        <span>{item.papers.length} papers</span>
                         <span>•</span>
-                        <span>目标数量: {item.maxResults}</span>
+                        <span>Target count: {item.maxResults}</span>
                       </div>
                     </div>
 
                     {/* 扩展关键词 */}
                     <div style={{ marginBottom: 16 }}>
-                      <div style={{ fontSize: 12, color: '#666', marginBottom: 6 }}>扩展关键词:</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Expanded Keywords:</div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                         {item.expandedKeywords.map((keyword, idx) => (
                           <span
@@ -1087,7 +797,7 @@ function MyPage() {
                               background: 'rgba(59,176,230,0.1)',
                               borderRadius: 12,
                               fontSize: 12,
-                              color: '#3bb0e6',
+                              color: 'var(--accent-primary)',
                               border: '1px solid rgba(59,176,230,0.2)'
                             }}
                           >
@@ -1144,7 +854,7 @@ function App() {
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/invite" element={<InviteCodePage />} />
-      <Route path="/keywords" element={<KeywordCloudPage />} />
+      <Route path="/chat" element={<ChatInterface />} />
       <Route path="/elicit" element={<ElicitPage />} />
       <Route path="/report" element={<ReportPage />} />
       <Route path="/my" element={<MyPage />} />

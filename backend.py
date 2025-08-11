@@ -11,14 +11,15 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from main import PaperGodSearchEngine
+# 导入新的智能搜索系统
+from langchain_workflows.paper_search_workflow import chat_with_search_strategy
+from llm_interface import get_universal_llm, get_model_config_manager
 from multi_source_engine import Paper
-# 作者分析功能已移除
 
 app = FastAPI(
-    title="Paper God API",
-    description="学术文献智能搜索系统 - MCP增强多源融合版本",
-    version="2.1.0"
+    title="Paper God API - 智能对话版",
+    description="学术文献智能搜索系统 - 集成LLM对话与专业关键词扩展",
+    version="3.0.0"
 )
 
 app.add_middleware(
@@ -29,24 +30,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-search_engine = None
+# 移除旧的搜索引擎实例化，改为使用智能工作流
 
-def get_search_engine():
-    global search_engine
-    if search_engine is None:
-        # 禁用 MCP，使用直连文献库 API
-        search_engine = PaperGodSearchEngine(enable_mcp=False)
-        logger.info("搜索引擎初始化成功（直连API模式，MCP已禁用）")
-    return search_engine
+# 聊天相关模型
+class ChatMessage(BaseModel):
+    role: str
+    content: str
 
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[List[ChatMessage]] = []
+
+class ChatResponse(BaseModel):
+    response: str
+    history: List[ChatMessage]
+    is_academic_query: bool = False
+    search_results: Optional[List[Dict[str, Any]]] = None
+    analysis_result: Optional[Dict[str, Any]] = None
+    token_info: Optional[Dict[str, Any]] = None
+
+# 保留搜索请求模型以兼容现有前端
 class SearchRequest(BaseModel):
     query: str
     max_results: int = 20
     enable_expansion: bool = True
-
-class ExpandKeywordsRequest(BaseModel):
-    keywords: str
-    max_keywords: int = 5
 
 # 轻量埋点与注册请求模型
 class RegisterRequest(BaseModel):
@@ -78,47 +85,85 @@ def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
 
 """作者数据格式化方法已移除"""
 
-@app.post("/expand_keywords")
-async def expand_keywords_api(req: ExpandKeywordsRequest):
+# === 工具函数 ===
+def estimate_tokens(text: str) -> int:
+    """估算文本的token数量"""
+    if not text:
+        return 0
+    
+    import re
+    
+    # 中文字符按1.5个token计算，英文单词按1.3个token计算
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    english_words = len(re.findall(r'[a-zA-Z]+', text))
+    other_chars = len(text) - chinese_chars - english_words
+    
+    return int(chinese_chars * 1.5 + english_words * 1.3 + other_chars * 0.5)
+
+def calculate_total_tokens(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """计算对话历史的总token数"""
+    total_tokens = 0
+    message_count = len(history)
+    
+    for message in history:
+        content = message.get('content', '')
+        total_tokens += estimate_tokens(content)
+    
+    return {
+        "total_tokens": total_tokens,
+        "message_count": message_count,
+        "average_tokens_per_message": total_tokens / message_count if message_count > 0 else 0,
+        "estimated_cost_usd": total_tokens * 0.000002  # 估算成本，实际根据模型定价调整
+    }
+
+# === 新的聊天接口 ===
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """统一聊天接口 - 智能判断学术搜索还是普通对话"""
     try:
-        logger.info(f"关键词扩展请求: {req.keywords}")
-        engine = get_search_engine()
+        # 转换历史记录格式
+        history = [{"role": msg.role, "content": msg.content} for msg in request.history]
         
-        # 调用关键词扩展功能
-        expansion_result = await engine.keyword_expander.detect_and_expand(
-            req.keywords, 
-            max_keywords=req.max_keywords
+        logger.info(f"收到聊天请求: {request.message}")
+        
+        # 调用智能工作流
+        result = await chat_with_search_strategy(request.message)
+        
+        # 处理新的响应格式
+        ai_response = result.get('response', '')
+        is_academic = result.get('is_academic_query', False)
+        
+        # 如果是学术查询但暂时没有搜索结果，提供友好的说明
+        if is_academic and not result.get('search_results'):
+            ai_response += "\n\n📄 **注意**: 系统正在优化中，文献搜索功能暂时停用。上述分析结果可以帮助您更好地进行学术研究。"
+        
+        # 构建完整的对话历史
+        updated_history = history + [
+            {"role": "user", "content": request.message},
+            {"role": "assistant", "content": result.get('response', '')}
+        ]
+        
+        # 转换回响应格式
+        response_history = [
+            ChatMessage(role=msg["role"], content=msg["content"])
+            for msg in updated_history
+        ]
+        
+        # 计算token信息
+        token_info = calculate_total_tokens(updated_history)
+        
+        return ChatResponse(
+            response=ai_response,
+            history=response_history,
+            is_academic_query=is_academic,
+            search_results=result.get('search_results', []),
+            analysis_result=result.get('analysis_result'),
+            token_info=token_info
         )
         
-        return {
-            "success": True,
-            "data": {
-                "original_query": expansion_result.original_query,
-                "expanded_keywords": expansion_result.expanded_keywords,
-                "detected_discipline": expansion_result.detected_discipline,
-                "discipline_chinese": expansion_result.discipline_chinese,
-                "confidence": expansion_result.confidence,
-                "expansion_strategy": expansion_result.expansion_strategy,
-                "quality_score": expansion_result.quality_score,
-                "processing_time": expansion_result.processing_time
-            }
-        }
     except Exception as e:
-        logger.error(f"关键词扩展失败: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "data": {
-                "original_query": req.keywords,
-                "expanded_keywords": [req.keywords],
-                "detected_discipline": "unknown",
-                "discipline_chinese": "未知",
-                "confidence": 0.0,
-                "expansion_strategy": "fallback",
-                "quality_score": 0.0,
-                "processing_time": 0.0
-            }
-        }
+        logger.error(f"聊天服务错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"聊天服务错误: {str(e)}")
 
 @app.post("/analytics/register")
 async def analytics_register(req: RegisterRequest):
@@ -142,22 +187,36 @@ async def analytics_log_action(req: LogActionRequest):
 
 @app.post("/search_papers")
 async def search_papers_api(req: SearchRequest):
+    """兼容性搜索接口 - 重定向到智能工作流"""
     try:
-        logger.info(f"搜索请求: {req.query}")
-        engine = get_search_engine()
-        result = await engine.search(req.query, req.max_results, req.enable_expansion)
+        logger.info(f"搜索请求 (兼容模式): {req.query}")
         
-        formatted_papers = [format_paper_for_api(paper) for paper in result['papers']]
+        # 使用智能工作流执行搜索
+        result = await chat_with_search_strategy(req.query)
         
-        return {
-            "success": True,
-            "data": {
-                "papers": formatted_papers,
-                "total_found": len(formatted_papers),
-                "query_info": result.get('query_info', {}),
-                "performance": result.get('performance', {})
+        if result.get('success') and result.get('search_results'):
+            return {
+                "success": True,
+                "data": {
+                    "papers": result['search_results'],
+                    "total_found": len(result['search_results']),
+                    "query_info": {
+                        "original_query": req.query,
+                        "is_academic_query": result.get('is_academic_query', True),
+                        "analysis_result": result.get('analysis_result')
+                    },
+                    "performance": {
+                        "intelligent_workflow": True,
+                        "llm_analysis": True
+                    }
+                }
             }
-        }
+        else:
+            return {
+                "success": False,
+                "error": result.get('error_message', '搜索失败'),
+                "data": {"papers": [], "total_found": 0}
+            }
     except Exception as e:
         logger.error(f"搜索失败: {e}")
         return {
@@ -172,38 +231,99 @@ async def search_papers_api(req: SearchRequest):
 
 @app.get("/health")
 async def health_check():
+    """健康检查 - 检查LLM和搜索系统状态"""
     try:
-        engine = get_search_engine()
+        # 检查LLM系统
+        config_manager = get_model_config_manager()
+        llm_client = await get_universal_llm()
+        model_info = llm_client.get_model_info()
+        
         return {
             "status": "healthy",
-            "version": "2.1.0",
+            "version": "3.0.0",
             "features": {
+                "intelligent_chat": True,
+                "academic_analysis": True,
                 "paper_search": True,
-                "author_analysis": False,
-                "mcp_enhanced": False
+                "keyword_expansion": True,
+                "langraph_workflow": True
+            },
+            "llm_system": {
+                "active_model": model_info.get("active_model"),
+                "available_models": model_info.get("available_models", []),
+                "model_name": model_info.get("model_name")
             },
             "data_sources": ["semantic_scholar", "arxiv", "pubmed"]
         }
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+        return {
+            "status": "unhealthy", 
+            "error": str(e),
+            "version": "3.0.0"
+        }
 
 @app.get("/")
 async def root():
     return {
-        "message": "Paper God API - 学术文献智能搜索系统",
-        "version": "2.0.0",
+        "message": "Paper God API - 智能对话式学术搜索系统",
+        "version": "3.0.0",
+        "features": [
+            "智能对话交互",
+            "专业学术分析",
+            "层次化关键词扩展", 
+            "多源文献搜索",
+            "LangGraph工作流"
+        ],
         "endpoints": {
-            "/expand_keywords": "关键词扩展", 
-            "/search_papers": "论文搜索", 
-            "/health": "健康检查"
+            "/chat": "智能对话接口（推荐）", 
+            "/search_papers": "论文搜索（兼容）", 
+            "/health": "健康检查",
+            "/models": "模型管理"
         }
     }
 
+@app.get("/models")
+async def get_models():
+    """获取可用LLM模型列表"""
+    try:
+        config_manager = get_model_config_manager()
+        llm_client = await get_universal_llm()
+        model_info = llm_client.get_model_info()
+        
+        # 构建模型列表
+        models = []
+        for model_name in model_info.get("available_models", []):
+            models.append({
+                "id": model_name,
+                "name": model_name.title(),
+                "description": f"{model_name.title()} 模型",
+                "active": model_name == model_info.get("active_model")
+            })
+        
+        return {
+            "active_model": model_info.get("active_model"),
+            "models": models,
+            "model_info": {
+                "current_model_name": model_info.get("model_name"),
+                "temperature": model_info.get("temperature"),
+                "max_tokens": model_info.get("max_tokens")
+            }
+        }
+    except Exception as e:
+        return {
+            "error": f"获取模型信息失败: {str(e)}",
+            "models": []
+        }
+
 @app.on_event("shutdown")
 async def shutdown_event():
-    global search_engine
-    if search_engine:
-        await search_engine.close()
+    """应用关闭时清理资源"""
+    try:
+        llm_client = await get_universal_llm()
+        await llm_client.close()
+        logger.info("LLM客户端资源已清理")
+    except Exception as e:
+        logger.error(f"资源清理失败: {e}")
 
 if __name__ == "__main__":
     import uvicorn
