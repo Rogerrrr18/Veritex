@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
 PUBMED_ENABLED = PUBMED_API_KEY and PUBMED_API_KEY.lower() != "disabled"
 
-GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "true").lower() == "true"
+# 暂时禁用Semantic Scholar以避免API限额问题
+SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "false").lower() == "true"
+# 启用Google Scholar（使用scholarly库）- 默认禁用以避免Captcha/超时
+GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "false").lower() == "true"
+
 CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "true").lower() == "true" 
 IEEE_API_KEY = os.getenv("IEEE_API_KEY")
 IEEE_ENABLED = IEEE_API_KEY and IEEE_API_KEY.lower() != "disabled"
@@ -38,10 +42,10 @@ SPRINGER_ENABLED = SPRINGER_API_KEY and SPRINGER_API_KEY.lower() != "disabled"
 
 # 日志输出API状态
 logger.info(f"数据源状态:")
-logger.info(f"  - Semantic Scholar: 启用")
-logger.info(f"  - arXiv: 启用")  
+logger.info(f"  - Semantic Scholar: {'启用' if SEMANTIC_SCHOLAR_ENABLED else '禁用（避免API限额）'}")
+logger.info(f"  - arXiv: 启用")
+logger.info(f"  - Google Scholar: {'启用（scholarly库）' if GOOGLE_SCHOLAR_ENABLED else '禁用'}")  
 logger.info(f"  - PubMed: {'启用' if PUBMED_ENABLED else '禁用'}")
-logger.info(f"  - Google Scholar: {'启用' if GOOGLE_SCHOLAR_ENABLED else '禁用'}")
 logger.info(f"  - Crossref: {'启用' if CROSSREF_ENABLED else '禁用'}")
 logger.info(f"  - IEEE Xplore: {'启用' if IEEE_ENABLED else '禁用'}")
 logger.info(f"  - Springer: {'启用' if SPRINGER_ENABLED else '禁用'}")
@@ -452,99 +456,147 @@ class PubMedAPI:
         if self.session and not self.session.closed:
             await self.session.close()
 
+
 class GoogleScholarAPI:
-    """Google Scholar客户端 - 使用智能请求策略避免限制"""
+    """Google Scholar API客户端 - 使用scholarly库实现稳定的文献元数据爬取"""
     
     def __init__(self):
-        self.base_url = "https://scholar.google.com/scholar"
         self.session = None
-        self._last_request_time = datetime.now()
-        self._min_delay = 3  # 最小请求间隔（秒）
+        self._min_delay = (1, 3)  # 随机延迟范围（秒）
+        self._max_retries = 3
         
-    async def _get_session(self):
-        """获取异步HTTP会话"""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-        return self.session
-    
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """搜索Google Scholar文献（谨慎处理以避免被封禁）"""
+        """搜索Google Scholar文献"""
         try:
-            # 确保请求间隔
-            now = datetime.now()
-            time_since_last = (now - self._last_request_time).total_seconds()
-            if time_since_last < self._min_delay:
-                await asyncio.sleep(self._min_delay - time_since_last)
+            # 导入scholarly库
+            try:
+                from scholarly import scholarly
+            except ImportError:
+                logger.error("scholarly库未安装，请运行: pip install scholarly")
+                return []
             
-            session = await self._get_session()
-            
-            # 构建请求头，模拟浏览器行为
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Referer': 'https://scholar.google.com/',
-                'DNT': '1'
-            }
-            
-            params = {
-                'q': query,
-                'hl': 'en',
-                'num': min(limit, 20),  # Google Scholar通常限制每页结果
-                'start': 0
-            }
-            
+            logger.info(f"开始Google Scholar搜索: {query}, 限制: {limit}")
             papers = []
-            remaining = limit
+            seen_urls = set()
+            retrieved_count = 0
+            import time as _time
+            overall_budget_s = float(os.getenv("GOOGLE_SCHOLAR_TIME_BUDGET", "6.0"))
+            start_ts = _time.time()
             
-            while remaining > 0:
-                async with session.get(self.base_url, params=params, headers=headers) as response:
-                    if response.status != 200:
-                        logger.error(f"Google Scholar请求失败: {response.status}")
-                        break
-                    
-                    html_content = await response.text()
-                    page_papers = self._parse_scholar_html(html_content)
-                    
-                    if not page_papers:
-                        break
-                    
-                    papers.extend(page_papers[:remaining])
-                    remaining -= len(page_papers)
-                    
-                    if remaining > 0:
-                        params['start'] += 20
-                        # 添加随机延迟避免被检测
-                        await asyncio.sleep(random.uniform(2, 4))
+            # 使用scholarly库进行搜索，增加超时控制
+            try:
+                search_iterator = scholarly.search_pubs(query)
                 
-                self._last_request_time = datetime.now()
+                # 获取论文结果，增加超时保护
+                # 限制迭代次数，结合整体时间预算
+                max_iters = max(5, min(limit, 10))
+                for i in range(max_iters):
+                    try:
+                        # 为每次搜索设置超时
+                        result = await asyncio.wait_for(
+                            asyncio.to_thread(next, search_iterator),
+                            timeout=5  # 单次抓取最多等待5秒
+                        )
+                        retrieved_count += 1
+                        
+                        if not result:
+                            continue
+                        
+                        # 解析论文信息
+                        bib = result.get('bib', {})
+                        title = bib.get('title', '').strip()
+                        
+                        if not title or len(title) < 3:
+                            continue
+                        
+                        # 获取URL
+                        url = result.get('pub_url', '') or result.get('eprint_url', '')
+                        if not url or url in seen_urls:
+                            continue
+                        
+                        seen_urls.add(url)
+                        
+                        # 解析作者信息
+                        authors_list = bib.get('author', [])
+                        if isinstance(authors_list, list):
+                            authors = [str(author) for author in authors_list]
+                        else:
+                            authors = [str(authors_list)] if authors_list else []
+                        
+                        # 解析年份
+                        year = bib.get('pub_year')
+                        if year:
+                            try:
+                                year = int(year)
+                            except (ValueError, TypeError):
+                                year = None
+                        
+                        # 获取摘要
+                        abstract = bib.get('abstract', '')
+                        if abstract and len(abstract) > 300:
+                            abstract = abstract[:300] + "..."
+                        
+                        # 获取期刊信息
+                        journal = bib.get('venue', '') or bib.get('journal', '')
+                        
+                        # 获取引用数
+                        citations = result.get('num_citations', 0)
+                        if citations:
+                            try:
+                                citations = int(citations)
+                            except (ValueError, TypeError):
+                                citations = 0
+                        
+                        # 创建Paper对象
+                        paper = Paper(
+                            title=title,
+                            authors=authors,
+                            abstract=abstract,
+                            year=year,
+                            journal=journal,
+                            url=url,
+                            doi=None,  # scholarly通常不提供DOI
+                            citations=citations,
+                            source="google_scholar",
+                            relevance_score=1.0 - (len(papers) * 0.01)  # 简单的相关性评分
+                        )
+                        
+                        papers.append(paper)
+                        
+                        logger.info(f"添加论文: {title[:50]}... (引用: {citations})")
+                        
+                        if len(papers) >= limit:
+                            break
+                        
+                        # 随机延迟避免被限制
+                        await asyncio.sleep(random.uniform(*self._min_delay))
+
+                        # 触发整体时间预算检查
+                        if (_time.time() - start_ts) >= overall_budget_s:
+                            logger.info("Google Scholar达到时间预算上限，停止进一步抓取")
+                            break
+                        
+                    except (StopIteration, asyncio.TimeoutError):
+                        logger.info("Google Scholar搜索已无更多结果或超时")
+                        break
+                    except Exception as e:
+                        logger.warning(f"处理单个结果时出错: {e}")
+                        continue
+                        
+            except Exception as e:
+                logger.error(f"初始化Google Scholar搜索失败: {e}")
+                return []
             
+            logger.info(f"Google Scholar搜索完成，获得 {len(papers)} 篇论文")
             return papers
             
         except Exception as e:
             logger.error(f"Google Scholar搜索错误: {e}")
             return []
     
-    def _parse_scholar_html(self, html_content: str) -> List[Paper]:
-        """解析Google Scholar HTML响应（简化版本）"""
-        # 注意：实际实现需要使用HTML解析库（如beautifulsoup4）
-        # 这里提供一个简化的实现
-        papers = []
-        
-        try:
-            # 这里应该使用proper HTML解析
-            # 为了示例，返回一个空列表
-            logger.info("Google Scholar HTML解析待实现")
-            return []
-            
-        except Exception as e:
-            logger.error(f"解析Google Scholar HTML错误: {e}")
-            return []
-    
     async def close(self):
-        """关闭HTTP会话"""
-        if self.session and not self.session.closed:
-            await self.session.close()
+        """关闭会话（scholarly库无需手动关闭）"""
+        pass
 
 # MCP增强的语义搜索引擎
 class CrossrefAPI:
@@ -745,29 +797,29 @@ class MultiSourceEngine:
     """多源数据获取引擎 - 核心搜索组件（MCP增强版）"""
     
     def __init__(self, enable_mcp: bool = True):
-        # 初始化所有可用的数据源
-        self.semantic_scholar = SemanticScholarAPI()
+        # 初始化核心数据源
         self.arxiv = ArxivAPI()
-        
-        # 初始化新增的数据源
-        self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
-        
-        # 可选数据源（需要API密钥）
-        self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
         self.google_scholar = GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
+        
+        # 可选数据源
+        self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
+        self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
+        self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
         
         self.enable_mcp = False
         logger.info(f"多源搜索引擎初始化完成，启用数据源数量: {self._count_enabled_sources()}")
         
     def _count_enabled_sources(self) -> int:
         """计算启用的数据源数量"""
-        count = 2  # Semantic Scholar 和 arXiv 总是启用
+        count = 1  # arXiv 总是启用
+        if self.google_scholar:
+            count += 1
+        if self.semantic_scholar:
+            count += 1
         if self.crossref:
             count += 1
         if self.pubmed:
             count += 1  
-        if self.google_scholar:
-            count += 1
         return count
         
     async def search_parallel(self, query: str, max_results: int = 50) -> List[Paper]:
@@ -792,19 +844,23 @@ class MultiSourceEngine:
         per_source_limit = max(10, max_results // active_sources)
         
         try:
-            # 并行调用所有启用的搜索源
-            tasks = [
-                self.semantic_scholar.search(query, per_source_limit),
-                self.arxiv.search(query, per_source_limit)
-            ]
+            # 并行调用核心搜索源（arXiv和Google Scholar享受相同权重）
+            tasks = []
+            per_task_timeout = float(os.getenv("SEARCH_TASK_TIMEOUT", "8.0"))
+            
+            # 核心数据源 - arXiv和Google Scholar权重相同
+            if self.arxiv:
+                tasks.append(asyncio.wait_for(self.arxiv.search(query, per_source_limit), timeout=per_task_timeout))
+            if self.google_scholar:
+                tasks.append(asyncio.wait_for(self.google_scholar.search(query, per_source_limit), timeout=per_task_timeout))
             
             # 添加可选数据源
+            if self.semantic_scholar:
+                tasks.append(asyncio.wait_for(self.semantic_scholar.search(query, per_source_limit), timeout=per_task_timeout))
             if self.crossref:
-                tasks.append(self.crossref.search(query, per_source_limit))
+                tasks.append(asyncio.wait_for(self.crossref.search(query, per_source_limit), timeout=per_task_timeout))
             if self.pubmed:
-                tasks.append(self.pubmed.search(query, per_source_limit))
-            if self.google_scholar:
-                tasks.append(self.google_scholar.search(query, per_source_limit))
+                tasks.append(asyncio.wait_for(self.pubmed.search(query, per_source_limit), timeout=per_task_timeout))
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -918,7 +974,13 @@ class MultiSourceEngine:
     
     async def close(self):
         """关闭所有连接"""
-        coros = [self.semantic_scholar.close(), self.arxiv.close()]
+        coros = [self.arxiv.close()]
+        if self.google_scholar:
+            coros.append(self.google_scholar.close())
+        if self.semantic_scholar:
+            coros.append(self.semantic_scholar.close())
+        if self.crossref:
+            coros.append(self.crossref.close())
         if self.pubmed:
             coros.append(self.pubmed.close())
         await asyncio.gather(*coros)

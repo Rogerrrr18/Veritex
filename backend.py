@@ -51,7 +51,18 @@ class ChatResponse(BaseModel):
     analysis_result: Optional[Dict[str, Any]] = None
     token_info: Optional[Dict[str, Any]] = None
 
-# 保留搜索请求模型以兼容现有前端
+# 关键词扩展请求/响应模型
+class KeywordExpansionRequest(BaseModel):
+    query: str
+
+class KeywordExpansionResponse(BaseModel):
+    success: bool
+    original_query: str
+    is_academic_query: bool
+    analysis_result: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+
+# 保留搜索请求模型以兼容现有前端  
 class SearchRequest(BaseModel):
     query: str
     max_results: int = 20
@@ -59,6 +70,8 @@ class SearchRequest(BaseModel):
     year_from: Optional[int] = None  # 起始年份筛选
     year_to: Optional[int] = None    # 结束年份筛选
     sources: Optional[List[str]] = None  # 指定数据源
+    # 新增：预扩展的关键词（从关键词扩展步骤获得）
+    expanded_keywords: Optional[Dict[str, Any]] = None
 
 # 轻量埋点与注册请求模型
 class RegisterRequest(BaseModel):
@@ -121,6 +134,50 @@ def calculate_total_tokens(history: List[Dict[str, Any]]) -> Dict[str, Any]:
         "estimated_cost_usd": total_tokens * 0.000002  # 估算成本，实际根据模型定价调整
     }
 
+# === 关键词扩展接口 ===
+@app.post("/expand_keywords", response_model=KeywordExpansionResponse)
+async def expand_keywords_api(request: KeywordExpansionRequest):
+    """独立的关键词扩展接口 - 仅进行智能分析，不执行搜索"""
+    try:
+        logger.info(f"关键词扩展请求: {request.query}")
+        
+        # 调用智能工作流进行分析（不执行搜索）
+        result = await chat_with_search_strategy(
+            query=request.query,
+            force_search=False,  # 关键：不强制搜索
+            max_results=0,  # 不需要搜索结果
+            allow_search=False  # 禁止自动搜索，只做分析
+        )
+        
+        # 检查是否为学术查询
+        is_academic = result.get('is_academic_query', False)
+        analysis_result = result.get('analysis_result', {})
+        
+        if is_academic and analysis_result:
+            return KeywordExpansionResponse(
+                success=True,
+                original_query=request.query,
+                is_academic_query=True,
+                analysis_result=analysis_result
+            )
+        else:
+            # 非学术查询或分析失败
+            return KeywordExpansionResponse(
+                success=False,
+                original_query=request.query,
+                is_academic_query=is_academic,
+                error_message="不是学术查询或关键词分析失败"
+            )
+            
+    except Exception as e:
+        logger.error(f"关键词扩展失败: {e}")
+        return KeywordExpansionResponse(
+            success=False,
+            original_query=request.query,
+            is_academic_query=False,
+            error_message=f"关键词扩展服务错误: {str(e)}"
+        )
+
 # === 新的聊天接口 ===
 @app.get("/chat")
 async def chat_get_info():
@@ -157,16 +214,15 @@ async def chat(request: ChatRequest):
             max_results=max_results,
             year_from=year_from,
             year_to=year_to,
-            sources=sources
+            sources=sources,
+            allow_search=False  # 聊天阶段不许自动搜索
         )
         
         # 处理新的响应格式
         ai_response = result.get('response', '')
         is_academic = result.get('is_academic_query', False)
         
-        # 如果是学术查询但暂时没有搜索结果，提供友好的说明
-        if is_academic and not result.get('search_results'):
-            ai_response += "\n\n📄 **注意**: 系统正在优化中，文献搜索功能暂时停用。上述分析结果可以帮助您更好地进行学术研究。"
+        # 仅保留分析内容，不再插入停用提示
         
         # 构建完整的对话历史
         updated_history = history + [
@@ -218,11 +274,80 @@ async def analytics_log_action(req: LogActionRequest):
 
 @app.post("/search_papers")
 async def search_papers_api(req: SearchRequest):
-    """兼容性搜索接口 - 重定向到智能工作流"""
+    """优化后的搜索接口 - 使用预扩展的关键词或重新分析"""
     try:
-        logger.info(f"搜索请求 (兼容模式): {req.query}")
+        logger.info(f"搜索请求: {req.query}")
         
-        # 使用智能工作流执行搜索（强制搜索）
+        # 如果有预扩展的关键词，直接使用
+        if req.expanded_keywords and req.expanded_keywords.get('hierarchical_keywords'):
+            logger.info("使用预扩展的关键词执行搜索")
+            
+            # 直接调用多源搜索引擎，避免重复LLM分析
+            try:
+                from multi_source_engine import MultiSourceEngine
+                search_engine = MultiSourceEngine(enable_mcp=False)
+                
+                # 从预扩展关键词构建查询
+                hierarchical = req.expanded_keywords['hierarchical_keywords']
+                exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
+                core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
+                
+                if exact_terms:
+                    search_query = " ".join(exact_terms[:3])
+                elif core_synonyms:
+                    search_query = " ".join(core_synonyms[:3])  
+                else:
+                    search_query = req.query
+                
+                logger.info(f"使用构建的查询: {search_query}")
+                
+                # 执行搜索
+                papers = await search_engine.search_parallel_with_filters(
+                    query=search_query,
+                    max_results=req.max_results,
+                    year_from=req.year_from,
+                    year_to=req.year_to,
+                    sources=req.sources
+                )
+                
+                # 格式化结果
+                formatted_papers = []
+                for paper in papers:
+                    formatted_papers.append({
+                        "title": paper.title,
+                        "authors": paper.authors,
+                        "abstract": paper.abstract,
+                        "year": paper.year,
+                        "journal": paper.journal, 
+                        "url": paper.url,
+                        "doi": paper.doi,
+                        "citations": paper.citations,
+                        "source": paper.source,
+                        "relevance_score": paper.relevance_score
+                    })
+                
+                await search_engine.close()
+                
+                return {
+                    "success": True,
+                    "data": {
+                        "papers": formatted_papers,
+                        "total_found": len(formatted_papers),
+                        "query_info": {
+                            "original_query": req.query,
+                            "search_query": search_query,
+                            "is_academic_query": True,
+                            "analysis_result": req.expanded_keywords,
+                            "used_preexpanded_keywords": True
+                        }
+                    }
+                }
+            except Exception as e:
+                logger.error(f"直接搜索失败，回退到智能工作流: {e}")
+                # 如果直接搜索失败，回退到原有逻辑
+        
+        # 没有预扩展关键词，使用智能工作流（包含重新分析）
+        logger.info("使用智能工作流执行搜索（包含关键词分析）")
         result = await chat_with_search_strategy(
             query=req.query, 
             force_search=True,
@@ -291,7 +416,7 @@ async def health_check():
                 "available_models": model_info.get("available_models", []),
                 "model_name": model_info.get("model_name")
             },
-            "data_sources": ["semantic_scholar", "arxiv", "pubmed"]
+            "data_sources": ["arxiv", "google_scholar", "crossref", "pubmed"]
         }
     except Exception as e:
         return {

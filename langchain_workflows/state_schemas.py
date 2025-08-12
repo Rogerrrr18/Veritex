@@ -32,6 +32,7 @@ class PaperSearchState(TypedDict):
     is_academic_query: Optional[bool]
     need_search_strategy: Optional[bool]
     force_search: Optional[bool]  # 强制执行搜索标志
+    allow_search: Optional[bool]  # 是否允许在本轮流程中执行搜索
     
     # 搜索相关
     search_keywords: Optional[List[str]]
@@ -49,6 +50,7 @@ def create_initial_state(
     user_message: str = None,
     max_results: int = 10,
     force_search: bool = False,
+    allow_search: bool = True,
     year_from: Optional[int] = None,
     year_to: Optional[int] = None,
     sources: Optional[List[str]] = None
@@ -83,6 +85,7 @@ def create_initial_state(
         is_academic_query=None,
         need_search_strategy=None,
         force_search=force_search,
+        allow_search=allow_search,
         search_keywords=None,
         search_results=None,
         error_message=None,

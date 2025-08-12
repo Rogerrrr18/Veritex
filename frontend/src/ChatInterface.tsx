@@ -322,7 +322,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         const keywordsMatch = response.response.match(/🏷️\s*\*\*关键词\*\*:\s*([^\n]+)/);
         if (keywordsMatch) {
           const keywordsText = keywordsMatch[1];
-          const keywords = keywordsText.split(/[,，]\s*/).map(k => k.trim()).filter(k => k);
+          const keywords = keywordsText.split(/[,，]\s*/).map((k: string) => k.trim()).filter((k: string) => k);
           
           // 创建简化的hierarchical_keywords结构
           hierarchicalKeywords = {

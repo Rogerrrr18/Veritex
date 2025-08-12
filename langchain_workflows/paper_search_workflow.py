@@ -323,14 +323,15 @@ class IntelligentPaperSearchAgent:
         is_academic = state.get("is_academic_query", False)
         need_search = state.get("need_search_strategy", False)
         force_search = state.get("force_search", False)  # 新增强制搜索标志
+        allow_search = state.get("allow_search", True)
         
-        # 如果设置了强制搜索，直接执行搜索（用于Search Papers按钮）
-        if force_search:
+        # 如果设置了强制搜索，且允许搜索，直接执行搜索（用于Search Papers按钮）
+        if force_search and allow_search:
             print("🔍 强制搜索模式，执行搜索")
             return "search"
         
-        # 正常模式：需要学术分析且需要搜索策略时才执行搜索
-        if is_academic and need_search:
+        # 正常模式：需要学术分析且需要搜索策略时才执行搜索，且必须允许搜索
+        if allow_search and is_academic and need_search:
             print("🔍 判断为学术查询，执行搜索")
             return "search"
         else:
@@ -583,7 +584,7 @@ class IntelligentPaperSearchAgent:
             print(f"❌ 构建搜索回复失败: {e}")
             return f"搜索完成，找到 {len(results)} 篇论文，但格式化过程出现问题。"
     
-    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True) -> Dict[str, Any]:
         """主要搜索接口"""
         if thread_id is None:
             thread_id = f"thread_{uuid.uuid4().hex[:8]}"
@@ -593,6 +594,7 @@ class IntelligentPaperSearchAgent:
             user_message=query,
             max_results=max_results,
             force_search=force_search,  # 传递强制搜索标志
+            allow_search=allow_search,
             year_from=year_from,
             year_to=year_to,
             sources=sources
@@ -687,10 +689,10 @@ def get_intelligent_paper_search_agent(enable_memory: bool = True) -> Intelligen
         _intelligent_agent = IntelligentPaperSearchAgent(enable_memory=enable_memory)
     return _intelligent_agent
 
-async def chat_with_search_strategy(query: str, thread_id: str = None, force_search: bool = False, max_results: int = 10, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None) -> Dict[str, Any]:
+async def chat_with_search_strategy(query: str, thread_id: str = None, force_search: bool = False, max_results: int = 10, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True) -> Dict[str, Any]:
     """智能聊天与搜索策略分析的统一入口"""
     agent = get_intelligent_paper_search_agent()
-    return await agent.search_papers(query, max_results, thread_id, force_search, year_from, year_to, sources)
+    return await agent.search_papers(query, max_results, thread_id, force_search, year_from, year_to, sources, allow_search)
 
 
 # 测试功能

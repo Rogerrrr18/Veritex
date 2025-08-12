@@ -316,7 +316,7 @@ function HomePage() {
       return
     }
     if (input.trim()) {
-      navigate('/chat', { state: { input } })
+      navigate('/conversation', { state: { input } })
     }
   }
 
@@ -428,7 +428,7 @@ function ReportPage() {
 
   const handleBackToChat = () => {
     // 返回聊天页面，不传递状态以保持现有聊天记录
-    navigate('/chat')
+    navigate('/conversation')
   }
 
 
@@ -699,14 +699,14 @@ function MyPage() {
       const chatData = item.data as ChatHistory;
       // 先保存聊天记录到当前会话
       localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
-      navigate('/chat');
+      navigate('/conversation');
     }
   }
 
   const handleReSearch = (item: HistoryItem) => {
     if (item.type === 'search') {
       const searchData = item.data as SearchHistory;
-      navigate('/chat', {
+      navigate('/conversation', {
         state: {
           input: searchData.originalQuery,
           preserveChat: true
@@ -716,7 +716,7 @@ function MyPage() {
       const chatData = item.data as ChatHistory;
       // 恢复聊天记录
       localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
-      navigate('/chat');
+      navigate('/conversation');
     }
   }
 
@@ -1046,7 +1046,7 @@ function App() {
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/invite" element={<InviteCodePage />} />
-      <Route path="/chat" element={<ChatInterface />} />
+      <Route path="/conversation" element={<ChatInterface />} />
       <Route path="/elicit" element={<ElicitPage />} />
       <Route path="/report" element={<ReportPage />} />
       <Route path="/my" element={<MyPage />} />

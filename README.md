@@ -5,7 +5,7 @@
 ## 🚀 核心特性
 
 - **智能关键词扩展**: 基于Groq LLM的学科自适应关键词扩展
-- **多源并行搜索**: 整合Semantic Scholar、arXiv、PubMed等数据源
+- **多源并行搜索**: 整合arXiv、Google Scholar、Crossref、PubMed等数据源
 - **作者网络分析**: 深度作者关系和合作网络分析
 - **响应式前端**: React + TypeScript构建的现代化界面
 - **高性能后端**: FastAPI异步架构，支持并发搜索

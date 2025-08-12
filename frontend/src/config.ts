@@ -101,14 +101,18 @@ export const apiCall = async (endpoint: string, data: any, method: 'GET' | 'POST
 export const api = {
   chat: (message: string, history: any[] = []) => 
     apiCall(API_CONFIG.ENDPOINTS.CHAT, { message, history }),
+  
+  expandKeywords: (query: string) =>
+    apiCall(API_CONFIG.ENDPOINTS.EXPAND_KEYWORDS, { query }),
     
-  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true, yearFrom?: string, yearTo?: string) =>
+  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true, yearFrom?: string, yearTo?: string, expandedKeywords?: any) =>
     apiCall(API_CONFIG.ENDPOINTS.SEARCH_PAPERS, { 
       query, 
       max_results: maxResults, 
       enable_expansion: enableExpansion,
       year_from: yearFrom ? parseInt(yearFrom) : undefined,
-      year_to: yearTo ? parseInt(yearTo) : undefined
+      year_to: yearTo ? parseInt(yearTo) : undefined,
+      expanded_keywords: expandedKeywords
     }),
     
   multiSourceSearch: (query: string, maxResults: number = 50, sources?: string[]) =>
