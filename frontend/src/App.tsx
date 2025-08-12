@@ -618,7 +618,7 @@ function MyPage() {
   const [unifiedHistory, setUnifiedHistory] = useState<HistoryItem[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectAll, setSelectAll] = useState(false)
-  const [filter, setFilter] = useState<'all' | 'search' | 'chat'>('all')
+  const [filter, setFilter] = useState<'search' | 'chat'>('search')
   // useGlobal hook available but not currently needed
 
   // 检查登录状态
@@ -642,7 +642,7 @@ function MyPage() {
     setUnifiedHistory(history)
   }
 
-  const filteredHistory = filter === 'all' ? unifiedHistory : unifiedHistory.filter(item => item.type === filter)
+  const filteredHistory = unifiedHistory.filter(item => item.type === filter)
 
   const handleSelectAll = () => {
     if (selectAll) {
@@ -761,39 +761,49 @@ function MyPage() {
               {selectedIds.length > 0 && ` · Selected ${selectedIds.length} items`}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            {/* 过滤器 */}
-            <div style={{ display: 'flex', gap: 4, marginRight: 12 }}>
-              {(['all', 'search', 'chat'] as const).map(filterType => (
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {/* 左侧过滤器按钮组 - 框选样式 */}
+            <div style={{ 
+              display: 'flex',
+              background: '#111',
+              borderRadius: 8,
+              border: '1px solid #333',
+              padding: '4px'
+            }}>
+              {([
+                { key: 'search', label: 'Search Result' }, 
+                { key: 'chat', label: 'Chat' }
+              ] as const).map(filterType => (
                 <button
-                  key={filterType}
-                  onClick={() => setFilter(filterType)}
+                  key={filterType.key}
+                  onClick={() => setFilter(filterType.key as 'search' | 'chat')}
                   style={{
-                    padding: '4px 12px',
+                    padding: '6px 16px',
                     borderRadius: 4,
-                    border: '1px solid var(--border-primary)',
-                    background: filter === filterType ? 'var(--accent-primary)' : 'transparent',
-                    color: filter === filterType ? '#fff' : 'var(--text-secondary)',
+                    border: 'none',
+                    background: filter === filterType.key ? 'var(--accent-primary)' : 'transparent',
+                    color: filter === filterType.key ? '#fff' : 'var(--text-secondary)',
                     cursor: 'pointer',
-                    fontSize: 12,
-                    textTransform: 'capitalize'
+                    fontSize: 14,
+                    transition: 'all 0.2s ease'
                   }}
                 >
-                  {filterType}
+                  {filterType.label}
                 </button>
               ))}
             </div>
-            <ThemeLanguageSwitcher className="my-page-switcher" />
+            {/* 右侧Home按钮 - 与左侧保持距离 */}
             <button
               onClick={() => navigate('/')}
               style={{
-                padding: '8px 16px',
+                padding: '6px 16px',
                 borderRadius: 6,
                 border: '1px solid var(--border-primary)',
                 background: 'transparent',
                 color: 'var(--text-primary)',
                 cursor: 'pointer',
-                fontSize: 14
+                fontSize: 14,
+                marginLeft: '32px'  // 与左侧双按钮组保持距离
               }}
             >
               Home

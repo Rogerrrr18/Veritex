@@ -73,9 +73,12 @@ class SemanticScholarAPI:
         self.base_url = "https://api.semanticscholar.org/graph/v1"
         self.session = None
         self._last_request_time = 0
-        self._min_delay = 2.0  # 增加最小请求间隔到2秒
-        self._max_retries = 5  # 增加最大重试次数到5次
-        self._base_backoff_delay = 3.0  # 基础退避延时
+        self._min_delay = 3.0  # 进一步增加最小请求间隔到3秒
+        self._max_retries = 3  # 减少重试次数以避免超时
+        self._base_backoff_delay = 5.0  # 增加基础退避延时
+        self._consecutive_429s = 0  # 连续429错误计数
+        self._total_requests = 0  # 总请求计数
+        self._successful_requests = 0  # 成功请求计数
         
     async def _get_session(self):
         """获取异步HTTP会话，带有合适的请求头"""
@@ -90,6 +93,8 @@ class SemanticScholarAPI:
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
         """搜索论文"""
+        self._total_requests += 1
+        logger.info(f"开始Semantic Scholar搜索: {query}, 限制: {limit} (总请求数: {self._total_requests})")
         for attempt in range(self._max_retries):
             try:
                 # 确保请求间隔（加入随机抖动避免同步请求）
@@ -115,11 +120,21 @@ class SemanticScholarAPI:
                 async with session.get(url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return self._parse_papers(data.get('data', []))
+                        self._consecutive_429s = 0  # 重置429计数器
+                        self._successful_requests += 1
+                        papers = self._parse_papers(data.get('data', []))
+                        logger.info(f"Semantic Scholar搜索成功，获得 {len(papers)} 篇论文")
+                        return papers
                     elif response.status == 429:
-                        # 处理429错误 - 指数退避策略
-                        wait_time = self._base_backoff_delay * (2 ** attempt) + random.uniform(0.5, 1.5)
-                        logger.warning(f"Semantic Scholar API限频 (429), 采用指数退避，等待 {wait_time:.1f} 秒后重试 (尝试 {attempt + 1}/{self._max_retries})")
+                        self._consecutive_429s += 1
+                        # 如果连续多次429错误，提早放弃以避免超时
+                        if self._consecutive_429s > 2:
+                            logger.warning(f"Semantic Scholar API连续限频 ({self._consecutive_429s}次)，放弃本次搜索")
+                            return []
+                        
+                        # 指数退避策略，但等待时间不要太长
+                        wait_time = min(self._base_backoff_delay * (1.5 ** attempt), 10.0) + random.uniform(0.5, 1.0)
+                        logger.warning(f"Semantic Scholar API限频 (429), 等待 {wait_time:.1f} 秒后重试 (尝试 {attempt + 1}/{self._max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
                     else:
@@ -130,6 +145,7 @@ class SemanticScholarAPI:
             except Exception as e:
                 logger.error(f"Semantic Scholar搜索错误: {e}")
                 if attempt == self._max_retries - 1:
+                    logger.warning(f"Semantic Scholar搜索最终失败，成功率: {self._successful_requests}/{self._total_requests}")
                     return []
                 # 异常时也采用退避策略
                 wait_time = self._min_delay * (attempt + 1)
@@ -438,7 +454,7 @@ class GoogleScholarAPI:
     
     def __init__(self):
         self.session = None
-        self._min_delay = (1, 3)  # 随机延迟范围（秒）
+        self._min_delay = (0.5, 1.5)  # 减少延迟范围以提高效率
         self._max_retries = 3
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
@@ -456,7 +472,14 @@ class GoogleScholarAPI:
             seen_urls = set()
             retrieved_count = 0
             import time as _time
-            overall_budget_s = float(os.getenv("GOOGLE_SCHOLAR_TIME_BUDGET", "6.0"))
+            # 动态设置时间预算：根据请求量调整，30篇以上给更多时间
+            base_budget = 15.0
+            if limit > 20:
+                time_multiplier = min(2.0, 1.0 + (limit - 20) / 30)  # 最多增加到2倍时间
+                overall_budget_s = base_budget * time_multiplier
+                logger.info(f"大量文献请求({limit}篇)，增加时间预算到 {overall_budget_s:.1f}秒")
+            else:
+                overall_budget_s = base_budget
             start_ts = _time.time()
             
             # 使用scholarly库进行搜索，增加超时控制
@@ -464,8 +487,11 @@ class GoogleScholarAPI:
                 search_iterator = scholarly.search_pubs(query)
                 
                 # 获取论文结果，增加超时保护
-                # 限制迭代次数，结合整体时间预算
-                max_iters = max(5, min(limit, 10))
+                # 根据请求量动态调整迭代次数
+                if limit > 20:
+                    max_iters = max(20, min(limit, 40))  # 大量请求时增加迭代次数
+                else:
+                    max_iters = max(10, min(limit, 20))
                 for i in range(max_iters):
                     try:
                         # 为每次搜索设置超时
@@ -729,20 +755,29 @@ class MultiSourceEngine:
         if year_from or year_to:
             logger.info(f"年份筛选: {year_from} - {year_to}")
         
-        # 计算每个源的搜索数量
+        # 计算每个源的搜索数量 - 为大量请求调整分配策略
         active_sources = self._count_enabled_sources()
-        per_source_limit = max(10, max_results // active_sources)
+        if max_results > 20:
+            # 大量请求时，给主要源(Google Scholar)更多配额
+            per_source_limit = max(15, int(max_results * 0.6 // max(1, active_sources - 1)))  # 主要源获得60%
+            google_scholar_limit = max(20, int(max_results * 0.8))  # Google Scholar获得80%
+            logger.info(f"大量请求模式：Google Scholar限制={google_scholar_limit}, 其他源限制={per_source_limit}")
+        else:
+            per_source_limit = max(10, max_results // active_sources)
+            google_scholar_limit = per_source_limit
         
         try:
             # 并行调用核心搜索源（arXiv和Google Scholar享受相同权重）
             tasks = []
-            per_task_timeout = float(os.getenv("SEARCH_TASK_TIMEOUT", "8.0"))
+            per_task_timeout = float(os.getenv("SEARCH_TASK_TIMEOUT", "20.0"))  # 增加超时时间
             
             # 核心数据源 - arXiv和Google Scholar权重相同
             if self.arxiv:
                 tasks.append(asyncio.wait_for(self.arxiv.search(query, per_source_limit), timeout=per_task_timeout))
             if self.google_scholar:
-                tasks.append(asyncio.wait_for(self.google_scholar.search(query, per_source_limit), timeout=per_task_timeout))
+                # Google Scholar使用专门的限制数量
+                search_limit = google_scholar_limit if max_results > 20 else per_source_limit
+                tasks.append(asyncio.wait_for(self.google_scholar.search(query, search_limit), timeout=per_task_timeout))
             
             # 添加可选数据源
             if self.semantic_scholar:
@@ -754,14 +789,22 @@ class MultiSourceEngine:
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            # 合并结果
+            # 合并结果，记录各源的贡献
             all_papers = []
+            source_stats = {}
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     logger.warning(f"搜索源 {i} 出错: {result}")
                     continue
                 elif isinstance(result, list):
                     all_papers.extend(result)
+                    # 记录各源获得的论文数
+                    source_name = result[0].source if result else f"source_{i}"
+                    source_stats[source_name] = len(result)
+            
+            # 输出各源统计信息
+            for source, count in source_stats.items():
+                logger.info(f"数据源 {source} 贡献了 {count} 篇论文")
             
             # 去重和排序
             deduplicated_papers = self._deduplicate_papers(all_papers)
@@ -783,17 +826,38 @@ class MultiSourceEngine:
             return []
     
     def _deduplicate_papers(self, papers: List[Paper]) -> List[Paper]:
-        """去重论文列表"""
+        """智能去重论文列表 - 优先保留高质量论文"""
         seen_titles = set()
+        seen_dois = set()
         unique_papers = []
+        duplicate_count = 0
         
-        for paper in papers:
-            # 简单的标题去重
+        # 按照质量排序：引用数高的优先，然后是有DOI的，最后是来源权重
+        papers_sorted = sorted(papers, key=lambda p: (
+            -(p.citations or 0),  # 引用数越多越好
+            p.doi is not None,   # 有DOI的优先
+            p.source == 'google_scholar'  # Google Scholar优先
+        ), reverse=True)
+        
+        for paper in papers_sorted:
+            # DOI去重优先级最高
+            if paper.doi and paper.doi not in seen_dois:
+                seen_dois.add(paper.doi)
+                unique_papers.append(paper)
+                continue
+            elif paper.doi and paper.doi in seen_dois:
+                duplicate_count += 1
+                continue
+                
+            # 标题去重
             title_key = paper.title.lower().strip()
             if title_key and title_key not in seen_titles:
                 seen_titles.add(title_key)
                 unique_papers.append(paper)
+            else:
+                duplicate_count += 1
         
+        logger.info(f"去重完成：保留 {len(unique_papers)} 篇，去除重复 {duplicate_count} 篇")
         return unique_papers
     
     def _filter_papers_by_year(self, papers: List[Paper], year_from: Optional[int], year_to: Optional[int]) -> List[Paper]:

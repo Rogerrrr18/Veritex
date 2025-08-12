@@ -491,6 +491,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             >
               返回首页
             </button>
+            {/* 侧边栏折叠/展开按钮 */}
+            <button
+              onClick={() => setIsKeywordPanelCollapsed(!isKeywordPanelCollapsed)}
+              style={{
+                padding: '6px 8px',
+                borderRadius: '6px',
+                border: '1px solid #666',
+                background: 'transparent',
+                color: '#3bb0e6',
+                cursor: 'pointer',
+                fontSize: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minWidth: '32px',
+                transition: 'all 0.2s ease'
+              }}
+              title={isKeywordPanelCollapsed ? '展开关键词面板' : '关闭关键词面板'}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#3bb0e6';
+                e.currentTarget.style.backgroundColor = 'rgba(59,176,230,0.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = '#666';
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              {isKeywordPanelCollapsed ? '◀' : '▶'}
+            </button>
           </div>
         </div>
 
@@ -829,7 +858,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               padding: '12px 16px',
               borderBottom: '1px solid #333',
               display: 'flex',
-              justifyContent: 'space-between',
+              justifyContent: 'center',
               alignItems: 'center',
               backgroundColor: '#111'
             }}>
@@ -841,20 +870,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               }}>
                 Keywords & Search
               </h3>
-              <button
-                onClick={() => setIsKeywordPanelCollapsed(true)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#a1a1aa',
-                  cursor: 'pointer',
-                  fontSize: '16px',
-                  padding: '4px'
-                }}
-                title="隐藏关键词面板"
-              >
-                ✕
-              </button>
             </div>
             
             <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -868,41 +883,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         </>
       )}
       
-      {/* 折叠后的展开按钮 */}
-      {isKeywordPanelCollapsed && (
-        <button
-          style={{
-            position: 'fixed',
-            top: '20px',
-            right: '20px',
-            width: '40px',
-            height: '40px',
-            borderRadius: '8px',
-            backgroundColor: '#333',
-            border: '1px solid #666',
-            color: '#3bb0e6',
-            cursor: 'pointer',
-            zIndex: 1000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '16px',
-            transition: 'all 0.2s'
-          }}
-          onClick={() => setIsKeywordPanelCollapsed(false)}
-          title="显示关键词面板"
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#444';
-            e.currentTarget.style.borderColor = '#3bb0e6';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = '#333';
-            e.currentTarget.style.borderColor = '#666';
-          }}
-        >
-          ◀
-        </button>
-      )}
 
       {/* 动画样式 */}
       <style>
