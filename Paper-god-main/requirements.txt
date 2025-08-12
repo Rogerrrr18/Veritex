@@ -1,9 +1,0 @@
-     fastapi
-     uvicorn
-     scholarly
-     pandas
-     groq
-     httpx
-     python-dotenv
-     supabase
-     openpyxl
