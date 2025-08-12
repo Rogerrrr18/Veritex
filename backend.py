@@ -285,7 +285,7 @@ async def search_papers_api(req: SearchRequest):
             # 直接调用多源搜索引擎，避免重复LLM分析
             try:
                 from multi_source_engine import MultiSourceEngine
-                search_engine = MultiSourceEngine(enable_mcp=False)
+                search_engine = MultiSourceEngine()
                 
                 # 从预扩展关键词构建查询
                 hierarchical = req.expanded_keywords['hierarchical_keywords']

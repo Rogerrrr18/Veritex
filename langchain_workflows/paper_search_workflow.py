@@ -44,7 +44,7 @@ class IntelligentPaperSearchAgent:
             try:
                 # 直接使用MultiSourceEngine避免循环依赖
                 from multi_source_engine import MultiSourceEngine
-                self._search_engine = MultiSourceEngine(enable_mcp=False)
+                self._search_engine = MultiSourceEngine()
                 print("✅ 多源搜索引擎实例化成功")
             except Exception as e:
                 print(f"❌ 搜索引擎实例化失败: {e}")

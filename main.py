@@ -64,14 +64,13 @@ class PaperGodSearchEngine:
     注意: 这个类保持向后兼容，实际由LangGraph工作流驱动
     """
     
-    def __init__(self, enable_mcp: bool = False):
+    def __init__(self):
         """初始化搜索引擎组件"""
         try:
             # 使用多源引擎作为基础搜索能力
-            self.multi_source_engine = MultiSourceEngine(enable_mcp=enable_mcp)
-            self.enable_mcp = enable_mcp
+            self.multi_source_engine = MultiSourceEngine()
             
-            logger.info(f"搜索引擎组件初始化成功 - MCP: {enable_mcp}")
+            logger.info(f"搜索引擎组件初始化成功")
             
             # 初始化智能工作流组件（延迟加载）
             self._intelligent_agent = None

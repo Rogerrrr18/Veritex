@@ -1,7 +1,7 @@
 """
 多源数据获取引擎 - Paper God核心搜索组件
-实现 Semantic Scholar + arXiv + Paperscraper + MCP增强 多源并行搜索
-集成MCP协议提供更稳定的API访问和增强的搜索功能
+实现 Semantic Scholar + arXiv + Google Scholar 多源并行搜索
+提供稳定的学术文献检索服务
 """
 
 import asyncio
@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
 PUBMED_ENABLED = PUBMED_API_KEY and PUBMED_API_KEY.lower() != "disabled"
 
-# 暂时禁用Semantic Scholar以避免API限额问题
-SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "false").lower() == "true"
-# 启用Google Scholar（使用scholarly库）- 默认禁用以避免Captcha/超时
+# Semantic Scholar API配置
+SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "true").lower() == "true"
+# Google Scholar配置（使用scholarly库）
 GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "false").lower() == "true"
 
 CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "true").lower() == "true" 
@@ -42,9 +42,9 @@ SPRINGER_ENABLED = SPRINGER_API_KEY and SPRINGER_API_KEY.lower() != "disabled"
 
 # 日志输出API状态
 logger.info(f"数据源状态:")
-logger.info(f"  - Semantic Scholar: {'启用' if SEMANTIC_SCHOLAR_ENABLED else '禁用（避免API限额）'}")
+logger.info(f"  - Semantic Scholar: {'启用' if SEMANTIC_SCHOLAR_ENABLED else '禁用'}")
 logger.info(f"  - arXiv: 启用")
-logger.info(f"  - Google Scholar: {'启用（scholarly库）' if GOOGLE_SCHOLAR_ENABLED else '禁用'}")  
+logger.info(f"  - Google Scholar: {'启用' if GOOGLE_SCHOLAR_ENABLED else '禁用'}")  
 logger.info(f"  - PubMed: {'启用' if PUBMED_ENABLED else '禁用'}")
 logger.info(f"  - Crossref: {'启用' if CROSSREF_ENABLED else '禁用'}")
 logger.info(f"  - IEEE Xplore: {'启用' if IEEE_ENABLED else '禁用'}")
@@ -67,30 +67,37 @@ class Paper:
     keywords: Optional[List[str]] = None  # 关键词
 
 class SemanticScholarAPI:
-    """Semantic Scholar API客户端"""
+    """Semantic Scholar API客户端 - 优化的限频处理"""
     
     def __init__(self):
         self.base_url = "https://api.semanticscholar.org/graph/v1"
         self.session = None
         self._last_request_time = 0
-        self._min_delay = 1.0  # 最小请求间隔1秒
-        self._max_retries = 3  # 最大重试次数
+        self._min_delay = 2.0  # 增加最小请求间隔到2秒
+        self._max_retries = 5  # 增加最大重试次数到5次
+        self._base_backoff_delay = 3.0  # 基础退避延时
         
     async def _get_session(self):
-        """获取异步HTTP会话"""
+        """获取异步HTTP会话，带有合适的请求头"""
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            headers = {
+                'User-Agent': 'PaperGod/1.0 (Academic Research Tool; +https://github.com/paper-god)',
+                'Accept': 'application/json',
+                'Accept-Encoding': 'gzip, deflate'
+            }
+            self.session = aiohttp.ClientSession(headers=headers)
         return self.session
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
         """搜索论文"""
         for attempt in range(self._max_retries):
             try:
-                # 确保请求间隔
+                # 确保请求间隔（加入随机抖动避免同步请求）
                 current_time = time.time()
                 time_since_last = current_time - self._last_request_time
-                if time_since_last < self._min_delay:
-                    await asyncio.sleep(self._min_delay - time_since_last)
+                required_delay = self._min_delay + random.uniform(0.1, 0.5)
+                if time_since_last < required_delay:
+                    await asyncio.sleep(required_delay - time_since_last)
                 
                 session = await self._get_session()
                 
@@ -110,9 +117,9 @@ class SemanticScholarAPI:
                         data = await response.json()
                         return self._parse_papers(data.get('data', []))
                     elif response.status == 429:
-                        # 处理429错误 - 等待更长时间后重试
-                        wait_time = (attempt + 1) * 2  # 指数退避
-                        logger.warning(f"Semantic Scholar API限频 (429), 等待 {wait_time} 秒后重试 (尝试 {attempt + 1}/{self._max_retries})")
+                        # 处理429错误 - 指数退避策略
+                        wait_time = self._base_backoff_delay * (2 ** attempt) + random.uniform(0.5, 1.5)
+                        logger.warning(f"Semantic Scholar API限频 (429), 采用指数退避，等待 {wait_time:.1f} 秒后重试 (尝试 {attempt + 1}/{self._max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
                     else:
@@ -124,7 +131,9 @@ class SemanticScholarAPI:
                 logger.error(f"Semantic Scholar搜索错误: {e}")
                 if attempt == self._max_retries - 1:
                     return []
-                await asyncio.sleep(1)  # 异常时也等待1秒
+                # 异常时也采用退避策略
+                wait_time = self._min_delay * (attempt + 1)
+                await asyncio.sleep(wait_time)
         
         return []
     
@@ -271,39 +280,6 @@ class ArxivAPI:
         if self.session and not self.session.closed:
             await self.session.close()
 
-class PaperscraperClient:
-    """Paperscraper客户端 - 替换scholarly的核心组件"""
-    
-    def __init__(self):
-        self.session = None
-        
-    async def _get_session(self):
-        """获取异步HTTP会话"""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-        return self.session
-        
-    async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """使用paperscraper搜索（模拟实现，实际需要安装paperscraper）"""
-        try:
-            # 注意：这里是简化的模拟实现
-            # 实际部署时需要安装和配置paperscraper
-            logger.info(f"Paperscraper搜索: {query}")
-            
-            # 模拟延迟
-            await asyncio.sleep(random.uniform(0.5, 1.0))
-            
-            # 这里返回空列表，实际实现时替换为真正的paperscraper调用
-            return []
-            
-        except Exception as e:
-            logger.error(f"Paperscraper搜索错误: {e}")
-            return []
-    
-    async def close(self):
-        """关闭HTTP会话"""
-        if self.session and not self.session.closed:
-            await self.session.close()
 
 class PubMedAPI:
     """PubMed API客户端 - 用于生物医学文献检索"""
@@ -598,7 +574,7 @@ class GoogleScholarAPI:
         """关闭会话（scholarly库无需手动关闭）"""
         pass
 
-# MCP增强的语义搜索引擎
+# 学术数据源API集合
 class CrossrefAPI:
     """Crossref API客户端 - 开放获取学术文献数据源"""
     
@@ -708,95 +684,10 @@ class CrossrefAPI:
         if self.session and not self.session.closed:
             await self.session.close()
 
-class MCPEnhancedSemanticAPI:
-    """MCP增强的Semantic Scholar API - 提供更稳定的搜索服务"""
+class MultiSourceEngine:
+    """多源数据获取引擎 - 核心搜索组件"""
     
     def __init__(self):
-        self.mcp_client = None
-        self.fallback_api = SemanticScholarAPI()  # 保留原API作为后备
-        
-    async def _get_mcp_client(self):
-        """获取MCP客户端 - 优先尝试MCP服务"""
-        if self.mcp_client is None:
-            try:
-                logger.info("尝试连接Paper God MCP Semantic Scholar服务...")
-                # 使用我们新的直接MCP客户端
-                from mcp_semantic_scholar_client import get_semantic_scholar_mcp_client
-                mcp_client = await get_semantic_scholar_mcp_client()
-                
-                # 测试连接
-                test_result = await mcp_client.search_papers("test", limit=1)
-                
-                if test_result.success:
-                    self.mcp_client = mcp_client
-                    logger.info("✓ Paper God MCP Semantic Scholar连接成功，优先使用MCP服务")
-                    return self.mcp_client
-                else:
-                    logger.warning(f"✗ MCP Semantic Scholar测试失败，回退到传统API: {test_result.error}")
-                    self.mcp_client = False  # 标记为MCP不可用
-            except Exception as e:
-                logger.warning(f"✗ MCP客户端初始化失败，回退到传统API: {str(e)[:100]}...")
-                self.mcp_client = False  # 标记为MCP不可用
-        
-        # 如果MCP不可用，返回None
-        return self.mcp_client if self.mcp_client is not False else None
-        
-    async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """使用MCP增强搜索，失败时回退到原API"""
-        try:
-            mcp_client = await self._get_mcp_client()
-            if mcp_client:
-                # 使用MCP增强搜索
-                result = await mcp_client.search_papers(query, limit)
-                if result.success and result.data:
-                    # 转换为标准Paper格式
-                    papers = []
-                    for paper_data in result.data:
-                        authors = paper_data.get('authors', [])
-                        if isinstance(authors, str):
-                            authors = [authors]
-                        elif isinstance(authors, list):
-                            authors = [author.get('name', author) if isinstance(author, dict) else str(author) for author in authors]
-                        
-                        paper = Paper(
-                            title=paper_data.get('title', ''),
-                            authors=authors,
-                            abstract=paper_data.get('abstract', ''),
-                            year=paper_data.get('year'),
-                            journal=paper_data.get('journal', {}).get('name', '') if isinstance(paper_data.get('journal'), dict) else str(paper_data.get('journal', '')),
-                            url=paper_data.get('url', ''),
-                            doi=paper_data.get('externalIds', {}).get('DOI') if paper_data.get('externalIds') else None,
-                            citations=paper_data.get('citationCount', 0),
-                            source='semantic_scholar_mcp'
-                        )
-                        papers.append(paper)
-                    
-                    logger.info(f"✓ MCP语义搜索成功: {len(papers)} 篇论文（优先级模式）")
-                    return papers
-                else:
-                    raise Exception(f"MCP搜索返回错误: {result.error}")
-            else:
-                raise Exception("MCP客户端不可用")
-                
-        except Exception as e:
-            logger.info(f"→ MCP搜索不可用({str(e)[:50]}...)，使用传统API作为后备")
-            # 回退到原始API
-            return await self.fallback_api.search(query, limit)
-    
-    async def close(self):
-        """关闭连接"""
-        try:
-            if self.mcp_client:
-                await self.mcp_client.close()
-        except Exception as e:
-            logger.warning(f"关闭MCP客户端时出错: {e}")
-        await self.fallback_api.close()
-
-# 更新MultiSourceEngine类以包含MCP增强的数据源
-class MultiSourceEngine:
-    """多源数据获取引擎 - 核心搜索组件（MCP增强版）"""
-    
-    def __init__(self, enable_mcp: bool = True):
         # 初始化核心数据源
         self.arxiv = ArxivAPI()
         self.google_scholar = GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
@@ -806,7 +697,6 @@ class MultiSourceEngine:
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
         
-        self.enable_mcp = False
         logger.info(f"多源搜索引擎初始化完成，启用数据源数量: {self._count_enabled_sources()}")
         
     def _count_enabled_sources(self) -> int:
@@ -959,11 +849,13 @@ class MultiSourceEngine:
                 year_bonus = max(0, (paper.year - (current_year - 10)) / 10.0)
                 score += year_bonus
             
-            # 数据源权重（MCP增强版本权重更高）
+            # 数据源权重
             source_weights = {
                 'semantic_scholar': 1.3,
                 'arxiv': 1.1,
-                'pubmed': 1.2
+                'pubmed': 1.2,
+                'google_scholar': 1.2,
+                'crossref': 1.0
             }
             score *= source_weights.get(paper.source, 1.0)
             
@@ -985,21 +877,6 @@ class MultiSourceEngine:
             coros.append(self.pubmed.close())
         await asyncio.gather(*coros)
         
-    async def search_with_mcp_fallback(
-        self, 
-        query: str, 
-        max_results: int = 50,
-        year_from: Optional[int] = None,
-        year_to: Optional[int] = None,
-        sources: Optional[List[str]] = None
-    ) -> List[Paper]:
-        """带MCP后备的搜索方法 - 确保高可用性"""
-        # 直接并行搜索（不再使用 MCP 回退）
-        try:
-            return await self.search_parallel_with_filters(query, max_results, year_from, year_to, sources)
-        except Exception as e:
-            logger.error(f"并行搜索失败: {e}")
-            return []
 
 # 使用示例
 async def main():
