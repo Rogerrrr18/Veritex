@@ -25,6 +25,7 @@ interface KeywordCloudWidgetProps {
   hierarchicalKeywords: HierarchicalKeywords | null;
   originalQuery?: string;
   isDraggable?: boolean;
+  theme?: 'light' | 'dark';
 }
 
 interface SearchSettings {
@@ -44,7 +45,8 @@ interface KeywordItem {
 const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   hierarchicalKeywords,
   originalQuery = '',
-  isDraggable = true
+  isDraggable = true,
+  theme = 'dark'
 }) => {
   const navigate = useNavigate();
   const [keywords, setKeywords] = useState<KeywordItem[]>([]);
@@ -192,18 +194,18 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        backgroundColor: '#0a0a0a'
+        backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3'
       }}>
         {/* 搜索参数设置区域 */}
         <div style={{
           padding: '16px',
-          backgroundColor: '#111',
+          backgroundColor: theme === 'dark' ? '#111' : '#f5f3ea',
           borderBottom: '1px solid #333'
         }}>
           <h4 style={{ 
             margin: '0 0 12px 0', 
             fontSize: '14px', 
-            color: '#fff',
+            color: theme === 'dark' ? '#fff' : '#1f2937',
             fontWeight: '600'
           }}>
             Search Parameters
@@ -215,7 +217,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               <label style={{ 
                 display: 'block', 
                 fontSize: '12px', 
-                color: '#a1a1aa', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
                 marginBottom: '4px' 
               }}>
                 Max Papers
@@ -233,10 +235,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                   width: '100%',
                   padding: '6px 8px',
                   fontSize: '13px',
-                  border: '1px solid #333',
+                  border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
                   borderRadius: '6px',
-                  backgroundColor: '#1a1a1a',
-                  color: '#fff',
+                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
                   outline: 'none'
                 }}
               />
@@ -248,7 +250,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 <label style={{ 
                   display: 'block', 
                   fontSize: '12px', 
-                  color: '#a1a1aa', 
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
                   marginBottom: '4px' 
                 }}>
                   From Year
@@ -265,10 +267,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                     width: '100%',
                     padding: '8px',
                     fontSize: '13px',
-                    border: '1px solid #333',
+                    border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
                     borderRadius: '6px',
-                    backgroundColor: '#1a1a1a',
-                    color: '#fff',
+                    backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                    color: theme === 'dark' ? '#fff' : '#1f2937',
                     outline: 'none'
                   }}
                 />
@@ -277,7 +279,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 <label style={{ 
                   display: 'block', 
                   fontSize: '12px', 
-                  color: '#a1a1aa', 
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
                   marginBottom: '4px' 
                 }}>
                   To Year
@@ -294,10 +296,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                     width: '100%',
                     padding: '8px',
                     fontSize: '13px',
-                    border: '1px solid #333',
+                    border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
                     borderRadius: '6px',
-                    backgroundColor: '#1a1a1a',
-                    color: '#fff',
+                    backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                    color: theme === 'dark' ? '#fff' : '#1f2937',
                     outline: 'none'
                   }}
                 />
@@ -310,7 +312,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           flex: 1,
           padding: '20px',
           textAlign: 'center',
-          color: '#6b7280',
+          color: theme === 'dark' ? '#6b7280' : '#9ca3af',
           fontSize: '14px',
           display: 'flex',
           flexDirection: 'column',
@@ -330,18 +332,18 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       height: '100%',
       display: 'flex',
       flexDirection: 'column',
-      backgroundColor: '#0a0a0a'
+      backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3'
     }}>
       {/* 搜索参数设置区域 - 移至顶部 */}
       <div style={{
         padding: '12px',
-        backgroundColor: '#111',
-        borderBottom: '1px solid #333'
+        backgroundColor: theme === 'dark' ? '#111' : '#f5f3ea',
+        borderBottom: theme === 'dark' ? '1px solid #333' : '1px solid #e5e2d9'
       }}>
         <h4 style={{ 
           margin: '0 0 8px 0', 
           fontSize: '13px', 
-          color: '#fff',
+          color: theme === 'dark' ? '#fff' : '#1f2937',
           fontWeight: '600'
         }}>
           Search Parameters
@@ -353,7 +355,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             <label style={{ 
               display: 'block', 
               fontSize: '12px', 
-              color: '#a1a1aa', 
+              color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
               marginBottom: '4px' 
             }}>
               Max Papers
@@ -371,10 +373,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 width: '100%',
                 padding: '6px 8px',
                 fontSize: '13px',
-                border: '1px solid #333',
+                border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
                 borderRadius: '6px',
-                backgroundColor: '#1a1a1a',
-                color: '#fff',
+                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                color: theme === 'dark' ? '#fff' : '#1f2937',
                 outline: 'none'
               }}
             />
@@ -386,7 +388,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               <label style={{ 
                 display: 'block', 
                 fontSize: '12px', 
-                color: '#a1a1aa', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
                 marginBottom: '4px' 
               }}>
                 From Year
@@ -403,10 +405,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                   width: '100%',
                   padding: '6px 8px',
                   fontSize: '13px',
-                  border: '1px solid #333',
+                  border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
                   borderRadius: '6px',
-                  backgroundColor: '#1a1a1a',
-                  color: '#fff',
+                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
                   outline: 'none'
                 }}
               />
@@ -415,7 +417,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               <label style={{ 
                 display: 'block', 
                 fontSize: '12px', 
-                color: '#a1a1aa', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
                 marginBottom: '4px' 
               }}>
                 To Year
@@ -432,10 +434,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                   width: '100%',
                   padding: '6px 8px',
                   fontSize: '13px',
-                  border: '1px solid #333',
+                  border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
                   borderRadius: '6px',
-                  backgroundColor: '#1a1a1a',
-                  color: '#fff',
+                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
                   outline: 'none'
                 }}
               />
@@ -454,17 +456,17 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         <div style={{
           marginBottom: '16px',
           paddingBottom: '12px',
-          borderBottom: '1px solid #333'
+          borderBottom: theme === 'dark' ? '1px solid #333' : '1px solid #e5e2d9'
         }}>
           <h4 style={{ 
             margin: '0 0 4px 0', 
             fontSize: '16px', 
-            color: '#fff',
+            color: theme === 'dark' ? '#fff' : '#1f2937',
             fontWeight: '600'
           }}>
             Keywords Cloud
           </h4>
-          <div style={{ fontSize: '12px', color: '#a1a1aa' }}>
+          <div style={{ fontSize: '12px', color: theme === 'dark' ? '#a1a1aa' : '#6b7280' }}>
             {keywords.length} keywords • Click to remove
           </div>
         </div>
@@ -477,7 +479,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           {keywords.length === 0 ? (
             <div style={{
               textAlign: 'center',
-              color: '#6b7280',
+              color: theme === 'dark' ? '#6b7280' : '#9ca3af',
               fontSize: '13px',
               padding: '20px'
             }}>
@@ -635,10 +637,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 flex: 1,
                 padding: '8px 12px',
                 fontSize: '13px',
-                border: '1px solid #333',
+                border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
                 borderRadius: '6px',
-                backgroundColor: '#1a1a1a',
-                color: '#fff',
+                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                color: theme === 'dark' ? '#fff' : '#1f2937',
                 outline: 'none'
               }}
             />
@@ -673,7 +675,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               border: 'none',
               borderRadius: '8px',
               backgroundColor: keywords.length > 0 && !isLoading ? '#10b981' : '#666',
-              color: '#fff',
+              color: theme === 'dark' ? '#fff' : '#1f2937',
               cursor: keywords.length > 0 && !isLoading ? 'pointer' : 'not-allowed',
               transition: 'all 0.2s',
               display: 'flex',

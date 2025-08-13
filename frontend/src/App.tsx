@@ -251,17 +251,6 @@ function HomePage() {
           </ul>
         </nav>
         <div className="header-right">
-          {hasValidSession ? (
-            <>
-              <button 
-                className="btn btn-primary" 
-                onClick={() => navigate('/my')}
-                style={{ marginRight: 8 }}
-              >
-                My
-              </button>
-            </>
-          ) : null}
           <button className="btn btn-primary" onClick={() => navigate('/invite')}>Start free trial</button>
         </div>
       </header>
@@ -278,14 +267,14 @@ function HomePage() {
             <input
               type="text"
               className="input"
-              placeholder={hasValidSession ? "请输入关键词或学术问题..." : "请先获取内测邀请码"}
+              placeholder={hasValidSession ? "Always feel free to ask！" : "请先获取内测邀请码"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={!hasValidSession}
             />
             <div style={{ display: 'flex', gap: '12px' }}>
               <button type="submit" className="btn btn-secondary">
-                {hasValidSession ? '🔍 Search & Chat' : 'Get Beta Code'}
+                {hasValidSession ? 'Search & Chat' : 'Get Beta Code'}
               </button>
             </div>
           </form>

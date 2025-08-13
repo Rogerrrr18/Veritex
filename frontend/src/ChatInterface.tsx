@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { api } from './config';
+import { api, apiCall, API_CONFIG } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
 import TokenProgress from './components/TokenProgress';
+import { useGlobal } from './contexts/GlobalContext';
 import { 
   UnifiedHistoryService,
   type HistoryItem, 
@@ -18,6 +19,8 @@ interface Message {
   timestamp: number;
   analysisResult?: any;
   hierarchicalKeywords?: any;
+  needsSearchConfirmation?: boolean;
+  isEditing?: boolean;
 }
 
 interface ChatInterfaceProps {
@@ -30,7 +33,10 @@ const CHAT_ANALYSIS_KEY = 'veritex_current_analysis';
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { theme, toggleTheme } = useGlobal();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string>('');
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [currentAnalysis, setCurrentAnalysis] = useState<any>(null);
@@ -258,6 +264,94 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       setInputMessage(initialInput);
     }
   }, [initialInput, preserveChat]);
+
+  // LLM模式切换快捷键监听
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.shiftKey && event.key === 'Tab') {
+        event.preventDefault();
+        
+        // 切换模式
+        const newMode = llmMode === 'auto-search' ? 'chat-plan' : 'auto-search';
+        setLlmMode(newMode);
+        
+        // 保存到localStorage
+        localStorage.setItem('veritex_llm_mode', newMode);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [llmMode]);
+
+  // 处理搜索确认
+  const handleSearchConfirmation = async (originalQuery: string, messageId: string) => {
+    setIsLoading(true);
+    
+    try {
+      // 切换到auto-search模式执行搜索
+      const response = await api.chat(originalQuery, []);
+      
+      // 更新原始消息，移除确认按钮
+      const updatedMessages = messages.map(msg => 
+        msg.id === messageId 
+          ? { ...msg, needsSearchConfirmation: false }
+          : msg
+      );
+      
+      // 检查是否是学术查询（有搜索结果）
+      let analysisResult = null;
+      let hierarchicalKeywords = null;
+      
+      if (response.analysis_result) {
+        analysisResult = response.analysis_result;
+        if (analysisResult && analysisResult.hierarchical_keywords) {
+          hierarchicalKeywords = analysisResult.hierarchical_keywords;
+          setCurrentAnalysis(analysisResult);
+        }
+      }
+
+      // 创建搜索结果消息
+      const searchResultMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: response.response || '搜索完成。',
+        isUser: false,
+        timestamp: Date.now() + 1,
+        analysisResult,
+        hierarchicalKeywords
+      };
+
+      const finalMessages = [...updatedMessages, searchResultMessage];
+      setMessages(finalMessages);
+      saveChatHistory(finalMessages, analysisResult);
+
+      // 如果有搜索结果，保存到Search历史
+      if (response.is_academic_query && response.search_results && response.search_results.length > 0) {
+        saveSearchResultToHistory(originalQuery, response);
+      }
+
+    } catch (error: any) {
+      console.error('Search confirmation error:', error);
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: `搜索时发生错误：${error.message || '未知错误'}`,
+        isUser: false,
+        timestamp: Date.now() + 1
+      };
+      
+      const updatedMessages = messages.map(msg => 
+        msg.id === messageId 
+          ? { ...msg, needsSearchConfirmation: false }
+          : msg
+      );
+      
+      const errorMessages = [...updatedMessages, errorMessage];
+      setMessages(errorMessages);
+      saveChatHistory(errorMessages, currentAnalysis);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // 加载My面板历史记录
   const loadMyPanelHistory = async () => {
@@ -530,8 +624,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     setIsLoading(true);
 
     try {
-      // 调用后端chat API
-      const response = await api.chat(userMessage.text, []);
+      // 根据LLM模式调用不同的后端API
+      let response;
+      if (llmMode === 'auto-search') {
+        // Auto-search模式：使用现有的chat API，支持自动关键词扩展
+        response = await api.chat(userMessage.text, []);
+      } else {
+        // Chat & Plan模式：调用纯聊天API，传递mode参数
+        response = await apiCall(API_CONFIG.ENDPOINTS.CHAT, { 
+          message: userMessage.text, 
+          history: [],
+          mode: 'chat-only'
+        });
+      }
       
       // 检查是否是学术查询（有搜索结果）
       let analysisResult = null;
@@ -573,13 +678,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         }
       }
 
+      // 在Chat & Plan模式下，检查是否需要搜索确认
+      let assistantText = response.response || '抱歉，我无法处理您的请求。';
+      let needsSearchConfirmation = false;
+      
+      if (llmMode === 'chat-plan' && response.is_academic_query && !response.search_results) {
+        // 在Chat & Plan模式下，如果识别到学术查询但没有执行搜索，询问用户
+        assistantText += '\n\n🔍 我注意到您的问题涉及学术研究。是否需要我为您搜索相关文献？';
+        needsSearchConfirmation = true;
+      }
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: response.response || '抱歉，我无法处理您的请求。',
+        text: assistantText,
         isUser: false,
         timestamp: Date.now() + 1,
         analysisResult,
-        hierarchicalKeywords
+        hierarchicalKeywords,
+        needsSearchConfirmation
       };
 
       const finalMessages = [...newMessages, assistantMessage];
@@ -616,21 +732,96 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     }
   };
 
-  // 格式化时间
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString('zh-CN', { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
+  // 开始编辑消息
+  const startEditMessage = (message: Message) => {
+    setEditingMessageId(message.id);
+    setEditingText(message.text);
+  };
+
+  // 取消编辑
+  const cancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingText('');
+  };
+
+  // 保存编辑
+  const saveEdit = async () => {
+    if (editingMessageId && editingText.trim()) {
+      // 找到要编辑的消息索引
+      const messageIndex = messages.findIndex(m => m.id === editingMessageId);
+      if (messageIndex !== -1) {
+        // 创建新的消息数组，保留到编辑消息之前的所有消息
+        const newMessages = messages.slice(0, messageIndex);
+        
+        // 添加编辑后的用户消息
+        const editedMessage: Message = {
+          ...messages[messageIndex],
+          text: editingText.trim()
+        };
+        newMessages.push(editedMessage);
+        
+        setMessages(newMessages);
+        
+        // 取消编辑状态
+        setEditingMessageId(null);
+        setEditingText('');
+        
+        // 重新发送消息以获取新的AI回复
+        try {
+          setIsLoading(true);
+          const response = await api.chat(editedMessage.text, newMessages);
+          
+          // 保存分析结果以供关键词面板使用
+          if (response.hierarchical_keywords) {
+            setCurrentAnalysis(response);
+          }
+          
+          const aiMessage: Message = {
+            id: Date.now().toString() + '_ai',
+            text: response.analysis || response.message || '分析完成',
+            isUser: false,
+            timestamp: Date.now(),
+            analysisResult: response,
+            hierarchicalKeywords: response.hierarchical_keywords
+          };
+          
+          const finalMessages = [...newMessages, aiMessage];
+          setMessages(finalMessages);
+          saveChatHistory(finalMessages, response);
+          
+        } catch (error: any) {
+          console.error('重新发送失败:', error);
+          const errorMessage: Message = {
+            id: Date.now().toString() + '_error',
+            text: `抱歉，重新分析时出错：${error.message}`,
+            isUser: false,
+            timestamp: Date.now()
+          };
+          const errorMessages = [...newMessages, errorMessage];
+          setMessages(errorMessages);
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    }
+  };
+
+  // 复制消息内容
+  const copyMessage = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      // 可以添加一个临时的复制成功提示
+    } catch (error) {
+      console.error('复制失败:', error);
+    }
   };
 
   return (
     <div className={`chat-interface ${className}`} style={{
       display: 'flex',
       height: '100vh',
-      backgroundColor: '#000',
-      color: '#fff',
+      backgroundColor: theme === 'dark' ? '#000' : '#fefcf3',
+      color: theme === 'dark' ? '#fff' : '#1f2937',
       overflow: 'hidden'
     }}>
       {/* 左侧My面板 */}
@@ -638,8 +829,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         <div style={{
           width: isMobile ? '100vw' : `${myPanelWidth}px`,
           height: '100vh',
-          borderRight: '1px solid #333',
-          backgroundColor: '#0a0a0a',
+          borderRight: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+          backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3',
           display: 'flex',
           flexDirection: 'column',
           minWidth: isMobile ? '100vw' : '280px',
@@ -651,8 +842,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           {/* My面板头部 */}
           <div style={{
             padding: '12px 16px',
-            borderBottom: '1px solid #333',
-            backgroundColor: '#111'
+            borderBottom: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+            backgroundColor: theme === 'dark' ? '#111' : '#f5f3ea'
           }}>
             {/* Recent标题和New search按钮 */}
             <div style={{
@@ -665,7 +856,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 margin: '0', 
                 fontSize: '14px', 
                 fontWeight: '600',
-                color: '#fff'
+                color: theme === 'dark' ? '#fff' : '#1f2937'
               }}>
                 Recent
               </h3>
@@ -695,9 +886,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   style={{
                     width: '24px',
                     height: '24px',
-                    borderRadius: '50%',
+                    borderRadius: '12px',
                     border: '1px solid #10b981',
-                    backgroundColor: 'rgba(16,185,129,0.1)',
+                    backgroundColor: theme === 'dark' ? 'rgba(16,185,129,0.1)' : 'rgba(16,185,129,0.05)',
                     color: '#10b981',
                     cursor: 'pointer',
                     display: 'flex',
@@ -712,7 +903,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 </button>
                 <span style={{
                   fontSize: '12px',
-                  color: '#999',
+                  color: theme === 'dark' ? '#999' : '#6b7280',
                   fontWeight: '500'
                 }}>
                   New search
@@ -731,9 +922,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   width: '24px',
                   height: '24px',
                   borderRadius: '50%',
-                  border: '1px solid #666',
-                  background: 'rgba(0,0,0,0.8)',
-                  color: '#999',
+                  border: `1px solid ${theme === 'dark' ? '#666' : '#d1d5db'}`,
+                  background: theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)',
+                  color: theme === 'dark' ? '#999' : '#6b7280',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -761,8 +952,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   borderRadius: '4px',
                   fontSize: '12px',
                   cursor: 'pointer',
-                  backgroundColor: filter === 'search' ? '#3bb0e6' : '#333',
-                  color: filter === 'search' ? '#fff' : '#999',
+                  backgroundColor: filter === 'search' ? '#3bb0e6' : (theme === 'dark' ? '#333' : '#e5e5e5'),
+                  color: filter === 'search' ? '#fff' : (theme === 'dark' ? '#999' : '#6b7280'),
                   transition: 'all 0.2s'
                 }}
               >
@@ -777,8 +968,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   borderRadius: '4px',
                   fontSize: '12px',
                   cursor: 'pointer',
-                  backgroundColor: filter === 'chat' ? '#3bb0e6' : '#333',
-                  color: filter === 'chat' ? '#fff' : '#999',
+                  backgroundColor: filter === 'chat' ? '#3bb0e6' : (theme === 'dark' ? '#333' : '#e5e5e5'),
+                  color: filter === 'chat' ? '#fff' : (theme === 'dark' ? '#999' : '#6b7280'),
                   transition: 'all 0.2s'
                 }}
               >
@@ -799,7 +990,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   alignItems: 'center',
                   gap: '4px',
                   cursor: 'pointer',
-                  color: '#999'
+                  color: theme === 'dark' ? '#999' : '#6b7280'
                 }}>
                   <input
                     type="checkbox"
@@ -881,8 +1072,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                       handleViewItem(item);
                     }}
                     style={{
-                      backgroundColor: selectedIds.includes(item.id) ? 'rgba(59,176,230,0.1)' : '#1a1a1a',
-                      border: selectedIds.includes(item.id) ? '1px solid #3bb0e6' : '1px solid #333',
+                      backgroundColor: selectedIds.includes(item.id) 
+                        ? 'rgba(59,176,230,0.1)' 
+                        : (theme === 'dark' ? '#1a1a1a' : '#ffffff'),
+                      border: selectedIds.includes(item.id) 
+                        ? '1px solid #3bb0e6' 
+                        : `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
                       borderRadius: '6px',
                       padding: '8px',
                       cursor: 'pointer',
@@ -890,12 +1085,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                     }}
                     onMouseEnter={(e) => {
                       if (!selectedIds.includes(item.id)) {
-                        e.currentTarget.style.backgroundColor = '#222';
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? '#222' : '#f0ede4';
                       }
                     }}
                     onMouseLeave={(e) => {
                       if (!selectedIds.includes(item.id)) {
-                        e.currentTarget.style.backgroundColor = '#1a1a1a';
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? '#1a1a1a' : '#fefcf3';
                       }
                     }}
                   >
@@ -1010,11 +1205,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                             transition: 'all 0.2s'
                           }}
                           onMouseEnter={(e) => {
-                            e.currentTarget.style.color = '#999';
-                            e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                            e.currentTarget.style.color = theme === 'dark' ? '#999' : '#5a5a5a';
+                            e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
                           }}
                           onMouseLeave={(e) => {
-                            e.currentTarget.style.color = '#666';
+                            e.currentTarget.style.color = theme === 'dark' ? '#666' : '#9ca3af';
                             e.currentTarget.style.backgroundColor = 'transparent';
                           }}
                         >
@@ -1052,7 +1247,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                                 transition: 'background-color 0.2s'
                               }}
                               onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = '#333';
+                                e.currentTarget.style.backgroundColor = theme === 'dark' ? '#333' : 'rgba(0,0,0,0.05)';
                               }}
                               onMouseLeave={(e) => {
                                 e.currentTarget.style.backgroundColor = 'transparent';
@@ -1077,7 +1272,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                                 transition: 'background-color 0.2s'
                               }}
                               onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = '#333';
+                                e.currentTarget.style.backgroundColor = theme === 'dark' ? '#333' : 'rgba(0,0,0,0.05)';
                               }}
                               onMouseLeave={(e) => {
                                 e.currentTarget.style.backgroundColor = 'transparent';
@@ -1106,11 +1301,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         {/* 顶部标题栏 */}
         <div style={{
           padding: '16px 20px',
-          borderBottom: '1px solid #333',
+          borderBottom: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
-          position: 'relative'
+          position: 'relative',
+          backgroundColor: theme === 'dark' ? '#000' : '#fefcf3'
         }}>
           {/* My折叠面板控制按钮 - 移到最左侧，无边框，横线左对齐 */}
           <button
@@ -1134,7 +1330,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             }}
             title={isMyPanelCollapsed ? 'Expand recent history' : 'Collapse recent history'}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(161,161,170,0.1)';
+              e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(161,161,170,0.1)' : 'rgba(0,0,0,0.05)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
@@ -1224,7 +1420,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 e.currentTarget.style.backgroundColor = 'rgba(59,176,230,0.1)';
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = '#666';
+                e.currentTarget.style.borderColor = theme === 'dark' ? '#666' : '#d6d3d1';
                 e.currentTarget.style.backgroundColor = 'transparent';
               }}
             >
@@ -1249,8 +1445,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 display: 'flex',
                 justifyContent: message.isUser ? 'flex-end' : 'flex-start',
                 alignItems: 'flex-start',
-                gap: '12px'
+                gap: '12px',
+                position: 'relative'
               }}
+              className={`message-container ${message.isUser ? 'user-message' : 'ai-message'}`}
             >
               {/* 头像 */}
               {!message.isUser && (
@@ -1269,37 +1467,104 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 </div>
               )}
 
-              {/* 消息气泡 */}
+              {/* 消息气泡容器 */}
               <div style={{
                 maxWidth: '70%',
-                backgroundColor: message.isUser ? '#3bb0e6' : '#1a1a1a',
-                color: message.isUser ? '#fff' : '#e5e5e5',
-                padding: '12px 16px',
-                borderRadius: message.isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                fontSize: '14px',
-                lineHeight: '1.6',
-                whiteSpace: message.isUser ? 'pre-wrap' : 'normal',
-                border: message.isUser ? 'none' : '1px solid #333'
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column'
               }}>
-                {message.isUser ? (
-                  <div>{message.text}</div>
-                ) : (
+                {/* 消息气泡 */}
+                <div style={{
+                  backgroundColor: message.isUser ? '#3bb0e6' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                  color: message.isUser ? '#fff' : (theme === 'dark' ? '#e5e5e5' : '#1f2937'),
+                  padding: '12px 16px',
+                  borderRadius: message.isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                  fontSize: '14px',
+                  lineHeight: '1.6',
+                  whiteSpace: message.isUser ? 'pre-wrap' : 'normal',
+                  border: message.isUser ? 'none' : `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+                  position: 'relative'
+                }}>
+                  {message.isUser ? (
+                    editingMessageId === message.id ? (
+                      // 编辑模式
+                      <div>
+                        <textarea
+                          value={editingText}
+                          onChange={(e) => setEditingText(e.target.value)}
+                          style={{
+                            width: '100%',
+                            minHeight: '60px',
+                            padding: '8px',
+                            border: 'none',
+                            borderRadius: '6px',
+                            backgroundColor: 'rgba(255,255,255,0.9)',
+                            color: '#1f2937',
+                            fontSize: '14px',
+                            fontFamily: 'inherit',
+                            resize: 'vertical',
+                            outline: 'none'
+                          }}
+                          autoFocus
+                        />
+                        <div style={{
+                          display: 'flex',
+                          gap: '8px',
+                          marginTop: '8px',
+                          justifyContent: 'flex-end'
+                        }}>
+                          <button
+                            onClick={cancelEdit}
+                            style={{
+                              padding: '4px 12px',
+                              fontSize: '12px',
+                              border: '1px solid rgba(255,255,255,0.3)',
+                              borderRadius: '4px',
+                              backgroundColor: 'transparent',
+                              color: '#fff',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            取消
+                          </button>
+                          <button
+                            onClick={saveEdit}
+                            style={{
+                              padding: '4px 12px',
+                              fontSize: '12px',
+                              border: 'none',
+                              borderRadius: '4px',
+                              backgroundColor: 'rgba(255,255,255,0.2)',
+                              color: '#fff',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            保存
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      // 正常显示模式
+                      <div>{message.text}</div>
+                    )
+                  ) : (
                   <ReactMarkdown
                     components={{
-                      // 自定义组件样式，适配深色主题
-                      h1: ({ children }) => <h1 style={{ color: '#e5e5e5', fontSize: '18px', marginBottom: '12px' }}>{children}</h1>,
-                      h2: ({ children }) => <h2 style={{ color: '#e5e5e5', fontSize: '16px', marginBottom: '10px' }}>{children}</h2>,
-                      h3: ({ children }) => <h3 style={{ color: '#e5e5e5', fontSize: '15px', marginBottom: '8px' }}>{children}</h3>,
-                      p: ({ children }) => <p style={{ color: '#e5e5e5', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
-                      strong: ({ children }) => <strong style={{ color: '#fff', fontWeight: '600' }}>{children}</strong>,
-                      em: ({ children }) => <em style={{ color: '#e5e5e5', fontStyle: 'italic' }}>{children}</em>,
-                      ul: ({ children }) => <ul style={{ color: '#e5e5e5', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ul>,
-                      ol: ({ children }) => <ol style={{ color: '#e5e5e5', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ol>,
-                      li: ({ children }) => <li style={{ color: '#e5e5e5', marginBottom: '4px' }}>{children}</li>,
+                      // 自定义组件样式，适配主题
+                      h1: ({ children }) => <h1 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '18px', marginBottom: '12px' }}>{children}</h1>,
+                      h2: ({ children }) => <h2 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '16px', marginBottom: '10px' }}>{children}</h2>,
+                      h3: ({ children }) => <h3 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '15px', marginBottom: '8px' }}>{children}</h3>,
+                      p: ({ children }) => <p style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
+                      strong: ({ children }) => <strong style={{ color: theme === 'dark' ? '#fff' : '#111827', fontWeight: '600' }}>{children}</strong>,
+                      em: ({ children }) => <em style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', fontStyle: 'italic' }}>{children}</em>,
+                      ul: ({ children }) => <ul style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ul>,
+                      ol: ({ children }) => <ol style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ol>,
+                      li: ({ children }) => <li style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '4px' }}>{children}</li>,
                       code: ({ children }) => (
                         <code style={{
-                          backgroundColor: '#333',
-                          color: '#fff',
+                          backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
+                          color: theme === 'dark' ? '#fff' : '#1f2937',
                           padding: '2px 6px',
                           borderRadius: '4px',
                           fontSize: '13px',
@@ -1308,8 +1573,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                       ),
                       pre: ({ children }) => (
                         <pre style={{
-                          backgroundColor: '#333',
-                          color: '#fff',
+                          backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
+                          color: theme === 'dark' ? '#fff' : '#1f2937',
                           padding: '12px',
                           borderRadius: '8px',
                           overflow: 'auto',
@@ -1323,7 +1588,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                           borderLeft: '3px solid #3bb0e6',
                           paddingLeft: '12px',
                           margin: '8px 0',
-                          color: '#ccc',
+                          color: theme === 'dark' ? '#ccc' : '#6b7280',
                           fontStyle: 'italic'
                         }}>{children}</blockquote>
                       )
@@ -1332,16 +1597,140 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                     {message.text}
                   </ReactMarkdown>
                 )}
-                
-                {/* 时间戳 */}
-                <div style={{
-                  fontSize: '11px',
-                  color: message.isUser ? 'rgba(255,255,255,0.7)' : '#666',
-                  marginTop: '8px',
-                  textAlign: message.isUser ? 'right' : 'left'
-                }}>
-                  {formatTime(message.timestamp)}
+
+                {/* 悬停按钮 */}
+                <div 
+                  className="hover-buttons" 
+                  style={{
+                    position: 'absolute',
+                    top: '8px',
+                    right: message.isUser ? '-80px' : 'auto',
+                    left: !message.isUser ? '-80px' : 'auto',
+                    display: 'flex',
+                    gap: '4px',
+                    opacity: 0,
+                    transition: 'opacity 0.2s ease',
+                    zIndex: 10
+                  }}
+                >
+                  {message.isUser && editingMessageId !== message.id && (
+                    <button
+                      onClick={() => startEditMessage(message)}
+                      style={{
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: '50%',
+                        border: 'none',
+                        backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                        color: theme === 'dark' ? '#fff' : '#1f2937',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '14px',
+                        transition: 'all 0.2s ease'
+                      }}
+                      title="编辑消息"
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                      }}
+                    >
+                      ✏️
+                    </button>
+                  )}
+                  <button
+                    onClick={() => copyMessage(message.text)}
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      border: 'none',
+                      backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                      color: theme === 'dark' ? '#fff' : '#1f2937',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '14px',
+                      transition: 'all 0.2s ease'
+                    }}
+                    title="复制消息"
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                  </button>
                 </div>
+                
+                {/* 搜索确认按钮 - 仅在Chat & Plan模式下的AI消息中显示 */}
+                {message.needsSearchConfirmation && !message.isUser && (
+                  <div style={{
+                    marginTop: '12px',
+                    display: 'flex',
+                    gap: '8px',
+                    alignItems: 'center'
+                  }}>
+                    <button
+                      onClick={() => {
+                        // 找到触发搜索确认的原始用户查询
+                        const messageIndex = messages.findIndex(msg => msg.id === message.id);
+                        const userMessage = messageIndex > 0 ? messages[messageIndex - 1] : null;
+                        if (userMessage && userMessage.isUser) {
+                          handleSearchConfirmation(userMessage.text, message.id);
+                        }
+                      }}
+                      disabled={isLoading}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #10b981',
+                        backgroundColor: 'rgba(16,185,129,0.1)',
+                        color: '#10b981',
+                        cursor: isLoading ? 'not-allowed' : 'pointer',
+                        fontSize: '12px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      {isLoading ? '搜索中...' : '开始搜索'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        // 移除搜索确认
+                        const updatedMessages = messages.map(msg => 
+                          msg.id === message.id 
+                            ? { ...msg, needsSearchConfirmation: false }
+                            : msg
+                        );
+                        setMessages(updatedMessages);
+                        saveChatHistory(updatedMessages, currentAnalysis);
+                      }}
+                      disabled={isLoading}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #666',
+                        backgroundColor: 'transparent',
+                        color: '#666',
+                        cursor: isLoading ? 'not-allowed' : 'pointer',
+                        fontSize: '12px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      跳过
+                    </button>
+                  </div>
+                )}
+                
 
                 {/* 如果有学术分析结果，显示提示 */}
                 {message.hierarchicalKeywords && (
@@ -1356,6 +1745,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                     💡 已为您分析并扩展关键词，请查看右侧关键词云进行搜索
                   </div>
                 )}
+              </div>
               </div>
 
               {/* 用户头像 */}
@@ -1398,17 +1788,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 🤖
               </div>
               <div style={{
-                backgroundColor: '#1a1a1a',
+                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
                 padding: '12px 16px',
                 borderRadius: '16px 16px 16px 4px',
-                border: '1px solid #333'
+                border: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`
               }}>
                 <div style={{
                   display: 'flex',
                   gap: '4px',
                   alignItems: 'center'
                 }}>
-                  <div style={{ fontSize: '12px', color: '#666' }}>AI正在思考</div>
+                  <div style={{ fontSize: '12px', color: theme === 'dark' ? '#666' : '#9ca3af' }}>AI正在思考</div>
                   <div style={{
                     display: 'flex',
                     gap: '2px'
@@ -1437,8 +1827,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         {/* 输入区域 */}
         <div style={{
           padding: '16px 20px',
-          borderTop: '1px solid #333',
-          backgroundColor: '#0a0a0a'
+          borderTop: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+          backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3'
         }}>
           <div style={{
             display: 'flex',
@@ -1457,9 +1847,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   width: '100%',
                   padding: '12px 16px',
                   borderRadius: '12px',
-                  border: '1px solid #333',
-                  backgroundColor: '#1a1a1a',
-                  color: '#fff',
+                  border: `1px solid ${theme === 'dark' ? '#333' : '#d1d5db'}`,
+                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
                   fontSize: '14px',
                   lineHeight: '1.5',
                   resize: 'none',
@@ -1503,6 +1893,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             justifyContent: 'space-between',
             alignItems: 'center'
           }}>
+            {/* LLM模式提示和快捷键 */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              fontSize: '11px',
+              color: theme === 'dark' ? '#666' : '#9ca3af'
+            }}>
+              <span>
+                Mode: <span style={{ 
+                  color: llmMode === 'auto-search' ? '#10b981' : '#3bb0e6',
+                  fontWeight: '600'
+                }}>
+                  {llmMode === 'auto-search' ? 'Auto-search' : 'Chat & Plan'}
+                </span>
+              </span>
+              <span>Shift + Tab to cycle</span>
+            </div>
             
             {/* 详细的token使用情况 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1550,8 +1958,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           <div style={{
             width: `${keywordPanelWidth}px`,
             height: '100vh',
-            borderLeft: '1px solid #333',
-            backgroundColor: '#0a0a0a',
+            borderLeft: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+            backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3',
             position: 'relative',
             transition: isResizing ? 'none' : 'width 0.3s ease',
             display: 'flex',
@@ -1560,20 +1968,48 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             {/* 关键词云面板头部 */}
             <div style={{
               padding: '12px 16px',
-              borderBottom: '1px solid #333',
+              borderBottom: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
               display: 'flex',
-              justifyContent: 'center',
+              justifyContent: 'space-between',
               alignItems: 'center',
-              backgroundColor: '#111'
+              backgroundColor: theme === 'dark' ? '#111' : '#f8f8f8'
             }}>
               <h3 style={{ 
                 margin: 0, 
                 fontSize: '14px', 
                 fontWeight: '600',
-                color: '#fff'
+                color: theme === 'dark' ? '#fff' : '#1f2937'
               }}>
                 Keywords & Search
               </h3>
+              
+              {/* 主题切换按钮 */}
+              <button
+                onClick={toggleTheme}
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  border: `1px solid ${theme === 'dark' ? '#666' : '#d1d5db'}`,
+                  backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '14px',
+                  transition: 'all 0.2s ease'
+                }}
+                title={theme === 'dark' ? '切换到白天模式' : '切换到夜间模式'}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                }}
+              >
+                {theme === 'dark' ? '☀️' : '🌙'}
+              </button>
             </div>
             
             <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -1581,6 +2017,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 hierarchicalKeywords={currentAnalysis?.hierarchical_keywords || null}
                 originalQuery=""
                 isDraggable={true}
+                theme={theme}
               />
             </div>
           </div>
@@ -1588,12 +2025,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       )}
       
 
-      {/* 动画样式 */}
+      {/* 动画样式和悬停效果 */}
       <style>
         {`
           @keyframes pulse {
             0%, 100% { opacity: 0.4; transform: scale(0.8); }
             50% { opacity: 1; transform: scale(1.2); }
+          }
+          
+          .message-container:hover .hover-buttons {
+            opacity: 1 !important;
+          }
+          
+          .user-message:hover .hover-buttons {
+            opacity: 1 !important;
+          }
+          
+          .ai-message:hover .hover-buttons {
+            opacity: 1 !important;
           }
         `}
       </style>
