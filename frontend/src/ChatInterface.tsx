@@ -4,6 +4,12 @@ import ReactMarkdown from 'react-markdown';
 import { api } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
 import TokenProgress from './components/TokenProgress';
+import { 
+  UnifiedHistoryService,
+  type HistoryItem, 
+  type SearchHistory, 
+  type ChatHistory 
+} from './services/dataService';
 
 interface Message {
   id: string;
@@ -34,6 +40,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [isKeywordPanelCollapsed, setIsKeywordPanelCollapsed] = useState(false);
   const [keywordPanelWidth, setKeywordPanelWidth] = useState(350);
   const [isResizing, setIsResizing] = useState(false);
+  
+  // My面板状态
+  const [isMyPanelCollapsed, setIsMyPanelCollapsed] = useState(false);
+  const [myPanelWidth] = useState(300);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  
+  // My面板历史记录状态
+  const [unifiedHistory, setUnifiedHistory] = useState<HistoryItem[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectAll, setSelectAll] = useState(false);
+  const [filter, setFilter] = useState<'search' | 'chat'>('search');
+  
+  // 操作菜单状态
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState<string>('');
+  
+  // LLM模式状态
+  const [llmMode, setLlmMode] = useState<'auto-search' | 'chat-plan'>(() => {
+    const saved = localStorage.getItem('veritex_llm_mode');
+    return (saved as 'auto-search' | 'chat-plan') || 'auto-search';
+  });
   
   // 从首页传来的初始输入
   const initialInput = location.state?.input || '';
@@ -158,11 +186,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(existingSearchHistory));
       
       // 保存到统一历史
+      // 使用Exact Terms作为Search results的标题
+      const exactTerms = response.analysis_result?.exact_terms || userQuery;
       const unifiedItem = {
         id: searchId,
         timestamp: searchHistory.timestamp,
         type: 'search' as const,
-        title: userQuery.slice(0, 50) + (userQuery.length > 50 ? '...' : ''),
+        title: exactTerms.length > 50 ? exactTerms.slice(0, 50) + '...' : exactTerms,
         data: searchHistory
       };
       
@@ -197,10 +227,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   };
 
   // 清除聊天历史
-  const clearChatHistory = () => {
-    localStorage.removeItem(CHAT_STORAGE_KEY);
-    localStorage.removeItem(CHAT_ANALYSIS_KEY);
-  };
 
   // 初始化聊天记录
   useEffect(() => {
@@ -214,7 +240,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       // 否则显示欢迎消息
       const welcomeMessage: Message = {
         id: 'welcome',
-        text: '👋 您好！我是Paper God智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
+        text: '👋 您好！我是Veritex智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
         isUser: false,
         timestamp: Date.now()
       };
@@ -232,6 +258,211 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       setInputMessage(initialInput);
     }
   }, [initialInput, preserveChat]);
+
+  // 加载My面板历史记录
+  const loadMyPanelHistory = async () => {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) {
+      setUnifiedHistory([]);
+      return;
+    }
+    try {
+      const history = await UnifiedHistoryService.getHistory(userId);
+      setUnifiedHistory(history);
+    } catch (error) {
+      console.error('Error loading history:', error);
+      setUnifiedHistory([]);
+    }
+  };
+
+  // 每次展开My面板时刷新历史记录
+  useEffect(() => {
+    if (!isMyPanelCollapsed) {
+      loadMyPanelHistory();
+    }
+  }, [isMyPanelCollapsed]);
+
+  // 处理窗口大小变化
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 768;
+      setIsMobile(mobile);
+      // 移动端默认折叠My面板
+      if (mobile && !isMyPanelCollapsed) {
+        // 移动端展开时保持展开状态，但监听点击关闭
+      }
+    };
+    
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isMyPanelCollapsed]);
+
+  // My面板相关函数
+  const filteredHistory = unifiedHistory.filter(item => item.type === filter);
+
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredHistory.map(item => item.id));
+    }
+    setSelectAll(!selectAll);
+  };
+
+  const handleSelectItem = (id: string) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter(sid => sid !== id));
+    } else {
+      setSelectedIds([...selectedIds, id]);
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedIds.length === 0) return;
+    
+    if (confirm(`确定要删除选中的 ${selectedIds.length} 条记录吗？`)) {
+      const userId = localStorage.getItem('user_id');
+      if (userId) {
+        try {
+          await UnifiedHistoryService.deleteHistory(userId, selectedIds);
+          setSelectedIds([]);
+          setSelectAll(false);
+          await loadMyPanelHistory();
+        } catch (error) {
+          console.error('Delete failed:', error);
+        }
+      }
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (confirm('确定要清空所有历史记录吗？此操作不可恢复。')) {
+      const userId = localStorage.getItem('user_id');
+      if (userId) {
+        try {
+          await UnifiedHistoryService.clearAll(userId);
+          setUnifiedHistory([]);
+          setSelectedIds([]);
+          setSelectAll(false);
+        } catch (error) {
+          console.error('Clear all failed:', error);
+        }
+      }
+    }
+  };
+
+  const handleViewItem = (item: HistoryItem) => {
+    if (item.type === 'search') {
+      const searchData = item.data as SearchHistory;
+      navigate('/report', {
+        state: {
+          papers: searchData.papers,
+          searchHistory: searchData,
+          expandedKeywords: searchData.expandedKeywords,
+          originalQuery: searchData.originalQuery,
+          maxResults: searchData.maxResults
+        }
+      });
+    } else if (item.type === 'chat') {
+      const chatData = item.data as ChatHistory;
+      localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
+      window.location.reload();
+    }
+  };
+
+  // 置顶功能
+  const handlePinItem = async (itemId: string) => {
+    try {
+      const userId = localStorage.getItem('paper_god_user_id') || 'anonymous';
+      const currentHistory = await UnifiedHistoryService.getHistory(userId);
+      
+      // 找到要置顶的项目
+      const itemToPin = currentHistory.find(item => item.id === itemId);
+      if (!itemToPin) return;
+      
+      // 更新时间戳为当前时间，实现置顶效果
+      const updatedItem = { ...itemToPin, timestamp: Date.now() };
+      
+      // 更新本地存储
+      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+      const existingHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      const updatedHistory = existingHistory.map((h: any) => 
+        h.id === itemId ? updatedItem : h
+      ).sort((a: any, b: any) => b.timestamp - a.timestamp);
+      
+      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(updatedHistory));
+      
+      // 重新加载历史记录
+      loadMyPanelHistory();
+      setActiveMenuId(null);
+    } catch (error) {
+      console.error('Pin item failed:', error);
+    }
+  };
+
+  // 重命名功能
+  const handleRenameItem = async (itemId: string, newTitle: string) => {
+    try {
+      
+      // 更新本地存储中的标题
+      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+      const existingHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      const updatedHistory = existingHistory.map((h: any) => 
+        h.id === itemId ? { ...h, title: newTitle } : h
+      );
+      
+      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(updatedHistory));
+      
+      // 同时更新对应的具体历史记录
+      if (itemId.startsWith('search_')) {
+        const SEARCH_STORAGE_KEY = 'paper_god_search_history';
+        const searchHistory = JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
+        const updatedSearchHistory = searchHistory.map((s: any) => 
+          s.id === itemId ? { ...s, customTitle: newTitle } : s
+        );
+        localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(updatedSearchHistory));
+      } else if (itemId.startsWith('chat_')) {
+        const CHAT_STORAGE_KEY = 'paper_god_chat_history';
+        const chatHistory = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
+        const updatedChatHistory = chatHistory.map((c: any) => 
+          c.id === itemId ? { ...c, title: newTitle } : c
+        );
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(updatedChatHistory));
+      }
+      
+      // 重新加载历史记录
+      loadMyPanelHistory();
+      setEditingId(null);
+      setEditingTitle('');
+      setActiveMenuId(null);
+    } catch (error) {
+      console.error('Rename item failed:', error);
+    }
+  };
+
+  // 开始重命名
+  const startRenaming = (item: HistoryItem) => {
+    setEditingId(item.id);
+    setEditingTitle(item.title);
+    setActiveMenuId(null);
+  };
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (activeMenuId) {
+        setActiveMenuId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [activeMenuId]);
+
 
   // 自动滚动到底部
   useEffect(() => {
@@ -399,9 +630,473 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       display: 'flex',
       height: '100vh',
       backgroundColor: '#000',
-      color: '#fff'
+      color: '#fff',
+      overflow: 'hidden'
     }}>
-      {/* 左侧聊天区域 */}
+      {/* 左侧My面板 */}
+      {!isMyPanelCollapsed && (
+        <div style={{
+          width: isMobile ? '100vw' : `${myPanelWidth}px`,
+          height: '100vh',
+          borderRight: '1px solid #333',
+          backgroundColor: '#0a0a0a',
+          display: 'flex',
+          flexDirection: 'column',
+          minWidth: isMobile ? '100vw' : '280px',
+          position: isMobile ? 'fixed' : 'relative',
+          top: isMobile ? '0' : 'auto',
+          left: isMobile ? '0' : 'auto',
+          zIndex: isMobile ? 1000 : 'auto'
+        }}>
+          {/* My面板头部 */}
+          <div style={{
+            padding: '12px 16px',
+            borderBottom: '1px solid #333',
+            backgroundColor: '#111'
+          }}>
+            {/* Recent标题和New search按钮 */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '12px'
+            }}>
+              <h3 style={{ 
+                margin: '0', 
+                fontSize: '14px', 
+                fontWeight: '600',
+                color: '#fff'
+              }}>
+                Recent
+              </h3>
+              
+              {/* New search按钮 */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <button
+                  onClick={() => {
+                    // 清除当前聊天并开始新的搜索
+                    localStorage.removeItem(CHAT_STORAGE_KEY);
+                    localStorage.removeItem(CHAT_ANALYSIS_KEY);
+                    const welcomeMessage: Message = {
+                      id: 'welcome',
+                      text: '👋 您好！我是Veritex智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
+                      isUser: false,
+                      timestamp: Date.now()
+                    };
+                    const resetMessages = [welcomeMessage];
+                    setMessages(resetMessages);
+                    setCurrentAnalysis(null);
+                    saveChatHistory(resetMessages);
+                  }}
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    border: '1px solid #10b981',
+                    backgroundColor: 'rgba(16,185,129,0.1)',
+                    color: '#10b981',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '12px',
+                    fontWeight: '600'
+                  }}
+                  title="开始新的搜索对话"
+                >
+                  +
+                </button>
+                <span style={{
+                  fontSize: '12px',
+                  color: '#999',
+                  fontWeight: '500'
+                }}>
+                  New search
+                </span>
+              </div>
+            </div>
+            
+            {/* 移动端关闭按钮 */}
+            {isMobile && (
+              <button
+                onClick={() => setIsMyPanelCollapsed(true)}
+                style={{
+                  position: 'absolute',
+                  top: '12px',
+                  right: '12px',
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '50%',
+                  border: '1px solid #666',
+                  background: 'rgba(0,0,0,0.8)',
+                  color: '#999',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '12px',
+                  zIndex: 1001
+                }}
+              >
+                ✕
+              </button>
+            )}
+            
+            {/* 筛选器 */}
+            <div style={{
+              display: 'flex',
+              gap: '4px',
+              marginBottom: '8px'
+            }}>
+              <button
+                onClick={() => setFilter('search')}
+                style={{
+                  flex: 1,
+                  padding: '6px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  backgroundColor: filter === 'search' ? '#3bb0e6' : '#333',
+                  color: filter === 'search' ? '#fff' : '#999',
+                  transition: 'all 0.2s'
+                }}
+              >
+                Search results ({unifiedHistory.filter(h => h.type === 'search').length})
+              </button>
+              <button
+                onClick={() => setFilter('chat')}
+                style={{
+                  flex: 1,
+                  padding: '6px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  backgroundColor: filter === 'chat' ? '#3bb0e6' : '#333',
+                  color: filter === 'chat' ? '#fff' : '#999',
+                  transition: 'all 0.2s'
+                }}
+              >
+                Chat ({unifiedHistory.filter(h => h.type === 'chat').length})
+              </button>
+            </div>
+            
+            {/* 批量操作栏 */}
+            {filteredHistory.length > 0 && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px'
+              }}>
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer',
+                  color: '#999'
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={selectAll}
+                    onChange={handleSelectAll}
+                    style={{
+                      width: '12px',
+                      height: '12px',
+                      accentColor: '#3bb0e6'
+                    }}
+                  />
+                  Select all
+                </label>
+                {selectedIds.length > 0 && (
+                  <>
+                    <span style={{ color: '#666' }}>|</span>
+                    <button
+                      onClick={handleDeleteSelected}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#ff6b6b',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        padding: '2px 4px'
+                      }}
+                    >
+                      Delete({selectedIds.length})
+                    </button>
+                    <button
+                      onClick={handleClearAll}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#ff6b6b',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        padding: '2px 4px'
+                      }}
+                    >
+                      Clear all
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          
+          {/* My面板内容 */}
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '8px'
+          }}>
+            {filteredHistory.length === 0 ? (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                color: '#666',
+                textAlign: 'center'
+              }}>
+                <p style={{ margin: 0, fontSize: '12px' }}>
+                  No {filter === 'search' ? 'search results' : 'chat'} history yet
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {filteredHistory.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={(e) => {
+                      // 如果点击的是复选框，不触发查看操作
+                      if ((e.target as HTMLInputElement).type === 'checkbox') {
+                        return;
+                      }
+                      handleViewItem(item);
+                    }}
+                    style={{
+                      backgroundColor: selectedIds.includes(item.id) ? 'rgba(59,176,230,0.1)' : '#1a1a1a',
+                      border: selectedIds.includes(item.id) ? '1px solid #3bb0e6' : '1px solid #333',
+                      borderRadius: '6px',
+                      padding: '8px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!selectedIds.includes(item.id)) {
+                        e.currentTarget.style.backgroundColor = '#222';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!selectedIds.includes(item.id)) {
+                        e.currentTarget.style.backgroundColor = '#1a1a1a';
+                      }
+                    }}
+                  >
+                    {/* 选择框和标题 */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '6px',
+                      marginBottom: '6px'
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(item.id)}
+                        onChange={() => handleSelectItem(item.id)}
+                        style={{
+                          width: '12px',
+                          height: '12px',
+                          marginTop: '2px',
+                          accentColor: '#3bb0e6'
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {editingId === item.id ? (
+                          <input
+                            type="text"
+                            value={editingTitle}
+                            onChange={(e) => setEditingTitle(e.target.value)}
+                            onBlur={() => {
+                              if (editingTitle.trim()) {
+                                handleRenameItem(item.id, editingTitle.trim());
+                              } else {
+                                setEditingId(null);
+                                setEditingTitle('');
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                if (editingTitle.trim()) {
+                                  handleRenameItem(item.id, editingTitle.trim());
+                                } else {
+                                  setEditingId(null);
+                                  setEditingTitle('');
+                                }
+                              } else if (e.key === 'Escape') {
+                                setEditingId(null);
+                                setEditingTitle('');
+                              }
+                            }}
+                            autoFocus
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: '#fff',
+                              background: '#333',
+                              border: '1px solid #3bb0e6',
+                              borderRadius: '3px',
+                              padding: '2px 4px',
+                              width: '100%',
+                              marginBottom: '4px'
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <div style={{
+                            fontSize: '12px',
+                            fontWeight: '500',
+                            color: '#fff',
+                            marginBottom: '4px',
+                            lineHeight: '1.3',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical'
+                          }}>
+                            {item.title}
+                          </div>
+                        )}
+                        <div style={{
+                          fontSize: '10px',
+                          color: '#666',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}>
+                          <span>{new Date(item.timestamp).toLocaleDateString('zh-CN', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}</span>
+                        </div>
+                      </div>
+                      
+                      {/* 右侧操作按钮 */}
+                      <div style={{ position: 'relative' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveMenuId(activeMenuId === item.id ? null : item.id);
+                          }}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#666',
+                            cursor: 'pointer',
+                            padding: '4px',
+                            fontSize: '14px',
+                            lineHeight: 1,
+                            borderRadius: '3px',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.color = '#999';
+                            e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.color = '#666';
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                        >
+                          ···
+                        </button>
+                        
+                        {/* 下拉菜单 */}
+                        {activeMenuId === item.id && (
+                          <div style={{
+                            position: 'absolute',
+                            top: '100%',
+                            right: '0',
+                            backgroundColor: '#2a2a2a',
+                            border: '1px solid #444',
+                            borderRadius: '6px',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                            zIndex: 1000,
+                            minWidth: '80px',
+                            overflow: 'hidden'
+                          }}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePinItem(item.id);
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: '8px 12px',
+                                background: 'none',
+                                border: 'none',
+                                color: '#fff',
+                                fontSize: '12px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                                transition: 'background-color 0.2s'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = '#333';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                              }}
+                            >
+                              Pin
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startRenaming(item);
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: '8px 12px',
+                                background: 'none',
+                                border: 'none',
+                                color: '#fff',
+                                fontSize: '12px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                                transition: 'background-color 0.2s'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = '#333';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                              }}
+                            >
+                              Rename
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* 中间聊天区域 */}
       <div style={{
         flex: 1,
         display: 'flex',
@@ -413,84 +1108,99 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           padding: '16px 20px',
           borderBottom: '1px solid #333',
           display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
+          justifyContent: 'center',
+          alignItems: 'center',
+          position: 'relative'
         }}>
-          <div>
-            <h2 style={{ 
+          {/* My折叠面板控制按钮 - 移到最左侧，无边框，横线左对齐 */}
+          <button
+            onClick={() => setIsMyPanelCollapsed(!isMyPanelCollapsed)}
+            style={{
+              position: 'absolute',
+              left: '20px',
+              padding: '8px',
+              borderRadius: '6px',
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-start',
+              width: '36px',
+              height: '36px',
+              transition: 'all 0.2s ease',
+              flexDirection: 'column',
+              gap: '2px'
+            }}
+            title={isMyPanelCollapsed ? 'Expand recent history' : 'Collapse recent history'}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(161,161,170,0.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+          >
+            {/* 三条长短不一的横杠 - 左对齐 */}
+            <div style={{
+              width: '16px',
+              height: '2px',
+              backgroundColor: '#a1a1aa',
+              borderRadius: '1px',
+              alignSelf: 'flex-start',
+              transition: 'all 0.2s ease'
+            }} />
+            <div style={{
+              width: '12px',
+              height: '2px',
+              backgroundColor: '#a1a1aa',
+              borderRadius: '1px',
+              alignSelf: 'flex-start',
+              transition: 'all 0.2s ease'
+            }} />
+            <div style={{
+              width: '20px',
+              height: '2px',
+              backgroundColor: '#a1a1aa',
+              borderRadius: '1px',
+              alignSelf: 'flex-start',
+              transition: 'all 0.2s ease'
+            }} />
+          </button>
+          
+          {/* 居中的Veritex标题 - 可点击返回首页，更大字号 */}
+          <button 
+            onClick={() => navigate('/')}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 0
+            }}
+          >
+            <h1 style={{ 
               margin: 0, 
-              fontSize: '20px', 
+              fontSize: '32px', 
               color: '#3bb0e6',
-              fontWeight: '600'
-            }}>
-              Paper God AI Assistant
-            </h2>
-            <p style={{ 
-              margin: '4px 0 0 0', 
-              fontSize: '12px', 
-              color: '#a1a1aa' 
-            }}>
-              智能学术助手 • 关键词扩展 • 文献搜索
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              onClick={() => {
-                clearChatHistory();
-                const welcomeMessage: Message = {
-                  id: 'welcome',
-                  text: '👋 您好！我是Paper God智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
-                  isUser: false,
-                  timestamp: Date.now()
-                };
-                const resetMessages = [welcomeMessage];
-                setMessages(resetMessages);
-                setCurrentAnalysis(null);
-                saveChatHistory(resetMessages);
-              }}
-              style={{
-                padding: '6px 12px',
-                borderRadius: '6px',
-                border: '1px solid #10b981',
-                background: 'rgba(16,185,129,0.1)',
-                color: '#10b981',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontWeight: '600'
-              }}
-              title="开始新的搜索对话"
+              fontWeight: '700',
+              letterSpacing: '1px',
+              textAlign: 'center',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = '#52c8f5';
+              e.currentTarget.style.textShadow = '0 0 8px rgba(59,176,230,0.3)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = '#3bb0e6';
+              e.currentTarget.style.textShadow = 'none';
+            }}
             >
-              New Search
-            </button>
-            <button
-              onClick={() => navigate('/my')}
-              style={{
-                padding: '6px 12px',
-                borderRadius: '6px',
-                border: '1px solid #666',
-                background: 'transparent',
-                color: '#a1a1aa',
-                cursor: 'pointer',
-                fontSize: '12px'
-              }}
-              title="查看历史记录"
-            >
-              My
-            </button>
-            <button
-              onClick={() => navigate('/')}
-              style={{
-                padding: '8px 16px',
-                borderRadius: '6px',
-                border: '1px solid #666',
-                background: 'transparent',
-                color: '#fff',
-                cursor: 'pointer',
-                fontSize: '14px'
-              }}
-            >
-              返回首页
-            </button>
+              Veritex
+            </h1>
+          </button>
+          
+          {/* 右侧按钮 */}
+          <div style={{ position: 'absolute', right: '20px', display: 'flex', gap: '8px' }}>
             {/* 侧边栏折叠/展开按钮 */}
             <button
               onClick={() => setIsKeywordPanelCollapsed(!isKeywordPanelCollapsed)}
@@ -793,12 +1503,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             justifyContent: 'space-between',
             alignItems: 'center'
           }}>
-            <div style={{
-              fontSize: '11px',
-              color: '#666'
-            }}>
-              💡 提示：按 Enter 发送，Shift+Enter 换行
-            </div>
             
             {/* 详细的token使用情况 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -46,13 +46,13 @@ const translations = {
     'language.switch': '切换语言',
     
     // 聊天界面
-    'chat.title': '🤖 Paper God AI Assistant',
+    'chat.title': '🤖 Veritex AI Assistant',
     'chat.subtitle': '智能学术助手 • 关键词扩展 • 文献搜索',
     'chat.placeholder': '输入您的学术问题或研究主题...',
     'chat.send': '发送',
     'chat.thinking': 'AI正在思考',
     'chat.hint': '💡 提示：按 Enter 发送，Shift+Enter 换行',
-    'chat.welcome': '👋 您好！我是Paper God智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
+    'chat.welcome': '👋 您好！我是Veritex智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
     'chat.keywordHint': '💡 已为您分析并扩展关键词，请查看右侧关键词云进行搜索',
     
     // 报告页面
@@ -123,13 +123,13 @@ const translations = {
     'language.switch': 'Switch Language',
     
     // 聊天界面
-    'chat.title': '🤖 Paper God AI Assistant',
+    'chat.title': '🤖 Veritex AI Assistant',
     'chat.subtitle': 'Intelligent Academic Assistant • Keyword Expansion • Literature Search',
     'chat.placeholder': 'Enter your academic questions or research topics...',
     'chat.send': 'Send',
     'chat.thinking': 'AI is thinking',
     'chat.hint': '💡 Tip: Press Enter to send, Shift+Enter for new line',
-    'chat.welcome': '👋 Hello! I am the Paper God intelligent assistant. You can:\n\n📚 Send academic queries, I will analyze and expand keywords for you\n🔍 Search literature directly\n💬 Chat with me about academic questions\n\nPlease enter your questions or research topics!',
+    'chat.welcome': '👋 Hello! I am the Veritex intelligent assistant. You can:\n\n📚 Send academic queries, I will analyze and expand keywords for you\n🔍 Search literature directly\n💬 Chat with me about academic questions\n\nPlease enter your questions or research topics!',
     'chat.keywordHint': '💡 Keywords have been analyzed and expanded for you. Please check the keyword cloud on the right for search',
     
     // 报告页面
