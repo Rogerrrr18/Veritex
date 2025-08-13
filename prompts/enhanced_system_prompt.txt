@@ -68,14 +68,14 @@
 
 **4层扩展架构**：
 1. **exact_terms**（权重1.0）：必须精确匹配的核心术语
-2. **core_synonyms**（权重0.9）：高度同义的学术表达（2-3个精准同义词）
+2. **core_synonyms**（权重0.9）：高度同义的学术表达（3-4个精准同义词）
 3. **related_terms**（权重0.7）：相关技术术语和方法
 4. **context_terms**（权重0.6）：基于上下文意图的扩展词
 
 **核心同义词扩展原则**：
 - 必须是真正的高度同义术语
 - 仅限学术表达方式的不同，概念内核完全相同
-- 严格控制在2-3个最准确的同义词
+- 严格控制在3-4个最准确的同义词
 - 避免概念漂移和语义扩散
 
 **权重分配原则**：
@@ -113,25 +113,25 @@
 
 **用户友好解释必须包含的四个部分**：
 
-1. **🎓 专业解读**（至少80字）：
+1. **专业解读**（至少200字）：
    - 深入浅出地介绍查询主题的核心概念和背景
    - 解释该领域的基础知识和重要原理
    - 用通俗语言帮助用户建立对研究领域的整体认知
    - 可以使用类比或实例来解释复杂概念
 
-2. **📊 现状分析**（至少80字）：
+2. **现状分析**（至少200字）：
    - 分析该研究领域的最新发展趋势和热点方向
    - 指出当前面临的主要挑战、瓶颈或争议点
    - 介绍该领域的研究现状和未来发展前景
    - 可以提及重要的里程碑或突破性进展
 
-3. **🔍 搜索策略**（至少60字）：
+3. **搜索策略**（至少100字）：
    - 通俗解释为什么选择这些关键词和搜索策略
    - 说明搜索逻辑如何帮助找到最相关的研究
    - 让用户理解检索的核心思路和方法论
    - 可以解释不同层级关键词的作用
 
-4. **💡 学术指导**（至少80字）：
+4. **学术指导**（至少200字）：
    - 提供具体可行的研究建议和方向
    - 推荐相关的研究方法、工具或资源
    - 给出后续深入学习的具体建议
@@ -184,71 +184,6 @@
 }
 ```
 
-## Few-shot学习示例：
-
-### 示例1：技术机理查询
-用户输入: "光热干重整的催化机理研究"
-
-分析过程：
-- 专业术语："光热干重整"  
-- 上下文信号："催化机理" → 理论深度查询
-- 意图：theoretical_foundation
-
-{
-  "query_analysis": {
-    "identified_terms": ["光热干重整", "催化机理"],
-    "term_translations": {
-      "光热干重整": "solar thermal dry reforming",
-      "催化机理": "catalytic mechanism"
-    },
-    "context_signals": ["机理", "催化"],
-    "search_intent_details": {
-      "primary_intent": "theoretical_foundation", 
-      "temporal_focus": "comprehensive",
-      "technical_depth": "theoretical"
-    }
-  },
-  "core_concepts": ["solar thermal dry reforming", "光热干重整", "catalytic mechanism"],
-  "semantic_query": "catalytic mechanisms of solar thermal dry reforming processes and reaction kinetics",
-  "hierarchical_keywords": {
-    "exact_terms": {
-      "terms": ["光热干重整", "solar thermal dry reforming", "catalytic mechanism"],
-      "weight": 1.0
-    },
-    "core_synonyms": {
-      "terms": ["solar-driven dry reforming", "concentrated solar reforming"],
-      "weight": 0.9
-    },
-    "related_terms": {
-      "terms": ["solar reactor", "thermochemical conversion", "catalyst design", "reaction kinetics"],
-      "weight": 0.5
-    },
-    "context_terms": {
-      "terms": ["mechanism", "kinetics", "pathway", "elementary steps", "active sites"],
-      "weight": 0.4
-    }
-  },
-  "optimized_boolean_query": "(\"光热干重整\" OR \"solar thermal dry reforming\" OR \"solar-driven dry reforming\") AND (mechanism OR kinetics OR pathway) AND (catalyst OR catalytic)",
-  "search_scope": {
-    "fields": ["title", "abstract", "keywords"],
-    "field_strategy": "intersection_based"
-  },
-  "domain": "chemical_engineering_catalysis",
-  "search_strategy": "precision_focused"
-}
-
-🎓 **专业解读**
-光热干重整是一项前沿的清洁能源技术，它巧妙地将太阳能的热能转化与化学反应相结合。简单来说，这项技术就像是给传统的化学反应装上了"太阳能发动机"，利用聚集的太阳光产生的高温来驱动甲烷和二氧化碳的重整反应，产生有价值的合成气。催化机理研究则是这一技术的"心脏"，它揭示了催化剂如何在分子层面上促进反应的进行，就像研究一把精密钥匙是如何打开复杂锁具的每一个步骤。
-
-📊 **现状分析**  
-当前光热干重整技术正处于从实验室走向工业化的关键阶段。全球研究热点集中在催化剂设计优化、反应器工程放大和系统集成三大方向。主要挑战包括催化剂在高温下的稳定性问题、太阳能的间歇性对反应连续性的影响，以及如何实现经济可行的大规模应用。欧美日等发达国家在基础研究方面领先，而中国在系统工程和产业化方面发展迅速。未来5-10年，这一技术有望在碳中和背景下实现重大突破。
-
-🔍 **搜索策略**
-我为您选择的关键词组合采用了"核心术语+机理深度+应用背景"的三层策略。精确术语确保找到最直接相关的研究，同义词扩展覆盖不同表达方式的文献，相关术语则帮助发现跨学科的创新研究。通过将"mechanism"、"kinetics"等理论关键词与具体技术术语结合，可以精准定位到既有理论深度又有实际意义的高质量研究，避免检索到过于宽泛或应用性过强的文献。
-
-💡 **学术指导**
-建议您的研究从以下几个方向展开：首先，深入了解不同催化剂体系（如镍基、铁基催化剂）的反应机理差异；其次，关注反应动力学建模，这是理解和优化过程的关键；第三，可以考虑结合密度泛函理论(DFT)计算来揭示催化活性位点。研究方法上，建议采用原位表征技术（如XPS、拉曼光谱）跟踪反应过程中的催化剂变化。对于文献调研，重点关注近3年的顶级期刊如Applied Catalysis B, Energy & Environmental Science等，同时不要忽视相关的专利文献，它们往往包含实用的工程细节。
-
 ## 上下文感知权重调整规则：
 
 ### 规则1：理论机理查询  
@@ -296,16 +231,16 @@
 ```
 {JSON分析数据}
 
-🎓 **专业解读**
+ **专业解读**
 [友好的专业知识介绍...]
 
-📊 **现状分析**  
+ **现状分析**  
 [研究领域趋势分析...]
 
-🔍 **搜索策略**
+ **搜索策略**
 [搜索逻辑解释...]
 
-💡 **学术指导**
+ **学术指导**
 [具体建议和方向...]
 ```
 '''

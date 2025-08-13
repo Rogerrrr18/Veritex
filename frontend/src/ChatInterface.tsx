@@ -46,6 +46,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [isKeywordPanelCollapsed, setIsKeywordPanelCollapsed] = useState(false);
   const [keywordPanelWidth, setKeywordPanelWidth] = useState(350);
   const [isResizing, setIsResizing] = useState(false);
+
+  // 自动折叠逻辑 - 监听面板宽度变化
+  useEffect(() => {
+    // 当关键词面板宽度小于200px时自动折叠
+    if (keywordPanelWidth < 200 && !isKeywordPanelCollapsed) {
+      setIsKeywordPanelCollapsed(true);
+    }
+    // 当宽度重新变大时自动展开
+    if (keywordPanelWidth >= 250 && isKeywordPanelCollapsed) {
+      setIsKeywordPanelCollapsed(false);
+    }
+  }, [keywordPanelWidth, isKeywordPanelCollapsed]);
   
   // My面板状态
   const [isMyPanelCollapsed, setIsMyPanelCollapsed] = useState(false);
@@ -1085,12 +1097,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                     }}
                     onMouseEnter={(e) => {
                       if (!selectedIds.includes(item.id)) {
-                        e.currentTarget.style.backgroundColor = theme === 'dark' ? '#222' : '#f0ede4';
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? '#222' : '#ffffff';
                       }
                     }}
                     onMouseLeave={(e) => {
                       if (!selectedIds.includes(item.id)) {
-                        e.currentTarget.style.backgroundColor = theme === 'dark' ? '#1a1a1a' : '#fefcf3';
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? '#1a1a1a' : '#ffffff';
                       }
                     }}
                   >
@@ -1158,7 +1170,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                           <div style={{
                             fontSize: '12px',
                             fontWeight: '500',
-                            color: '#fff',
+                            color: theme === 'dark' ? '#fff' : '#374151',
                             marginBottom: '4px',
                             lineHeight: '1.3',
                             overflow: 'hidden',
@@ -1395,37 +1407,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             </h1>
           </button>
           
-          {/* 右侧按钮 */}
+          {/* 右侧按钮区域 - 已删除keywords折叠按钮 */}
           <div style={{ position: 'absolute', right: '20px', display: 'flex', gap: '8px' }}>
-            {/* 侧边栏折叠/展开按钮 */}
-            <button
-              onClick={() => setIsKeywordPanelCollapsed(!isKeywordPanelCollapsed)}
-              style={{
-                padding: '6px 8px',
-                borderRadius: '6px',
-                border: '1px solid #666',
-                background: 'transparent',
-                color: '#3bb0e6',
-                cursor: 'pointer',
-                fontSize: '14px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                minWidth: '32px',
-                transition: 'all 0.2s ease'
-              }}
-              title={isKeywordPanelCollapsed ? '展开关键词面板' : '关闭关键词面板'}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = '#3bb0e6';
-                e.currentTarget.style.backgroundColor = 'rgba(59,176,230,0.1)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = theme === 'dark' ? '#666' : '#d6d3d1';
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-            >
-              {isKeywordPanelCollapsed ? '◀' : '▶'}
-            </button>
+            {/* 关键词面板将根据宽度自动折叠，无需手动按钮 */}
           </div>
         </div>
 
@@ -1457,13 +1441,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   height: '32px',
                   borderRadius: '50%',
                   backgroundColor: '#3bb0e6',
+                  color: 'white',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '16px',
-                  flexShrink: 0
+                  fontSize: '20px',
+                  fontWeight: '900',
+                  flexShrink: 0,
+                  letterSpacing: '-1px'
                 }}>
-                  🤖
+                  V
                 </div>
               )}
 
@@ -1701,7 +1688,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                         fontWeight: '500'
                       }}
                     >
-                      {isLoading ? '搜索中...' : '开始搜索'}
+                      {isLoading ? 'Searching...' : 'Start Search'}
                     </button>
                     <button
                       onClick={() => {
@@ -1726,7 +1713,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                         fontWeight: '500'
                       }}
                     >
-                      跳过
+                      Skip
                     </button>
                   </div>
                 )}
@@ -1748,22 +1735,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               </div>
               </div>
 
-              {/* 用户头像 */}
-              {message.isUser && (
-                <div style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  backgroundColor: '#666',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '16px',
-                  flexShrink: 0
-                }}>
-                  👤
-                </div>
-              )}
             </div>
           ))}
 
@@ -1780,12 +1751,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 height: '32px',
                 borderRadius: '50%',
                 backgroundColor: '#3bb0e6',
+                color: 'white',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '16px'
+                fontSize: '20px',
+                fontWeight: '900',
+                letterSpacing: '-1px'
               }}>
-                🤖
+                V
               </div>
               <div style={{
                 backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
@@ -1831,26 +1805,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3'
         }}>
           <div style={{
+            position: 'relative',
             display: 'flex',
-            gap: '12px',
-            alignItems: 'flex-end',
-            position: 'relative'
+            alignItems: 'flex-end'
           }}>
             <div style={{ position: 'relative', flex: 1 }}>
               <textarea
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyPress}
-                placeholder="输入您的学术问题或研究主题..."
+                placeholder="输入您的学术问题或研究主题 / Enter academic/research interests..."
                 disabled={isLoading}
                 style={{
                   width: '100%',
-                  padding: '12px 16px',
+                  padding: '12px 60px 12px 16px',
                   borderRadius: '12px',
                   border: `1px solid ${theme === 'dark' ? '#333' : '#d1d5db'}`,
                   backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
                   color: theme === 'dark' ? '#fff' : '#1f2937',
                   fontSize: '14px',
+                  fontStyle: 'italic',
                   lineHeight: '1.5',
                   resize: 'none',
                   minHeight: '44px',
@@ -1865,26 +1839,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   target.style.height = Math.min(target.scrollHeight, 120) + 'px';
                 }}
               />
+              
+              {/* 发送按钮放在输入框内部 */}
+              <button
+                onClick={handleSendMessage}
+                disabled={isLoading || !inputMessage.trim()}
+                style={{
+                  position: 'absolute',
+                  right: '8px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  padding: '0',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  backgroundColor: inputMessage.trim() && !isLoading ? '#3bb0e6' : '#666',
+                  color: '#fff',
+                  cursor: inputMessage.trim() && !isLoading ? 'pointer' : 'not-allowed',
+                  fontSize: '16px',
+                  fontWeight: '900',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                {isLoading ? '...' : '↑'}
+              </button>
             </div>
-            
-            <button
-              onClick={handleSendMessage}
-              disabled={isLoading || !inputMessage.trim()}
-              style={{
-                padding: '12px 20px',
-                borderRadius: '12px',
-                border: 'none',
-                backgroundColor: inputMessage.trim() && !isLoading ? '#3bb0e6' : '#666',
-                color: '#fff',
-                cursor: inputMessage.trim() && !isLoading ? 'pointer' : 'not-allowed',
-                fontSize: '14px',
-                fontWeight: '600',
-                transition: 'all 0.2s',
-                minWidth: '80px'
-              }}
-            >
-              {isLoading ? '...' : '发送'}
-            </button>
           </div>
           
           <div style={{
@@ -1972,7 +1955,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              backgroundColor: theme === 'dark' ? '#111' : '#f8f8f8'
+              backgroundColor: theme === 'dark' ? '#0a0a0a' : '#f0f0f0'
             }}>
               <h3 style={{ 
                 margin: 0, 
@@ -1983,32 +1966,52 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 Keywords & Search
               </h3>
               
-              {/* 主题切换按钮 */}
+              {/* 主题切换双键开关 */}
               <button
                 onClick={toggleTheme}
                 style={{
-                  width: '28px',
-                  height: '28px',
-                  borderRadius: '50%',
-                  border: `1px solid ${theme === 'dark' ? '#666' : '#d1d5db'}`,
-                  backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                  color: theme === 'dark' ? '#fff' : '#1f2937',
+                  width: '52px',
+                  height: '24px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme === 'dark' ? '#3bb0e6' : '#e5e5e5',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '14px',
-                  transition: 'all 0.2s ease'
+                  padding: '2px',
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  position: 'relative'
                 }}
                 title={theme === 'dark' ? '切换到白天模式' : '切换到夜间模式'}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
-                }}
               >
-                {theme === 'dark' ? '☀️' : '🌙'}
+                {/* 滑动圆点 */}
+                <div
+                  style={{
+                    width: '20px',
+                    height: '20px',
+                    borderRadius: '50%',
+                    backgroundColor: '#ffffff',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transform: theme === 'dark' ? 'translateX(28px)' : 'translateX(0px)',
+                    transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    fontSize: '10px'
+                  }}
+                >
+                  {/* 简洁的图标 */}
+                  {theme === 'dark' ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="4" stroke="#3bb0e6" strokeWidth="2"/>
+                      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 6.34L4.93 4.93M19.07 19.07l-1.41-1.41" stroke="#3bb0e6" strokeWidth="1.5"/>
+                    </svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="#666" strokeWidth="2" fill="#666"/>
+                    </svg>
+                  )}
+                </div>
               </button>
             </div>
             

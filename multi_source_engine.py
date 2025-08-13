@@ -716,7 +716,8 @@ class MultiSourceEngine:
     def __init__(self):
         # 初始化核心数据源
         self.arxiv = ArxivAPI()
-        self.google_scholar = GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
+        # 临时完全禁用Google Scholar避免captcha问题
+        self.google_scholar = None  # GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
         
         # 可选数据源
         self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
@@ -792,15 +793,24 @@ class MultiSourceEngine:
             # 合并结果，记录各源的贡献
             all_papers = []
             source_stats = {}
+            source_names = ["arXiv", "Google Scholar", "Semantic Scholar", "Crossref", "PubMed"]
+            
             for i, result in enumerate(results):
+                source_name = source_names[i] if i < len(source_names) else f"source_{i}"
+                
                 if isinstance(result, Exception):
-                    logger.warning(f"搜索源 {i} 出错: {result}")
+                    logger.error(f"搜索源 {source_name} 出错: {type(result).__name__}: {result}")
+                    import traceback
+                    logger.error(f"详细错误信息: {traceback.format_exc()}")
                     continue
                 elif isinstance(result, list):
                     all_papers.extend(result)
                     # 记录各源获得的论文数
-                    source_name = result[0].source if result else f"source_{i}"
-                    source_stats[source_name] = len(result)
+                    actual_source_name = result[0].source if result else source_name
+                    source_stats[actual_source_name] = len(result)
+                    logger.info(f"✅ {source_name} 成功返回 {len(result)} 篇论文")
+                else:
+                    logger.warning(f"⚠️ {source_name} 返回了意外的结果类型: {type(result)}")
             
             # 输出各源统计信息
             for source, count in source_stats.items():

@@ -202,6 +202,9 @@ function InviteCodePage() {
 function HomePage() {
   const [input, setInput] = useState('')
   const [currentSlide, setCurrentSlide] = useState(0)
+  const [isAnimating, setIsAnimating] = useState(false)
+  const [typingText, setTypingText] = useState('')
+  const [isTyping, setIsTyping] = useState(true)
   const navigate = useNavigate()
   // const { t } = useGlobal() - not currently needed
 
@@ -222,6 +225,35 @@ function HomePage() {
     return () => clearInterval(interval)
   }, [])
 
+  // 打字效果
+  useEffect(() => {
+    const fullText = "Always feel free to ask！"
+    let currentIndex = 0
+    let isDeleting = false
+    
+    const typeWriter = () => {
+      if (!isDeleting && currentIndex <= fullText.length) {
+        setTypingText(fullText.slice(0, currentIndex))
+        currentIndex++
+      } else if (isDeleting && currentIndex >= 0) {
+        setTypingText(fullText.slice(0, currentIndex))
+        currentIndex--
+      }
+      
+      if (currentIndex === fullText.length + 1 && !isDeleting) {
+        setTimeout(() => {
+          isDeleting = true
+        }, 2000) // 停留2秒
+      } else if (currentIndex === -1 && isDeleting) {
+        isDeleting = false
+        currentIndex = 0
+      }
+    }
+    
+    const interval = setInterval(typeWriter, isDeleting ? 50 : 100)
+    return () => clearInterval(interval)
+  }, [])
+
   // 检查登录状态
   const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
   const userId = localStorage.getItem('user_id')
@@ -233,9 +265,34 @@ function HomePage() {
       navigate('/invite')
       return
     }
-    if (input.trim()) {
-      navigate('/conversation', { state: { input } })
+    
+    // 触发绽放动效
+    setIsAnimating(true)
+    // 延迟跳转以显示动效
+    setTimeout(() => {
+      // 清空当前聊天历史，开始新的聊天
+      localStorage.removeItem('veritex_chat_history')
+      if (input.trim()) {
+        navigate('/conversation', { state: { input } })
+      } else {
+        navigate('/conversation')
+      }
+    }, 600)
+  }
+
+  const handleInputClick = () => {
+    if (!hasValidSession) {
+      navigate('/invite')
+      return
     }
+    // 触发绽放动效
+    setIsAnimating(true)
+    // 延迟跳转以显示动效
+    setTimeout(() => {
+      // 清空当前聊天历史，开始新的聊天
+      localStorage.removeItem('veritex_chat_history')
+      navigate('/conversation')
+    }, 600)
   }
 
   return (
@@ -247,6 +304,7 @@ function HomePage() {
           <ul>
             <li><a href="/products">Products</a></li>
             <li><a href="/features">Features</a></li>
+            <li><a href="/pricing">Pricing</a></li>
             <li><a href="#">Support</a></li>
           </ul>
         </nav>
@@ -263,21 +321,69 @@ function HomePage() {
           </p>
           
           
-          <form className="hero-form" onSubmit={handleSubmit}>
-            <input
-              type="text"
-              className="input"
-              placeholder={hasValidSession ? "Always feel free to ask！" : "请先获取内测邀请码"}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={!hasValidSession}
-            />
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button type="submit" className="btn btn-secondary">
-                {hasValidSession ? 'Search & Chat' : 'Get Beta Code'}
-              </button>
-            </div>
-          </form>
+          <div style={{ position: 'relative' }}>
+            <form className="hero-form" onSubmit={handleSubmit}>
+              <div style={{ position: 'relative', width: '100%', maxWidth: '800px' }}>
+                <input
+                  type="text"
+                  className={`input ${isAnimating ? 'input-expanding' : ''}`}
+                  placeholder={hasValidSession ? typingText : "请先获取内测邀请码"}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onClick={handleInputClick}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && hasValidSession) {
+                      e.preventDefault()
+                      handleSubmit(e as any)
+                    }
+                  }}
+                  disabled={!hasValidSession}
+                  style={{
+                    cursor: hasValidSession ? 'pointer' : 'not-allowed',
+                    zIndex: isAnimating ? 1001 : 1,
+                    width: '100%',
+                    paddingRight: hasValidSession ? '60px' : '16px'
+                  }}
+                />
+                {/* 回车提示 - 放在输入框内部右侧 */}
+                {hasValidSession && (
+                  <div style={{
+                    position: 'absolute',
+                    right: '16px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    color: '#a1a1aa',
+                    fontSize: '14px',
+                    pointerEvents: 'none',
+                    zIndex: isAnimating ? 1002 : 2
+                  }}>
+                    <span>↵</span>
+                    <span style={{ fontSize: '12px' }}>Enter</span>
+                  </div>
+                )}
+                {/* 打字光标效果 */}
+                {hasValidSession && !input && (
+                  <div style={{
+                    position: 'absolute',
+                    left: `${12 + (typingText.length * 8)}px`,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    width: '2px',
+                    height: '20px',
+                    background: '#3bb0e6',
+                    animation: 'blink 1s infinite',
+                    pointerEvents: 'none',
+                    zIndex: isAnimating ? 1002 : 2
+                  }} />
+                )}
+              </div>
+              {/* 不再显示按钮，用户只需点击输入框或按回车即可 */}
+            </form>
+            
+          </div>
           
         </section>
         {/* 3D圆柱图片轮播 */}
@@ -303,6 +409,83 @@ function HomePage() {
           </div>
         </div>
       </main>
+
+      {/* 输入框无限扩大动效CSS样式 */}
+      <style>
+        {`
+          .input-expanding {
+            animation: inputExpandInfinite 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+            transform-origin: center;
+          }
+
+          @keyframes inputExpandInfinite {
+            0% {
+              transform: scale(1);
+              opacity: 1;
+              border-radius: 60px;
+            }
+            20% {
+              transform: scale(1.2);
+              opacity: 0.9;
+              border-radius: 70px;
+            }
+            40% {
+              transform: scale(2);
+              opacity: 0.7;
+              border-radius: 80px;
+            }
+            60% {
+              transform: scale(4);
+              opacity: 0.5;
+              border-radius: 100px;
+            }
+            80% {
+              transform: scale(8);
+              opacity: 0.3;
+              border-radius: 150px;
+            }
+            100% {
+              transform: scale(25);
+              opacity: 0;
+              border-radius: 200px;
+            }
+          }
+
+          /* 打字光标闪烁效果 */
+          @keyframes blink {
+            0%, 50% {
+              opacity: 1;
+            }
+            51%, 100% {
+              opacity: 0;
+            }
+          }
+
+          /* 鼠标悬停效果 */
+          .input:hover:not(:disabled) {
+            box-shadow: 0 0 15px rgba(59, 176, 230, 0.3);
+            transition: box-shadow 0.3s ease;
+          }
+
+          /* 确保动画不会影响页面布局 */
+          .homepage {
+            position: relative;
+            overflow: hidden;
+          }
+
+          /* 输入框样式调整 */
+          .input {
+            position: relative;
+            transition: transform 0.6s ease, opacity 0.6s ease;
+          }
+
+          /* 确保动画时输入框保持在最前面 */
+          .input-expanding {
+            position: relative;
+            z-index: 1001;
+          }
+        `}
+      </style>
     </div>
   )
 }
@@ -501,9 +684,109 @@ function ProductsPage() {
 // Features页面
 function FeaturesPage() {
   return (
-    <div className="features-page">
-      <h1>Features</h1>
-      <p>功能特性页面 - 请在这里添加您的功能特性信息</p>
+    <div className="features-page" style={{ minHeight: '100vh', background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: 40 }}>
+      <h1 style={{ fontSize: '3rem', fontWeight: 'bold', marginBottom: 0, marginTop: 0, letterSpacing: 1, lineHeight: 1.1, textAlign: 'center' }}>Features</h1>
+      <div style={{ maxWidth: 1100, width: '100%', margin: '0 auto', marginTop: 16, textAlign: 'center' }}>
+        <h2 style={{ fontWeight: 700, fontSize: '1.5rem', margin: '32px 0 12px 0', color: '#fff' }}>
+          Veritex - 功能特性
+        </h2>
+        <p style={{ color: '#a1a1aa', fontSize: '1.15rem', margin: '0 auto', maxWidth: 900, lineHeight: 1.7 }}>
+          功能特性页面正在建设中，敬请期待更多强大功能的发布！
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// Pricing页面
+function PricingPage() {
+  return (
+    <div className="pricing-page" style={{ minHeight: '100vh', background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: 40 }}>
+      <h1 style={{ fontSize: '3rem', fontWeight: 'bold', marginBottom: 0, marginTop: 0, letterSpacing: 1, lineHeight: 1.1, textAlign: 'center' }}>Pricing</h1>
+      <div style={{ maxWidth: 1100, width: '100%', margin: '0 auto', marginTop: 16, textAlign: 'center' }}>
+        <h2 style={{ fontWeight: 700, fontSize: '1.5rem', margin: '32px 0 12px 0', color: '#fff' }}>
+          Veritex - 定价方案
+        </h2>
+        <p style={{ color: '#a1a1aa', fontSize: '1.15rem', margin: '0 auto', maxWidth: 900, lineHeight: 1.7, marginBottom: '40px' }}>
+          在AI平权的时代，我们相信每个人都应该有机会接近真理，建立自己的思考体系。项目初期将全面开放，永久免费。
+        </p>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 40 }}>
+          {/* 免费方案卡片 */}
+          <div style={{ 
+            background: 'linear-gradient(135deg, rgba(59, 176, 230, 0.1), rgba(16, 185, 129, 0.1))',
+            border: '2px solid rgba(59, 176, 230, 0.3)',
+            borderRadius: '20px',
+            padding: '40px 30px',
+            maxWidth: '500px',
+            width: '100%',
+            position: 'relative',
+            boxShadow: '0 8px 32px rgba(59, 176, 230, 0.2)'
+          }}>
+            <div style={{ 
+              position: 'absolute',
+              top: '-12px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: '#3bb0e6',
+              color: '#fff',
+              padding: '6px 20px',
+              borderRadius: '20px',
+              fontSize: '14px',
+              fontWeight: '600'
+            }}>
+              推荐方案
+            </div>
+            
+            <h3 style={{ fontSize: '2rem', fontWeight: 'bold', margin: '20px 0 10px 0', color: '#fff' }}>免费版</h3>
+            <div style={{ fontSize: '3rem', fontWeight: 'bold', color: '#3bb0e6', margin: '10px 0' }}>
+              ¥0 <span style={{ fontSize: '1rem', color: '#a1a1aa', fontWeight: 'normal' }}>/永久</span>
+            </div>
+            
+            <ul style={{ 
+              listStyle: 'none', 
+              padding: 0, 
+              margin: '30px 0', 
+              textAlign: 'left',
+              color: '#fff',
+              fontSize: '1.1rem',
+              lineHeight: '2'
+            }}>
+              <li style={{ marginBottom: '12px' }}>✅ 无限制关键词扩展</li>
+              <li style={{ marginBottom: '12px' }}>✅ 批量论文检索</li>
+              <li style={{ marginBottom: '12px' }}>✅ 智能摘要提取</li>
+              <li style={{ marginBottom: '12px' }}>✅ 报告导出功能</li>
+              <li style={{ marginBottom: '12px' }}>✅ 多学科支持</li>
+              <li style={{ marginBottom: '12px' }}>✅ 云端数据同步</li>
+            </ul>
+            
+            <button style={{
+              width: '100%',
+              padding: '16px',
+              background: '#3bb0e6',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '12px',
+              fontSize: '18px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.3s ease'
+            }}
+            onMouseEnter={(e) => (e.target as HTMLButtonElement).style.background = '#2da5d9'}
+            onMouseLeave={(e) => (e.target as HTMLButtonElement).style.background = '#3bb0e6'}>
+              立即开始使用
+            </button>
+          </div>
+          
+          {/* 未来计划 */}
+          <div style={{ textAlign: 'center', marginTop: '20px' }}>
+            <p style={{ color: '#a1a1aa', fontSize: '1rem', lineHeight: 1.8 }}>
+              我们承诺在项目发展过程中始终保持核心功能免费。<br/>
+              未来可能推出的高级功能将以可选付费形式提供，但基础研究功能永远免费。
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -944,6 +1227,7 @@ function App() {
       <Route path="/invite" element={<InviteCodePage />} />
       <Route path="/products" element={<ProductsPage />} />
       <Route path="/features" element={<FeaturesPage />} />
+      <Route path="/pricing" element={<PricingPage />} />
       
       {/* 需要认证的路由 */}
       <Route path="/conversation" element={

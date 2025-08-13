@@ -134,6 +134,7 @@ def calculate_total_tokens(history: List[Dict[str, Any]]) -> Dict[str, Any]:
         "estimated_cost_usd": total_tokens * 0.000002  # 估算成本，实际根据模型定价调整
     }
 
+
 # === 关键词扩展接口 ===
 @app.post("/expand_keywords", response_model=KeywordExpansionResponse)
 async def expand_keywords_api(request: KeywordExpansionRequest):
