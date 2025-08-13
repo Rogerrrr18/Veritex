@@ -1,4 +1,5 @@
-// 轻量本地鉴权与行为日志模块（替代已移除的 supabaseClient）
+// 整合Supabase的用户认证与行为日志模块
+import { createUserWithInviteCode, updateUserActivity, logUserAction as logToSupabase } from './supabaseClient'
 
 export interface RegisterResult {
   success: boolean;
@@ -14,44 +15,98 @@ function ensureUserId(): string {
   return newId;
 }
 
-// 邀请码注册（前端校验 + 尝试上报后端）
+// 邀请码注册 - 优先使用Supabase验证，失败时降级到本地验证
 export async function registerUser(inviteCode: string): Promise<RegisterResult> {
-  if (!inviteCode || inviteCode.trim().length < 6) {
-    return { success: false, error: '邀请码无效，请输入6位邀请码' };
+  console.log('开始验证内测码:', inviteCode);
+  
+  if (!inviteCode || inviteCode.trim().length === 0) {
+    return { success: false, error: '请输入内测码' };
   }
 
-  const userId = ensureUserId();
+  const trimmedCode = inviteCode.trim();
+  console.log('处理后的内测码:', trimmedCode);
 
-  // 尝试通知后端（如果后端存在对应接口则记录下来，不存在也不影响前端流程）
   try {
-    await fetch('/analytics/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invite_code: inviteCode.trim(), user_id: userId })
-    });
-  } catch (err) {
-    // 忽略网络/接口错误，前端本地注册仍然生效
-    // console.warn('registerUser 上报失败:', err)
+    // 尝试通过Supabase验证内测码
+    console.log('开始Supabase验证...');
+    const supabaseResult = await createUserWithInviteCode(trimmedCode);
+    console.log('Supabase验证结果:', supabaseResult);
+    
+    if (supabaseResult.success && supabaseResult.userData) {
+      // Supabase验证成功，保存用户信息
+      console.log('Supabase验证成功，保存用户信息:', supabaseResult.userData.id);
+      localStorage.setItem('user_id', supabaseResult.userData.id);
+      localStorage.setItem('invite_logged_in', '1');
+      return { 
+        success: true, 
+        userData: { id: supabaseResult.userData.id } 
+      };
+    } else {
+      // Supabase验证失败，返回具体错误
+      console.log('Supabase验证失败:', supabaseResult.message);
+      return { 
+        success: false, 
+        error: supabaseResult.message || '内测码验证失败' 
+      };
+    }
+  } catch (error) {
+    console.error('Supabase验证出现异常:', error);
+    
+    // 检查是否是网络错误
+    if (error instanceof Error) {
+      if (error.message.includes('Failed to fetch') || error.message.includes('Network')) {
+        return { 
+          success: false, 
+          error: '网络连接失败，请检查网络连接或稍后重试' 
+        };
+      }
+      
+      return { 
+        success: false, 
+        error: `验证失败: ${error.message}` 
+      };
+    }
+    
+    // 降级到本地验证逻辑（仅作为最后手段）
+    console.warn('降级到本地验证模式');
+    const userId = ensureUserId();
+    
+    return { 
+      success: false, 
+      error: '内测码验证系统暂时不可用，请稍后重试' 
+    };
   }
-
-  return { success: true, userData: { id: userId } };
 }
 
-// 用户行为日志（失败时静默）
+// 用户行为日志 - 优先使用Supabase，失败时降级到后端API
 export async function logUserAction(
   userId: string,
   action: string,
   payload?: string
 ): Promise<void> {
+  // 更新用户活跃时间
   try {
-    await fetch('/analytics/log_action', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, action, payload, ts: Date.now() })
-    });
-  } catch (err) {
-    // 静默失败，避免影响主流程
-    // console.warn('logUserAction 上报失败:', err)
+    await updateUserActivity(userId);
+  } catch (error) {
+    console.warn('更新用户活跃时间失败:', error);
+  }
+
+  // 记录用户行为
+  try {
+    await logToSupabase(userId, action, payload);
+  } catch (error) {
+    console.warn('Supabase日志记录失败，降级到后端API:', error);
+    
+    // 降级到后端API
+    try {
+      await fetch('/analytics/log_action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, action, payload, ts: Date.now() })
+      });
+    } catch (err) {
+      console.warn('后端API日志记录也失败:', err);
+    }
   }
 }
 

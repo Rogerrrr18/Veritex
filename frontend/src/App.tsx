@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { registerUser, logUserAction } from './auth';
+import { registerUser } from './auth';
 import AdminDashboard from './AdminDashboard';
 import ChatInterface from './ChatInterface';
-import { api, APP_CONFIG, DEV_CONFIG } from './config';
+import { APP_CONFIG } from './config';
 import { useGlobal } from './contexts/GlobalContext';
-import ThemeLanguageSwitcher from './components/ThemeLanguageSwitcher';
+import { ProtectedRoute } from './components/ProtectedRoute';
 
 // 搜索历史管理
 interface SearchHistory {
@@ -36,124 +36,44 @@ interface HistoryItem {
   data: SearchHistory | ChatHistory;
 }
 
-const SEARCH_STORAGE_KEY = 'paper_god_search_history';
-const CHAT_STORAGE_KEY = 'paper_god_chat_history';
-const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+// 导入新的数据服务
+import { SearchHistoryService, ChatHistoryService, UnifiedHistoryService } from './services/dataService';
 
-// 搜索历史管理
-const saveSearchHistory = (history: SearchHistory) => {
-  const existingHistory = JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
-  existingHistory.unshift(history);
-  if (existingHistory.length > 50) {
-    existingHistory.splice(50);
-  }
-  localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(existingHistory));
-  
-  // 同时保存到统一历史记录
-  saveToUnifiedHistory({
-    id: history.id,
-    timestamp: history.timestamp,
-    type: 'search',
-    title: history.originalQuery,
-    data: history
-  });
-};
+// 数据服务函数现在都在 dataService.ts 中统一管理
 
-const getSearchHistory = (): SearchHistory[] => {
-  return JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
-};
+// 统一历史记录管理 - 现在使用云端数据服务
+const getUnifiedHistory = async (): Promise<HistoryItem[]> => {
+  const userId = localStorage.getItem('user_id');
+  if (!userId) return [];
 
-const deleteSearchHistory = (ids: string[]) => {
-  const existingHistory = getSearchHistory();
-  const filteredHistory = existingHistory.filter(item => !ids.includes(item.id));
-  localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(filteredHistory));
-};
-
-const clearAllSearchHistory = () => {
-  localStorage.removeItem(SEARCH_STORAGE_KEY);
-};
-
-// 聊天历史管理
-const saveChatHistory = (chat: ChatHistory) => {
-  const existingHistory = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
-  const existingIndex = existingHistory.findIndex((item: ChatHistory) => item.id === chat.id);
-  
-  if (existingIndex >= 0) {
-    existingHistory[existingIndex] = chat;
-  } else {
-    existingHistory.unshift(chat);
-  }
-  
-  if (existingHistory.length > 50) {
-    existingHistory.splice(50);
-  }
-  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(existingHistory));
-  
-  // 同时保存到统一历史记录
-  saveToUnifiedHistory({
-    id: chat.id,
-    timestamp: chat.lastActivity,
-    type: 'chat',
-    title: chat.title,
-    data: chat
-  });
-};
-
-const getChatHistory = (): ChatHistory[] => {
-  return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
-};
-
-// 统一历史记录管理
-const saveToUnifiedHistory = (item: HistoryItem) => {
-  const existingHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
-  const existingIndex = existingHistory.findIndex((h: HistoryItem) => h.id === item.id);
-  
-  if (existingIndex >= 0) {
-    existingHistory[existingIndex] = item;
-  } else {
-    existingHistory.unshift(item);
-  }
-  
-  // 按时间排序
-  existingHistory.sort((a: HistoryItem, b: HistoryItem) => b.timestamp - a.timestamp);
-  
-  if (existingHistory.length > 100) {
-    existingHistory.splice(100);
-  }
-  localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(existingHistory));
-};
-
-const getUnifiedHistory = (): HistoryItem[] => {
-  return JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
-};
-
-const deleteUnifiedHistory = (ids: string[]) => {
-  const existingHistory = getUnifiedHistory();
-  const filteredHistory = existingHistory.filter(item => !ids.includes(item.id));
-  localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(filteredHistory));
-  
-  // 同时删除对应的搜索和聊天历史
-  const searchIds = ids.filter(id => {
-    const item = existingHistory.find(h => h.id === id);
-    return item?.type === 'search';
-  });
-  const chatIds = ids.filter(id => {
-    const item = existingHistory.find(h => h.id === id);
-    return item?.type === 'chat';
-  });
-  
-  if (searchIds.length > 0) deleteSearchHistory(searchIds);
-  if (chatIds.length > 0) {
-    const chatHistory = getChatHistory();
-    const filteredChatHistory = chatHistory.filter(item => !chatIds.includes(item.id));
-    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(filteredChatHistory));
+  try {
+    return await UnifiedHistoryService.getHistory(userId);
+  } catch (error) {
+    console.error('获取统一历史失败:', error);
+    return [];
   }
 };
 
-const clearAllHistory = () => {
-  localStorage.removeItem(SEARCH_STORAGE_KEY);
-  localStorage.removeItem(CHAT_STORAGE_KEY);
-  localStorage.removeItem(UNIFIED_HISTORY_KEY);
+const deleteUnifiedHistory = async (ids: string[]) => {
+  const userId = localStorage.getItem('user_id');
+  if (!userId) return;
+
+  try {
+    await UnifiedHistoryService.deleteHistory(userId, ids);
+  } catch (error) {
+    console.error('删除统一历史失败:', error);
+  }
+};
+
+const clearAllHistory = async () => {
+  const userId = localStorage.getItem('user_id');
+  if (!userId) return;
+
+  try {
+    await UnifiedHistoryService.clearAll(userId);
+  } catch (error) {
+    console.error('清空所有历史失败:', error);
+  }
 };
 
 // 简洁主题切换icon，仅用于报告页
@@ -258,9 +178,7 @@ function InviteCodePage() {
   return (
     <div className="invite-page" style={{ minHeight: '100vh', background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ background: 'rgba(30,30,30,0.98)', borderRadius: 18, padding: '48px 32px', boxShadow: '0 4px 32px rgba(0,0,0,0.18)', minWidth: 320, maxWidth: 360 }}>
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 24 }}>
-          <ThemeLanguageSwitcher />
-        </div>
+        {/* 已删除中英文切换按钮 */}
         <h2 style={{ fontWeight: 700, fontSize: '2rem', marginBottom: 24, textAlign: 'center' }}>{t('invite.title')}</h2>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <input
@@ -522,21 +440,10 @@ function ReportPage() {
 
 // Elicit风格研究页面
 function ElicitPage() {
-  const navigate = useNavigate()
   const location = useLocation()
   const [query] = useState(location.state?.query || '')
 
-  // 检查登录状态
-  useEffect(() => {
-    const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
-    const userId = localStorage.getItem('user_id')
-    
-    if (!isLoggedIn || !userId) {
-      localStorage.removeItem('invite_logged_in')
-      localStorage.removeItem('user_id')
-      navigate('/invite')
-    }
-  }, [navigate])
+  // 认证检查现在由ProtectedRoute处理
 
   return (
     <div style={{ 
@@ -621,24 +528,14 @@ function MyPage() {
   const [filter, setFilter] = useState<'search' | 'chat'>('search')
   // useGlobal hook available but not currently needed
 
-  // 检查登录状态
+  // 认证检查现在由ProtectedRoute处理
   useEffect(() => {
-    const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
-    const userId = localStorage.getItem('user_id')
-    
-    if (!isLoggedIn || !userId) {
-      localStorage.removeItem('invite_logged_in')
-      localStorage.removeItem('user_id')
-      navigate('/invite')
-      return
-    }
-    
     // 加载历史记录
     loadHistory()
-  }, [navigate])
+  }, [])
 
-  const loadHistory = () => {
-    const history = getUnifiedHistory()
+  const loadHistory = async () => {
+    const history = await getUnifiedHistory()
     setUnifiedHistory(history)
   }
 
@@ -661,20 +558,20 @@ function MyPage() {
     }
   }
 
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = async () => {
     if (selectedIds.length === 0) return
     
     if (confirm(`确定要删除选中的 ${selectedIds.length} 条记录吗？`)) {
-      deleteUnifiedHistory(selectedIds)
+      await deleteUnifiedHistory(selectedIds)
       setSelectedIds([])
       setSelectAll(false)
-      loadHistory()
+      await loadHistory()
     }
   }
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     if (confirm('确定要清空所有历史记录吗？此操作不可恢复。')) {
-      clearAllHistory()
+      await clearAllHistory()
       setUnifiedHistory([])
       setSelectedIds([])
       setSelectAll(false)
@@ -1056,14 +953,35 @@ function App() {
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/invite" element={<InviteCodePage />} />
-      <Route path="/conversation" element={<ChatInterface />} />
-      <Route path="/elicit" element={<ElicitPage />} />
-      <Route path="/report" element={<ReportPage />} />
-      <Route path="/my" element={<MyPage />} />
       <Route path="/products" element={<ProductsPage />} />
       <Route path="/features" element={<FeaturesPage />} />
-      <Route path="/admin" element={<AdminDashboard />} />
-      {/* 移除作者分析相关路由 */}
+      
+      {/* 需要认证的路由 */}
+      <Route path="/conversation" element={
+        <ProtectedRoute>
+          <ChatInterface />
+        </ProtectedRoute>
+      } />
+      <Route path="/elicit" element={
+        <ProtectedRoute>
+          <ElicitPage />
+        </ProtectedRoute>
+      } />
+      <Route path="/report" element={
+        <ProtectedRoute>
+          <ReportPage />
+        </ProtectedRoute>
+      } />
+      <Route path="/my" element={
+        <ProtectedRoute>
+          <MyPage />
+        </ProtectedRoute>
+      } />
+      <Route path="/admin" element={
+        <ProtectedRoute>
+          <AdminDashboard />
+        </ProtectedRoute>
+      } />
     </Routes>
   )
 }
