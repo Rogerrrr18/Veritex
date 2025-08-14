@@ -135,10 +135,45 @@ export async function createUserWithInviteCode(code: string): Promise<{
 }
 
 /**
+ * 设置当前用户上下文（用于RLS策略）
+ */
+export async function setCurrentUserContext(userId: string): Promise<void> {
+  try {
+    console.log(`🔐 设置用户上下文: ${userId}`)
+    await supabase.rpc('set_config', {
+      setting_name: 'myapp.current_user_id',
+      setting_value: userId,
+      is_local: false
+    })
+  } catch (error) {
+    console.error('设置用户上下文失败:', error)
+  }
+}
+
+/**
+ * 清除用户上下文
+ */
+export async function clearUserContext(): Promise<void> {
+  try {
+    console.log('🗑️ 清除用户上下文')
+    await supabase.rpc('set_config', {
+      setting_name: 'myapp.current_user_id',
+      setting_value: '',
+      is_local: false
+    })
+  } catch (error) {
+    console.error('清除用户上下文失败:', error)
+  }
+}
+
+/**
  * 更新用户最后活跃时间
  */
 export async function updateUserActivity(userId: string): Promise<void> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     await supabase
       .from('users')
       .update({
@@ -159,6 +194,9 @@ export async function logUserAction(
   payload?: unknown
 ): Promise<void> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     await supabase
       .from('user_actions')
       .insert({
@@ -189,6 +227,9 @@ export interface SearchHistoryData {
  */
 export async function saveSearchHistory(data: SearchHistoryData): Promise<void> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(data.userId)
+    
     await supabase
       .from('user_search_history')
       .insert({
@@ -211,6 +252,9 @@ export async function saveSearchHistory(data: SearchHistoryData): Promise<void> 
  */
 export async function getUserSearchHistory(userId: string): Promise<SearchHistoryData[]> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     const { data, error } = await supabase
       .from('user_search_history')
       .select('*')
@@ -240,6 +284,9 @@ export async function getUserSearchHistory(userId: string): Promise<SearchHistor
  */
 export async function deleteSearchHistory(userId: string, searchIds: string[]): Promise<void> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     await supabase
       .from('user_search_history')
       .delete()
@@ -267,6 +314,9 @@ export interface ChatHistoryData {
  */
 export async function saveChatHistory(data: ChatHistoryData): Promise<void> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(data.userId)
+    
     const { error } = await supabase
       .from('user_chat_history')
       .upsert({
@@ -292,6 +342,9 @@ export async function saveChatHistory(data: ChatHistoryData): Promise<void> {
  */
 export async function getUserChatHistory(userId: string): Promise<ChatHistoryData[]> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     const { data, error } = await supabase
       .from('user_chat_history')
       .select('*')
@@ -320,6 +373,9 @@ export async function getUserChatHistory(userId: string): Promise<ChatHistoryDat
  */
 export async function deleteChatHistory(userId: string, chatIds: string[]): Promise<void> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     await supabase
       .from('user_chat_history')
       .delete()
@@ -344,6 +400,9 @@ export interface UserSettings {
  */
 export async function saveUserSettings(userId: string, settings: UserSettings): Promise<void> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     await supabase
       .from('user_settings')
       .upsert({
@@ -366,6 +425,9 @@ export async function saveUserSettings(userId: string, settings: UserSettings): 
  */
 export async function getUserSettings(userId: string): Promise<UserSettings | null> {
   try {
+    // 先设置用户上下文
+    await setCurrentUserContext(userId)
+    
     const { data, error } = await supabase
       .from('user_settings')
       .select('*')

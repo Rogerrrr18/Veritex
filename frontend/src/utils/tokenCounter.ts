@@ -1,7 +1,7 @@
 // Token计算工具
 // 这是一个简化的token计算，实际token数可能会有差异
 
-const AVERAGE_TOKEN_PER_CHAR = 0.75; // 中英混合文本的平均token/字符比例
+// const AVERAGE_TOKEN_PER_CHAR = 0.75; // 中英混合文本的平均token/字符比例
 const MAX_TOKENS = 4000; // 4k token限制
 
 export function estimateTokens(text: string): number {

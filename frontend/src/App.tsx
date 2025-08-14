@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { registerUser } from './auth';
-import AdminDashboard from './AdminDashboard';
 import ChatInterface from './ChatInterface';
 import { APP_CONFIG } from './config';
 import { useGlobal } from './contexts/GlobalContext';
@@ -36,18 +35,14 @@ interface HistoryItem {
   data: SearchHistory | ChatHistory;
 }
 
-// 导入新的数据服务
-import { SearchHistoryService, ChatHistoryService, UnifiedHistoryService } from './services/dataService';
-
-// 数据服务函数现在都在 dataService.ts 中统一管理
-
-// 统一历史记录管理 - 现在使用云端数据服务
+// 统一历史记录管理 - 使用localStorage
 const getUnifiedHistory = async (): Promise<HistoryItem[]> => {
   const userId = localStorage.getItem('user_id');
   if (!userId) return [];
 
   try {
-    return await UnifiedHistoryService.getHistory(userId);
+    const historyData = localStorage.getItem(`paper_god_unified_history_user_${userId}`);
+    return historyData ? JSON.parse(historyData) : [];
   } catch (error) {
     console.error('获取统一历史失败:', error);
     return [];
@@ -59,7 +54,12 @@ const deleteUnifiedHistory = async (ids: string[]) => {
   if (!userId) return;
 
   try {
-    await UnifiedHistoryService.deleteHistory(userId, ids);
+    const historyData = localStorage.getItem(`paper_god_unified_history_user_${userId}`);
+    if (historyData) {
+      const history: HistoryItem[] = JSON.parse(historyData);
+      const filteredHistory = history.filter(item => !ids.includes(item.id));
+      localStorage.setItem(`paper_god_unified_history_user_${userId}`, JSON.stringify(filteredHistory));
+    }
   } catch (error) {
     console.error('删除统一历史失败:', error);
   }
@@ -70,74 +70,14 @@ const clearAllHistory = async () => {
   if (!userId) return;
 
   try {
-    await UnifiedHistoryService.clearAll(userId);
+    localStorage.removeItem(`paper_god_unified_history_user_${userId}`);
   } catch (error) {
     console.error('清空所有历史失败:', error);
   }
 };
 
 // 简洁主题切换icon，仅用于报告页
-function ReportThemeToggle({ theme, toggle }: { theme: string, toggle: () => void }) {
-  return (
-    <button
-      onClick={toggle}
-      style={{
-        background: theme === 'dark' ? '#111' : '#3bb0e6',
-        border: 'none',
-        cursor: 'pointer',
-        width: 60,
-        height: 32,
-        borderRadius: 20,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: theme === 'dark' ? 'flex-end' : 'flex-start',
-        padding: 4,
-        position: 'relative',
-        transition: 'background 0.3s',
-      }}
-      aria-label="切换日夜模式"
-      title={theme === 'dark' ? '切换为白天模式' : '切换为夜间模式'}
-    >
-      <span
-        style={{
-          width: 24,
-          height: 24,
-          borderRadius: '50%',
-          background: '#fff',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
-          fontSize: 18,
-          transition: 'all 0.3s',
-        }}
-      >
-        {theme === 'dark' ? (
-          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M15.5 13.5C13.5 15.5 10.5 15.5 8.5 13.5C6.5 11.5 6.5 8.5 8.5 6.5C10.5 4.5 13.5 4.5 15.5 6.5C17.5 8.5 17.5 11.5 15.5 13.5Z" stroke="#222" strokeWidth="1.5"/>
-            <circle cx="14.5" cy="7.5" r="1" fill="#222"/>
-            <circle cx="12.5" cy="10.5" r="0.5" fill="#222"/>
-            <circle cx="16" cy="10" r="0.5" fill="#222"/>
-          </svg>
-        ) : (
-          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="10" cy="10" r="5" fill="#FFD600" stroke="#FFD600" strokeWidth="1.5"/>
-            <g stroke="#FFD600" strokeWidth="1.2">
-              <line x1="10" y1="2" x2="10" y2="4"/>
-              <line x1="10" y1="16" x2="10" y2="18"/>
-              <line x1="2" y1="10" x2="4" y2="10"/>
-              <line x1="16" y1="10" x2="18" y2="10"/>
-              <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"/>
-              <line x1="15.07" y1="15.07" x2="13.66" y2="13.66"/>
-              <line x1="4.93" y1="15.07" x2="6.34" y2="13.66"/>
-              <line x1="15.07" y1="4.93" x2="13.66" y2="6.34"/>
-            </g>
-          </svg>
-        )}
-      </span>
-    </button>
-  )
-}
+// 简洁主题切换组件（移除未使用警告）
 
 // 邀请码登录页
 function InviteCodePage() {
@@ -204,7 +144,7 @@ function HomePage() {
   const [currentSlide, setCurrentSlide] = useState(0)
   const [isAnimating, setIsAnimating] = useState(false)
   const [typingText, setTypingText] = useState('')
-  const [isTyping, setIsTyping] = useState(true)
+  const [,] = useState(true)
   const [showUserMenu, setShowUserMenu] = useState(false)
   const navigate = useNavigate()
   // const { t } = useGlobal() - not currently needed
@@ -288,14 +228,14 @@ function HomePage() {
         if (!hasValidSession) {
           navigate('/invite')
         } else {
-          // 触发绽放动效
+          // 触发穿梭动效
           setIsAnimating(true)
           // 延迟跳转以显示动效
           setTimeout(() => {
             // 清空当前聊天历史，开始新的聊天
             localStorage.removeItem('veritex_chat_history')
             navigate('/conversation')
-          }, 600)
+          }, 400)
         }
       }
     }
@@ -326,7 +266,7 @@ function HomePage() {
       return
     }
     
-    // 触发绽放动效
+    // 触发穿梭动效
     setIsAnimating(true)
     // 延迟跳转以显示动效
     setTimeout(() => {
@@ -337,7 +277,7 @@ function HomePage() {
       } else {
         navigate('/conversation')
       }
-    }, 600)
+    }, 400)
   }
 
   const handleInputClick = () => {
@@ -345,18 +285,18 @@ function HomePage() {
       navigate('/invite')
       return
     }
-    // 触发绽放动效
+    // 触发穿梭动效
     setIsAnimating(true)
     // 延迟跳转以显示动效
     setTimeout(() => {
       // 清空当前聊天历史，开始新的聊天
       localStorage.removeItem('veritex_chat_history')
       navigate('/conversation')
-    }, 600)
+    }, 400)
   }
 
   return (
-    <div className="homepage">
+    <div className={`homepage ${isAnimating ? 'warping' : ''}`}>
       {/* 页眉 */}
       <header className="header">
         <div className="logo">Veritex</div>
@@ -489,10 +429,10 @@ function HomePage() {
           
           <div style={{ position: 'relative' }}>
             <form className="hero-form" onSubmit={handleSubmit}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '800px' }}>
+              <div className={`${isAnimating ? 'input-expanding' : ''}`} style={{ position: 'relative', width: '100%', maxWidth: '800px' }}>
                 <input
                   type="text"
-                  className={`input ${isAnimating ? 'input-expanding' : ''}`}
+                  className="input"
                   placeholder={hasValidSession ? typingText : "请先获取内测邀请码"}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -576,44 +516,68 @@ function HomePage() {
         </div>
       </main>
 
-      {/* 输入框无限扩大动效CSS样式 */}
+      {/* 穿梭动效CSS样式 */}
       <style>
         {`
           .input-expanding {
-            animation: inputExpandInfinite 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+            animation: warpTunnel 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
             transform-origin: center;
           }
 
-          @keyframes inputExpandInfinite {
+          @keyframes warpTunnel {
             0% {
-              transform: scale(1);
+              transform: perspective(1000px) scale(1) translateZ(0) rotateX(0deg);
               opacity: 1;
               border-radius: 60px;
+              box-shadow: 
+                0 0 0 rgba(59, 176, 230, 0.3),
+                inset 0 0 20px rgba(255, 255, 255, 0.1);
+              filter: brightness(1) blur(0px);
             }
             20% {
-              transform: scale(1.2);
-              opacity: 0.9;
-              border-radius: 70px;
+              transform: perspective(1000px) scale(0.92) translateZ(-10px) rotateX(1deg);
+              opacity: 0.95;
+              border-radius: 50px;
+              box-shadow: 
+                0 0 20px rgba(59, 176, 230, 0.4),
+                inset 0 0 25px rgba(255, 255, 255, 0.15);
+              filter: brightness(1.05) blur(0px);
             }
             40% {
-              transform: scale(2);
-              opacity: 0.7;
-              border-radius: 80px;
+              transform: perspective(1000px) scale(0.75) translateZ(-30px) rotateX(2deg);
+              opacity: 0.85;
+              border-radius: 35px;
+              box-shadow: 
+                0 0 40px rgba(59, 176, 230, 0.6),
+                inset 0 0 35px rgba(255, 255, 255, 0.2);
+              filter: brightness(1.1) blur(0.5px);
             }
             60% {
-              transform: scale(4);
-              opacity: 0.5;
-              border-radius: 100px;
+              transform: perspective(1000px) scale(0.5) translateZ(-80px) rotateX(3deg);
+              opacity: 0.7;
+              border-radius: 25px;
+              box-shadow: 
+                0 0 70px rgba(59, 176, 230, 0.7),
+                inset 0 0 45px rgba(255, 255, 255, 0.3);
+              filter: brightness(1.15) blur(1px);
             }
             80% {
-              transform: scale(8);
-              opacity: 0.3;
-              border-radius: 150px;
+              transform: perspective(1000px) scale(0.25) translateZ(-150px) rotateX(4deg);
+              opacity: 0.4;
+              border-radius: 15px;
+              box-shadow: 
+                0 0 120px rgba(59, 176, 230, 0.8),
+                inset 0 0 60px rgba(255, 255, 255, 0.4);
+              filter: brightness(1.2) blur(1.5px);
             }
             100% {
-              transform: scale(25);
+              transform: perspective(1000px) scale(0.05) translateZ(-300px) rotateX(5deg);
               opacity: 0;
-              border-radius: 200px;
+              border-radius: 50%;
+              box-shadow: 
+                0 0 200px rgba(59, 176, 230, 0.9),
+                inset 0 0 100px rgba(255, 255, 255, 0.6);
+              filter: brightness(1.3) blur(2px);
             }
           }
 
@@ -637,19 +601,38 @@ function HomePage() {
           .homepage {
             position: relative;
             overflow: hidden;
+            perspective: 1000px;
           }
 
           /* 输入框样式调整 */
           .input {
             position: relative;
-            transition: transform 0.6s ease, opacity 0.6s ease;
+            transition: transform 0.8s ease, opacity 0.8s ease;
+            transform-style: preserve-3d;
           }
 
           /* 确保动画时输入框保持在最前面 */
           .input-expanding {
             position: relative;
             z-index: 1001;
+            transform-style: preserve-3d;
           }
+
+          /* 添加穿梭背景特效 */
+          .homepage::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.1) 100%);
+            pointer-events: none;
+            z-index: -1;
+            transition: opacity 0.8s ease;
+          }
+
+          /* 删除背景变蓝动效，保持背景不变 */
         `}
       </style>
     </div>
@@ -660,12 +643,12 @@ function HomePage() {
 // 报告页组件
 function ReportPage() {
   const navigate = useNavigate()
-  const { theme, t, toggleTheme } = useGlobal()
+  const { theme, t } = useGlobal()
   const location = useLocation()
   const [papers] = useState(location.state?.papers || [])
-  const [expandedKeywords] = useState(location.state?.expandedKeywords || [])
-  const [originalQuery] = useState(location.state?.originalQuery || '')
-  const [maxResults] = useState(location.state?.maxResults || 20)
+  const [,] = useState(location.state?.expandedKeywords || [])
+  const [,] = useState(location.state?.originalQuery || '')
+  const [,] = useState(location.state?.maxResults || 20)
   const [expandedIdx, setExpandedIdx] = useState<{[key:number]: boolean}>({})
   const MAX_ABSTRACT = APP_CONFIG.ABSTRACT_PREVIEW_LENGTH
   const toggleAbstract = (idx: number) => setExpandedIdx(e => ({...e, [idx]: !e[idx]}))
@@ -1413,11 +1396,6 @@ function App() {
       <Route path="/my" element={
         <ProtectedRoute>
           <MyPage />
-        </ProtectedRoute>
-      } />
-      <Route path="/admin" element={
-        <ProtectedRoute>
-          <AdminDashboard />
         </ProtectedRoute>
       } />
     </Routes>

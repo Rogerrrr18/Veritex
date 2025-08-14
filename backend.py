@@ -275,34 +275,41 @@ async def analytics_log_action(req: LogActionRequest):
 
 @app.post("/search_papers")
 async def search_papers_api(req: SearchRequest):
-    """优化后的搜索接口 - 使用预扩展的关键词或重新分析"""
+    """优化后的搜索接口 - 优先使用预扩展关键词，避免重复LLM分析"""
     try:
-        logger.info(f"搜索请求: {req.query}")
+        logger.info(f"🔍 搜索请求: {req.query}")
         
-        # 如果有预扩展的关键词，直接使用
+        # 📊 性能优化：优先使用预扩展的关键词，避免重复LLM调用
         if req.expanded_keywords and req.expanded_keywords.get('hierarchical_keywords'):
-            logger.info("使用预扩展的关键词执行搜索")
+            logger.info("✅ 检测到预扩展关键词，直接执行搜索（跳过LLM分析）")
             
-            # 直接调用多源搜索引擎，避免重复LLM分析
             try:
                 from multi_source_engine import MultiSourceEngine
                 search_engine = MultiSourceEngine()
                 
-                # 从预扩展关键词构建查询
+                # 智能构建搜索查询
                 hierarchical = req.expanded_keywords['hierarchical_keywords']
                 exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
                 core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
+                related_terms = hierarchical.get("related_terms", {}).get("terms", [])
                 
+                # 构建最优搜索查询
                 if exact_terms:
+                    # 使用精确术语，最多3个
                     search_query = " ".join(exact_terms[:3])
                 elif core_synonyms:
-                    search_query = " ".join(core_synonyms[:3])  
+                    # 使用核心同义词，最多3个  
+                    search_query = " ".join(core_synonyms[:3])
+                elif related_terms:
+                    # 使用相关术语，最多2个
+                    search_query = " ".join(related_terms[:2])
                 else:
+                    # 回退到原始查询
                     search_query = req.query
                 
-                logger.info(f"使用构建的查询: {search_query}")
+                logger.info(f"🎯 构建优化查询: {search_query}")
                 
-                # 执行搜索
+                # 执行多源并行搜索
                 papers = await search_engine.search_parallel_with_filters(
                     query=search_query,
                     max_results=req.max_results,
@@ -310,6 +317,8 @@ async def search_papers_api(req: SearchRequest):
                     year_to=req.year_to,
                     sources=req.sources
                 )
+                
+                logger.info(f"📚 搜索完成，获得 {len(papers)} 篇论文")
                 
                 # 格式化结果
                 formatted_papers = []
@@ -340,15 +349,35 @@ async def search_papers_api(req: SearchRequest):
                             "is_academic_query": True,
                             "analysis_result": req.expanded_keywords,
                             "used_preexpanded_keywords": True
+                        },
+                        "performance": {
+                            "skip_llm_analysis": True,  # 标记跳过了LLM分析
+                            "direct_search": True,
+                            "token_saved": True  # 节省了token
                         }
                     }
                 }
+                
             except Exception as e:
-                logger.error(f"直接搜索失败，回退到智能工作流: {e}")
-                # 如果直接搜索失败，回退到原有逻辑
+                logger.error(f"❌ 直接搜索失败: {e}")
+                # 出错时仍然记录避免了LLM调用的尝试
+                logger.info("⚠️ 直接搜索失败，但已避免了不必要的LLM分析")
+                
+                # 返回错误而不是回退，避免意外的LLM消耗
+                return {
+                    "success": False,
+                    "error": f"基于预扩展关键词的搜索失败: {str(e)}",
+                    "data": {"papers": [], "total_found": 0},
+                    "performance": {
+                        "attempted_direct_search": True,
+                        "avoided_llm_analysis": True
+                    }
+                }
         
-        # 没有预扩展关键词，使用智能工作流（包含重新分析）
-        logger.info("使用智能工作流执行搜索（包含关键词分析）")
+        # 🔄 回退模式：没有预扩展关键词时才使用智能工作流
+        logger.info("⚠️ 未提供预扩展关键词，使用智能工作流（包含LLM分析）")
+        logger.warning("💰 注意：将消耗LLM tokens进行关键词分析")
+        
         result = await chat_with_search_strategy(
             query=req.query, 
             force_search=True,
@@ -371,18 +400,20 @@ async def search_papers_api(req: SearchRequest):
                     },
                     "performance": {
                         "intelligent_workflow": True,
-                        "llm_analysis": True
+                        "llm_analysis": True,  # 标记使用了LLM分析
+                        "token_consumed": True  # 消耗了token
                     }
                 }
             }
         else:
             return {
                 "success": False,
-                "error": result.get('error_message', '搜索失败'),
+                "error": result.get('error_message', '智能工作流搜索失败'),
                 "data": {"papers": [], "total_found": 0}
             }
+            
     except Exception as e:
-        logger.error(f"搜索失败: {e}")
+        logger.error(f"❌ 搜索接口失败: {e}")
         return {
             "success": False,
             "error": str(e),

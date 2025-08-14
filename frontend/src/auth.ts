@@ -69,7 +69,7 @@ export async function registerUser(inviteCode: string): Promise<RegisterResult> 
     
     // 降级到本地验证逻辑（仅作为最后手段）
     console.warn('降级到本地验证模式');
-    const userId = ensureUserId();
+    ensureUserId();
     
     return { 
       success: false, 

@@ -5,12 +5,32 @@ import { api, apiCall, API_CONFIG } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
 import TokenProgress from './components/TokenProgress';
 import { useGlobal } from './contexts/GlobalContext';
-import { 
-  UnifiedHistoryService,
-  type HistoryItem, 
-  type SearchHistory, 
-  type ChatHistory 
-} from './services/dataService';
+// 定义历史记录相关的类型
+interface HistoryItem {
+  id: string;
+  timestamp: number;
+  type: 'search' | 'chat';
+  title: string;
+  data: SearchHistory | ChatHistory;
+}
+
+interface SearchHistory {
+  id: string;
+  timestamp: number;
+  originalQuery: string;
+  expandedKeywords: string[];
+  papers: any[];
+  maxResults: number;
+}
+
+interface ChatHistory {
+  id: string;
+  timestamp: number;
+  title: string;
+  messages: any[];
+  lastActivity: number;
+}
+import { UserStorage, DataMigration, USER_DATA_KEYS, GLOBAL_DATA_KEYS } from './utils/userStorage';
 
 interface Message {
   id: string;
@@ -27,8 +47,9 @@ interface ChatInterfaceProps {
   className?: string;
 }
 
-const CHAT_STORAGE_KEY = 'veritex_chat_history';
-const CHAT_ANALYSIS_KEY = 'veritex_current_analysis';
+// 使用用户隔离存储键名
+const CHAT_STORAGE_KEY = USER_DATA_KEYS.CHAT_HISTORY;
+const CHAT_ANALYSIS_KEY = USER_DATA_KEYS.CURRENT_ANALYSIS;
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const navigate = useNavigate();
@@ -44,17 +65,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   
   // 关键词云面板状态
   const [isKeywordPanelCollapsed, setIsKeywordPanelCollapsed] = useState(false);
-  const [keywordPanelWidth, setKeywordPanelWidth] = useState(350);
+  const [keywordPanelWidth, setKeywordPanelWidth] = useState(380);
   const [isResizing, setIsResizing] = useState(false);
 
-  // 自动折叠逻辑 - 监听面板宽度变化
+  // 自动折叠逻辑 - 监听面板宽度变化（更保守的阈值）
   useEffect(() => {
-    // 当关键词面板宽度小于200px时自动折叠
-    if (keywordPanelWidth < 200 && !isKeywordPanelCollapsed) {
+    // 只有在极小宽度时才自动折叠，避免误折叠
+    if (keywordPanelWidth < 180 && !isKeywordPanelCollapsed) {
       setIsKeywordPanelCollapsed(true);
     }
-    // 当宽度重新变大时自动展开
-    if (keywordPanelWidth >= 250 && isKeywordPanelCollapsed) {
+    // 当宽度足够大时自动展开
+    if (keywordPanelWidth >= 300 && isKeywordPanelCollapsed) {
       setIsKeywordPanelCollapsed(false);
     }
   }, [keywordPanelWidth, isKeywordPanelCollapsed]);
@@ -62,7 +83,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   // My面板状态
   const [isMyPanelCollapsed, setIsMyPanelCollapsed] = useState(false);
   const [myPanelWidth] = useState(300);
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [isMobile, setIsMobile] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   
   // My面板历史记录状态
@@ -76,9 +97,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState<string>('');
   
-  // LLM模式状态
+  // LLM模式状态（全局共享）
   const [llmMode, setLlmMode] = useState<'auto-search' | 'chat-plan'>(() => {
-    const saved = localStorage.getItem('veritex_llm_mode');
+    const saved = UserStorage.getGlobalData(GLOBAL_DATA_KEYS.LLM_MODE);
     return (saved as 'auto-search' | 'chat-plan') || 'auto-search';
   });
   
@@ -101,11 +122,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     navigate('/')
   }
 
-  // 保存聊天记录到localStorage（会话级别）
+  // 保存聊天记录到用户隔离存储（会话级别）
   const saveChatHistory = (messages: Message[], analysis: any = null) => {
-    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+    console.log('💬 保存聊天记录到用户隔离存储')
+    UserStorage.setUserData(CHAT_STORAGE_KEY, JSON.stringify(messages));
     if (analysis) {
-      localStorage.setItem(CHAT_ANALYSIS_KEY, JSON.stringify(analysis));
+      UserStorage.setUserData(CHAT_ANALYSIS_KEY, JSON.stringify(analysis));
     }
     
     // 保存完整对话会话到统一历史记录
@@ -140,11 +162,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     };
     
     try {
-      const CHAT_STORAGE_KEY_UNIFIED = 'paper_god_chat_history';
-      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+      // 🔐 使用用户隔离存储
+      const CHAT_STORAGE_KEY_UNIFIED = USER_DATA_KEYS.CHAT_HISTORY_UNIFIED;
+      const UNIFIED_HISTORY_KEY = USER_DATA_KEYS.UNIFIED_HISTORY;
       
       // 更新或创建聊天会话记录
-      const existingChatHistory = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY_UNIFIED) || '[]');
+      const existingChatHistory = JSON.parse(UserStorage.getUserData(CHAT_STORAGE_KEY_UNIFIED) || '[]');
       const existingIndex = existingChatHistory.findIndex((item: any) => item.id === sessionId);
       
       if (existingIndex >= 0) {
@@ -156,7 +179,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       if (existingChatHistory.length > 50) {
         existingChatHistory.splice(50);
       }
-      localStorage.setItem(CHAT_STORAGE_KEY_UNIFIED, JSON.stringify(existingChatHistory));
+      UserStorage.setUserData(CHAT_STORAGE_KEY_UNIFIED, JSON.stringify(existingChatHistory));
       
       // 保存到统一历史
       const unifiedItem = {
@@ -167,7 +190,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         data: chatSession
       };
       
-      const existingUnifiedHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      const existingUnifiedHistory = JSON.parse(UserStorage.getUserData(UNIFIED_HISTORY_KEY) || '[]');
       const unifiedIndex = existingUnifiedHistory.findIndex((h: any) => h.id === sessionId);
       
       if (unifiedIndex >= 0) {
@@ -181,7 +204,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       if (existingUnifiedHistory.length > 100) {
         existingUnifiedHistory.splice(100);
       }
-      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      UserStorage.setUserData(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      
+      // 🔄 更新UI中的历史记录
+      loadUnifiedHistory();
       
     } catch (error) {
       console.error('Error saving chat session to history:', error);
@@ -207,17 +233,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     };
 
     try {
-      const SEARCH_STORAGE_KEY = 'paper_god_search_history';
-      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
+      // 🔐 使用用户隔离存储
+      const SEARCH_STORAGE_KEY = USER_DATA_KEYS.SEARCH_HISTORY;
+      const UNIFIED_HISTORY_KEY = USER_DATA_KEYS.UNIFIED_HISTORY;
       
       // 保存到搜索历史
-      const existingSearchHistory = JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
+      const existingSearchHistory = JSON.parse(UserStorage.getUserData(SEARCH_STORAGE_KEY) || '[]');
       existingSearchHistory.unshift(searchHistory);
       
       if (existingSearchHistory.length > 50) {
         existingSearchHistory.splice(50);
       }
-      localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(existingSearchHistory));
+      UserStorage.setUserData(SEARCH_STORAGE_KEY, JSON.stringify(existingSearchHistory));
       
       // 保存到统一历史
       // 使用Exact Terms作为Search results的标题
@@ -232,7 +259,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         data: searchHistory
       };
       
-      const existingUnifiedHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      const existingUnifiedHistory = JSON.parse(UserStorage.getUserData(UNIFIED_HISTORY_KEY) || '[]');
       existingUnifiedHistory.unshift(unifiedItem);
       
       existingUnifiedHistory.sort((a: any, b: any) => b.timestamp - a.timestamp);
@@ -240,18 +267,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       if (existingUnifiedHistory.length > 100) {
         existingUnifiedHistory.splice(100);
       }
-      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      UserStorage.setUserData(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      
+      // 🔄 更新UI中的历史记录
+      loadUnifiedHistory();
       
     } catch (error) {
       console.error('Error saving search result to history:', error);
     }
   };
 
-  // 从localStorage恢复聊天记录
+  // 从用户隔离存储恢复聊天记录
   const loadChatHistory = (): { messages: Message[], analysis: any } => {
     try {
-      const savedMessages = localStorage.getItem(CHAT_STORAGE_KEY);
-      const savedAnalysis = localStorage.getItem(CHAT_ANALYSIS_KEY);
+      console.log('📥 从用户隔离存储加载聊天记录')
+      const savedMessages = UserStorage.getUserData(CHAT_STORAGE_KEY);
+      const savedAnalysis = UserStorage.getUserData(CHAT_ANALYSIS_KEY);
       return {
         messages: savedMessages ? JSON.parse(savedMessages) : [],
         analysis: savedAnalysis ? JSON.parse(savedAnalysis) : null
@@ -262,10 +293,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     }
   };
 
+  // 加载统一历史记录（用于My面板）
+  const loadUnifiedHistory = () => {
+    try {
+      console.log('📥 从用户隔离存储加载统一历史记录')
+      const savedHistory = UserStorage.getUserData(USER_DATA_KEYS.UNIFIED_HISTORY);
+      const historyData = savedHistory ? JSON.parse(savedHistory) : [];
+      setUnifiedHistory(historyData);
+    } catch (error) {
+      console.error('Error loading unified history:', error);
+      setUnifiedHistory([]);
+    }
+  };
+
   // 清除聊天历史
 
   // 初始化聊天记录
   useEffect(() => {
+    // 🔄 自动检查并迁移旧数据
+    DataMigration.autoMigrate();
+    
     const { messages: savedMessages, analysis: savedAnalysis } = loadChatHistory();
     
     // 如果有保存的聊天记录，恢复它们
@@ -284,6 +331,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       setMessages(initialMessages);
       saveChatHistory(initialMessages);
     }
+    
+    // 🔄 加载My面板的历史记录
+    loadUnifiedHistory();
     
     // 如果有来自首页的初始输入，设置到输入框中
     if (initialInput && !preserveChat) {
@@ -305,14 +355,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         const newMode = llmMode === 'auto-search' ? 'chat-plan' : 'auto-search';
         setLlmMode(newMode);
         
-        // 保存到localStorage
-        localStorage.setItem('veritex_llm_mode', newMode);
+        // 保存到全局存储（所有用户共享）
+        UserStorage.setGlobalData(GLOBAL_DATA_KEYS.LLM_MODE, newMode);
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [llmMode]);
+
+  // 监听页面可见性变化，确保从其他页面返回时刷新历史记录
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        // 页面重新获得焦点时刷新My面板历史记录
+        loadUnifiedHistory();
+        console.log('📱 页面重新获得焦点，刷新My面板历史记录');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   // 处理搜索确认
   const handleSearchConfirmation = async (originalQuery: string, messageId: string) => {
@@ -391,8 +455,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       return;
     }
     try {
-      const history = await UnifiedHistoryService.getHistory(userId);
-      setUnifiedHistory(history);
+      // 🔐 使用用户隔离存储
+      loadUnifiedHistory();
     } catch (error) {
       console.error('Error loading history:', error);
       setUnifiedHistory([]);
@@ -417,8 +481,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       }
     };
     
-    window.addEventListener('resize', handleResize);
+    // 初始化时检查一次
     handleResize();
+    
+    window.addEventListener('resize', handleResize);
     
     return () => window.removeEventListener('resize', handleResize);
   }, [isMyPanelCollapsed]);
@@ -450,7 +516,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       const userId = localStorage.getItem('user_id');
       if (userId) {
         try {
-          await UnifiedHistoryService.deleteHistory(userId, selectedIds);
+          // 删除选中的历史记录
+          const historyData = UserStorage.getUserData(USER_DATA_KEYS.UNIFIED_HISTORY);
+          if (historyData) {
+            const history: HistoryItem[] = JSON.parse(historyData);
+            const filteredHistory = history.filter(item => !selectedIds.includes(item.id));
+            UserStorage.setUserData(USER_DATA_KEYS.UNIFIED_HISTORY, JSON.stringify(filteredHistory));
+          }
           setSelectedIds([]);
           setSelectAll(false);
           await loadMyPanelHistory();
@@ -466,7 +538,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       const userId = localStorage.getItem('user_id');
       if (userId) {
         try {
-          await UnifiedHistoryService.clearAll(userId);
+          // 清空所有历史记录
+          UserStorage.setUserData(USER_DATA_KEYS.UNIFIED_HISTORY, JSON.stringify([]));
           setUnifiedHistory([]);
           setSelectedIds([]);
           setSelectAll(false);
@@ -499,27 +572,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   // 置顶功能
   const handlePinItem = async (itemId: string) => {
     try {
-      const userId = localStorage.getItem('paper_god_user_id') || 'anonymous';
-      const currentHistory = await UnifiedHistoryService.getHistory(userId);
+      // 🔐 使用用户隔离存储
+      const UNIFIED_HISTORY_KEY = USER_DATA_KEYS.UNIFIED_HISTORY;
+      const existingHistory = JSON.parse(UserStorage.getUserData(UNIFIED_HISTORY_KEY) || '[]');
       
       // 找到要置顶的项目
-      const itemToPin = currentHistory.find(item => item.id === itemId);
+      const itemToPin = existingHistory.find((item: any) => item.id === itemId);
       if (!itemToPin) return;
       
       // 更新时间戳为当前时间，实现置顶效果
       const updatedItem = { ...itemToPin, timestamp: Date.now() };
       
-      // 更新本地存储
-      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
-      const existingHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      // 更新历史记录
       const updatedHistory = existingHistory.map((h: any) => 
         h.id === itemId ? updatedItem : h
       ).sort((a: any, b: any) => b.timestamp - a.timestamp);
       
-      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(updatedHistory));
+      UserStorage.setUserData(UNIFIED_HISTORY_KEY, JSON.stringify(updatedHistory));
       
-      // 重新加载历史记录
-      loadMyPanelHistory();
+      // 🔄 更新UI
+      setUnifiedHistory(updatedHistory);
       setActiveMenuId(null);
     } catch (error) {
       console.error('Pin item failed:', error);
@@ -529,35 +601,34 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   // 重命名功能
   const handleRenameItem = async (itemId: string, newTitle: string) => {
     try {
-      
-      // 更新本地存储中的标题
-      const UNIFIED_HISTORY_KEY = 'paper_god_unified_history';
-      const existingHistory = JSON.parse(localStorage.getItem(UNIFIED_HISTORY_KEY) || '[]');
+      // 🔐 使用用户隔离存储
+      const UNIFIED_HISTORY_KEY = USER_DATA_KEYS.UNIFIED_HISTORY;
+      const existingHistory = JSON.parse(UserStorage.getUserData(UNIFIED_HISTORY_KEY) || '[]');
       const updatedHistory = existingHistory.map((h: any) => 
         h.id === itemId ? { ...h, title: newTitle } : h
       );
       
-      localStorage.setItem(UNIFIED_HISTORY_KEY, JSON.stringify(updatedHistory));
+      UserStorage.setUserData(UNIFIED_HISTORY_KEY, JSON.stringify(updatedHistory));
       
       // 同时更新对应的具体历史记录
       if (itemId.startsWith('search_')) {
-        const SEARCH_STORAGE_KEY = 'paper_god_search_history';
-        const searchHistory = JSON.parse(localStorage.getItem(SEARCH_STORAGE_KEY) || '[]');
+        const SEARCH_STORAGE_KEY = USER_DATA_KEYS.SEARCH_HISTORY;
+        const searchHistory = JSON.parse(UserStorage.getUserData(SEARCH_STORAGE_KEY) || '[]');
         const updatedSearchHistory = searchHistory.map((s: any) => 
           s.id === itemId ? { ...s, customTitle: newTitle } : s
         );
-        localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(updatedSearchHistory));
+        UserStorage.setUserData(SEARCH_STORAGE_KEY, JSON.stringify(updatedSearchHistory));
       } else if (itemId.startsWith('chat_')) {
-        const CHAT_STORAGE_KEY = 'paper_god_chat_history';
-        const chatHistory = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
+        const CHAT_STORAGE_KEY = USER_DATA_KEYS.CHAT_HISTORY_UNIFIED;
+        const chatHistory = JSON.parse(UserStorage.getUserData(CHAT_STORAGE_KEY) || '[]');
         const updatedChatHistory = chatHistory.map((c: any) => 
           c.id === itemId ? { ...c, title: newTitle } : c
         );
-        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(updatedChatHistory));
+        UserStorage.setUserData(CHAT_STORAGE_KEY, JSON.stringify(updatedChatHistory));
       }
       
-      // 重新加载历史记录
-      loadMyPanelHistory();
+      // 🔄 更新UI
+      setUnifiedHistory(updatedHistory);
       setEditingId(null);
       setEditingTitle('');
       setActiveMenuId(null);
@@ -599,8 +670,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       if (!isResizing) return;
       
       const newWidth = window.innerWidth - e.clientX;
-      const minWidth = 280;
-      const maxWidth = window.innerWidth * 0.6;
+      const minWidth = 300; // 增加最小宽度，避免过小
+      const maxWidth = Math.min(600, window.innerWidth * 0.5); // 限制最大宽度
       
       setKeywordPanelWidth(Math.min(Math.max(newWidth, minWidth), maxWidth));
     };
@@ -869,12 +940,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       color: theme === 'dark' ? '#fff' : '#1f2937',
       overflow: 'hidden'
     }}>
-      {/* 左侧区域（My面板 + 聊天区域） */}
-      <div style={{
-        display: 'flex',
-        flex: 1,
-        position: 'relative'
-      }}>
         {/* 左侧My面板 */}
       {!isMyPanelCollapsed && (
         <div style={{
@@ -921,8 +986,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 <button
                   onClick={() => {
                     // 清除当前聊天并开始新的搜索
-                    localStorage.removeItem(CHAT_STORAGE_KEY);
-                    localStorage.removeItem(CHAT_ANALYSIS_KEY);
+                    console.log('🔄 清除当前用户的聊天记录')
+                    UserStorage.removeUserData(CHAT_STORAGE_KEY);
+                    UserStorage.removeUserData(CHAT_ANALYSIS_KEY);
                     const welcomeMessage: Message = {
                       id: 'welcome',
                       text: '👋 您好！我是Veritex智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
@@ -1492,12 +1558,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           </div>
         </div>
       )}
+      
       {/* 中间聊天区域 */}
       <div style={{
         flex: 1,
         display: 'flex',
         flexDirection: 'column',
-        minWidth: '400px'
+        minWidth: isMobile ? '100vw' : '320px',
+        maxWidth: isMobile ? '100vw' : 'calc(100vw - 300px)' // 确保不超出屏幕
       }}>
         {/* 顶部标题栏 */}
         <div style={{
@@ -1645,7 +1713,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
 
               {/* 消息气泡容器 */}
               <div style={{
-                maxWidth: '70%',
+                maxWidth: '75%',
+                minWidth: '120px',
                 position: 'relative',
                 display: 'flex',
                 flexDirection: 'column'
@@ -2240,9 +2309,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           .ai-message:hover .hover-button-copy {
             opacity: 1 !important;
           }
+          
+          /* 响应式设计 */
+          @media (max-width: 768px) {
+            .chat-interface {
+              flex-direction: column !important;
+            }
+            
+            .message-container {
+              margin: 0 8px !important;
+            }
+            
+            .message-container .hover-button-edit,
+            .message-container .hover-button-copy {
+              opacity: 1 !important; /* 移动端始终显示按钮 */
+            }
+          }
         `}
       </style>
-    </div>
     </div>
   );
 };

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../config';
+import { UserStorage, USER_DATA_KEYS } from '../utils/userStorage';
 
 interface HierarchicalKeywords {
   exact_terms?: {
@@ -44,8 +45,6 @@ interface KeywordItem {
 
 const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   hierarchicalKeywords,
-  originalQuery = '',
-  isDraggable = true,
   theme = 'dark'
 }) => {
   const navigate = useNavigate();
@@ -134,13 +133,41 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       // 构建搜索查询
       const searchQuery = keywords.map(k => k.term).join(' OR ');
 
-      // 调用搜索API，使用用户设置的参数
+      // 🔑 关键优化：构建预扩展关键词，避免重复LLM分析
+      const preExpandedKeywords = {
+        hierarchical_keywords: {
+          exact_terms: {
+            terms: keywords.filter(k => k.level === 'exact_terms').map(k => k.term),
+            weight: 1.0
+          },
+          core_synonyms: {
+            terms: keywords.filter(k => k.level === 'core_synonyms').map(k => k.term),
+            weight: 0.9
+          },
+          related_terms: {
+            terms: keywords.filter(k => k.level === 'related_terms').map(k => k.term),
+            weight: 0.8
+          },
+          context_terms: {
+            terms: keywords.filter(k => k.level === 'context_terms').map(k => k.term),
+            weight: 0.7
+          }
+        },
+        domain: 'academic_research',
+        core_concepts: keywords.map(k => k.term)
+      };
+
+      console.log('🚀 使用预扩展关键词执行搜索，避免重复LLM分析');
+      console.log('📊 预扩展关键词结构:', preExpandedKeywords);
+
+      // 调用搜索API，传递预扩展关键词以避免重复LLM分析
       const searchResult = await api.searchPapers(
         searchQuery, 
         searchSettings.maxResults, 
         false, // enable_expansion
         searchSettings.yearFrom, 
-        searchSettings.yearTo
+        searchSettings.yearTo,
+        preExpandedKeywords  // 🔑 传递预扩展关键词
       );
       
       // 处理搜索结果
@@ -163,14 +190,37 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         maxResults: searchSettings.maxResults
       };
 
-      // 保存搜索历史
-      const STORAGE_KEY = 'paper_god_search_history';
-      const existingHistory = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-      existingHistory.unshift(searchHistory);
-      if (existingHistory.length > 50) {
-        existingHistory.splice(50);
+      // 保存搜索历史到用户隔离存储
+      const SEARCH_STORAGE_KEY = USER_DATA_KEYS.SEARCH_HISTORY;
+      const UNIFIED_HISTORY_KEY = USER_DATA_KEYS.UNIFIED_HISTORY;
+      
+      // 保存到搜索历史
+      const existingSearchHistory = JSON.parse(UserStorage.getUserData(SEARCH_STORAGE_KEY) || '[]');
+      existingSearchHistory.unshift(searchHistory);
+      if (existingSearchHistory.length > 50) {
+        existingSearchHistory.splice(50);
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(existingHistory));
+      UserStorage.setUserData(SEARCH_STORAGE_KEY, JSON.stringify(existingSearchHistory));
+      
+      // 保存到统一历史（My面板）
+      const unifiedItem = {
+        id: searchHistory.id,
+        timestamp: searchHistory.timestamp,
+        type: 'search' as const,
+        title: finalTitle.length > 50 ? finalTitle.slice(0, 50) + '...' : finalTitle,
+        data: searchHistory
+      };
+      
+      const existingUnifiedHistory = JSON.parse(UserStorage.getUserData(UNIFIED_HISTORY_KEY) || '[]');
+      existingUnifiedHistory.unshift(unifiedItem);
+      existingUnifiedHistory.sort((a: any, b: any) => b.timestamp - a.timestamp);
+      
+      if (existingUnifiedHistory.length > 100) {
+        existingUnifiedHistory.splice(100);
+      }
+      UserStorage.setUserData(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      
+      console.log('✅ 关键词搜索结果已保存到用户隔离存储和My面板');
 
       // 跳转到报告页面
       navigate('/report', {
@@ -520,7 +570,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                       gap: '6px',
                       marginBottom: '4px'
                     }}>
-                      {levelKeywords.map((keyword, index) => {
+                      {levelKeywords.map((keyword) => {
                         const globalIndex = keywords.findIndex(k => k === keyword);
                         return (
                           <div
@@ -626,7 +676,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                       flexWrap: 'wrap',
                       gap: '6px'
                     }}>
-                      {customKeywords.map((keyword, index) => {
+                      {customKeywords.map((keyword) => {
                         const globalIndex = keywords.findIndex(k => k === keyword);
                         return (
                           <div
