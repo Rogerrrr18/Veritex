@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 
 export type Theme = 'light' | 'dark';
 export type Language = 'zh' | 'en';
@@ -205,7 +205,7 @@ export function GlobalProvider({ children }: GlobalProviderProps) {
 
   // 翻译函数
   const t = (key: string): string => {
-    const translation = translations[language]?.[key];
+    const translation = translations[language]?.[key as keyof typeof translations[typeof language]];
     if (!translation) {
       console.warn(`Translation missing for key: ${key} in language: ${language}`);
       return key; // 返回原key作为fallback

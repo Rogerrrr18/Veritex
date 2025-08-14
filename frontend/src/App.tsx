@@ -255,6 +255,11 @@ function HomePage() {
     return () => clearInterval(interval)
   }, [])
 
+  // 检查登录状态
+  const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
+  const userId = localStorage.getItem('user_id')
+  const hasValidSession = isLoggedIn && userId
+
   // 点击外部关闭菜单
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -270,10 +275,34 @@ function HomePage() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showUserMenu])
 
-  // 检查登录状态
-  const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
-  const userId = localStorage.getItem('user_id')
-  const hasValidSession = isLoggedIn && userId
+  // 添加全局回车键监听器
+  useEffect(() => {
+    const handleGlobalKeyPress = (event: KeyboardEvent) => {
+      // 确保不在输入框或其他需要输入的元素中
+      const target = event.target as HTMLElement
+      const isInputElement = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      
+      if (event.key === 'Enter' && !isInputElement && !event.shiftKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault()
+        // 执行进入应用的逻辑
+        if (!hasValidSession) {
+          navigate('/invite')
+        } else {
+          // 触发绽放动效
+          setIsAnimating(true)
+          // 延迟跳转以显示动效
+          setTimeout(() => {
+            // 清空当前聊天历史，开始新的聊天
+            localStorage.removeItem('veritex_chat_history')
+            navigate('/conversation')
+          }, 600)
+        }
+      }
+    }
+    
+    document.addEventListener('keydown', handleGlobalKeyPress)
+    return () => document.removeEventListener('keydown', handleGlobalKeyPress)
+  }, [hasValidSession, navigate])
   
   // 生成用户头像字母（基于内测码首字母）
   const generateAvatar = (userId: string) => {
