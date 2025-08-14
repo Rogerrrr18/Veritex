@@ -17,8 +17,8 @@ class ModelConfig:
     base_url: str
     model_name: str
     temperature: float = 0.3
-    max_tokens: int = 1500
-    timeout: float = 10.0
+    max_tokens: int = 3000
+    timeout: float = 20.0
 
 class ModelConfigManager:
     """统一模型配置管理器"""
@@ -39,7 +39,7 @@ class ModelConfigManager:
                 base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
                 model_name=os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo"),
                 temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.3")),
-                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
+                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "3000"))
             )
         
         # Qwen配置
@@ -50,7 +50,7 @@ class ModelConfigManager:
                 base_url=os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
                 model_name=os.getenv("QWEN_MODEL_NAME", "qwen-turbo"),
                 temperature=float(os.getenv("QWEN_TEMPERATURE", "0.3")),
-                max_tokens=int(os.getenv("QWEN_MAX_TOKENS", "1500"))
+                max_tokens=int(os.getenv("QWEN_MAX_TOKENS", "3000"))
             )
         
         # Claude配置
@@ -61,7 +61,7 @@ class ModelConfigManager:
                 base_url=os.getenv("CLAUDE_BASE_URL", "https://api.anthropic.com"),
                 model_name=os.getenv("CLAUDE_MODEL_NAME", "claude-3-sonnet-20240229"),
                 temperature=float(os.getenv("CLAUDE_TEMPERATURE", "0.3")),
-                max_tokens=int(os.getenv("CLAUDE_MAX_TOKENS", "1500"))
+                max_tokens=int(os.getenv("CLAUDE_MAX_TOKENS", "3000"))
             )
         
         # DeepSeek配置
@@ -72,7 +72,7 @@ class ModelConfigManager:
                 base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
                 model_name=os.getenv("DEEPSEEK_MODEL_NAME", "deepseek-chat"),
                 temperature=float(os.getenv("DEEPSEEK_TEMPERATURE", "0.3")),
-                max_tokens=int(os.getenv("DEEPSEEK_MAX_TOKENS", "1500"))
+                max_tokens=int(os.getenv("DEEPSEEK_MAX_TOKENS", "3000"))
             )
         
         return configs

@@ -369,6 +369,8 @@ class IntelligentPaperSearchAgent:
                 cleaned = response.strip()
                 # 移除可能的代码块标记
                 cleaned = re.sub(r'```[\s\S]*?```', '', cleaned).strip()
+                # 移除提示性分支标签
+                cleaned = re.sub(r'^\s*[#*\-\s]*普通对话模式[:：]?\s*', '', cleaned)
                 print(f"✅ 普通对话清理完成，长度: {len(cleaned)}")
                 return cleaned if cleaned else "抱歉，我无法理解您的问题，请重新表述。"
                     
@@ -815,7 +817,7 @@ class IntelligentPaperSearchAgent:
             print(f"❌ 构建搜索回复失败: {e}")
             return f"搜索完成，找到 {len(results)} 篇论文，但格式化过程出现问题。"
     
-    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True) -> Dict[str, Any]:
+    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """主要搜索接口"""
         if thread_id is None:
             thread_id = f"thread_{uuid.uuid4().hex[:8]}"
@@ -830,6 +832,27 @@ class IntelligentPaperSearchAgent:
             year_to=year_to,
             sources=sources
         )
+
+        # 注入历史对话（最近20条）
+        try:
+            if history and isinstance(history, list) and len(history) > 0:
+                from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+                converted_messages: List = []
+                for item in history[-20:]:
+                    role = (item.get('role') or '').lower()
+                    content = item.get('content') or ''
+                    if not content:
+                        continue
+                    if role == 'user':
+                        converted_messages.append(HumanMessage(content=content))
+                    elif role == 'assistant':
+                        converted_messages.append(AIMessage(content=content))
+                    elif role == 'system':
+                        converted_messages.append(SystemMessage(content=content))
+                if converted_messages:
+                    initial_state['messages'] = converted_messages
+        except Exception as e:
+            print(f"⚠️ 注入历史失败: {e}")
         
         print(f"🚀 启动智能学术搜索工作流 - 查询: {query}")
         
@@ -920,10 +943,10 @@ def get_intelligent_paper_search_agent(enable_memory: bool = True) -> Intelligen
         _intelligent_agent = IntelligentPaperSearchAgent(enable_memory=enable_memory)
     return _intelligent_agent
 
-async def chat_with_search_strategy(query: str, thread_id: str = None, force_search: bool = False, max_results: int = 10, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True) -> Dict[str, Any]:
+async def chat_with_search_strategy(query: str, thread_id: str = None, force_search: bool = False, max_results: int = 10, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """智能聊天与搜索策略分析的统一入口"""
     agent = get_intelligent_paper_search_agent()
-    return await agent.search_papers(query, max_results, thread_id, force_search, year_from, year_to, sources, allow_search)
+    return await agent.search_papers(query, max_results, thread_id, force_search, year_from, year_to, sources, allow_search, history)
 
 
 # 测试功能

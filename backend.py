@@ -42,6 +42,8 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = []
     # 新增：搜索参数（可选）
     search_params: Optional[Dict[str, Any]] = None
+    # 模式：'chat-only' | 'auto-search'
+    mode: Optional[str] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -208,7 +210,8 @@ async def chat(request: ChatRequest):
         year_to = search_params.get('year_to')
         sources = search_params.get('sources')
         
-        # 调用智能工作流（仅分析，不强制搜索）
+        # 调用智能工作流（第一阶段：仅分析，不执行搜索）
+        mode = (request.mode or "chat-only").lower()
         result = await chat_with_search_strategy(
             query=request.message, 
             force_search=False,
@@ -216,19 +219,39 @@ async def chat(request: ChatRequest):
             year_from=year_from,
             year_to=year_to,
             sources=sources,
-            allow_search=False  # 聊天阶段不许自动搜索
+            allow_search=False,  # 第1阶段不自动搜索
+            history=history
         )
         
-        # 处理新的响应格式
+        # 第一阶段响应
         ai_response = result.get('response', '')
         is_academic = result.get('is_academic_query', False)
-        
-        # 仅保留分析内容，不再插入停用提示
-        
+        final_result = result
+
+        # 第二阶段：当模式为 auto-search 且判定为学术时，执行搜索
+        if mode != 'chat-only' and is_academic:
+            search_result = await chat_with_search_strategy(
+                query=request.message,
+                force_search=True,
+                max_results=max_results,
+                year_from=year_from,
+                year_to=year_to,
+                sources=sources,
+                allow_search=True,
+                history=history
+            )
+            # 合并分析与搜索结果
+            final_result = {
+                **search_result,
+                "analysis_result": search_result.get('analysis_result') or result.get('analysis_result')
+            }
+            ai_response = final_result.get('response', ai_response)
+            is_academic = final_result.get('is_academic_query', is_academic)
+
         # 构建完整的对话历史
         updated_history = history + [
             {"role": "user", "content": request.message},
-            {"role": "assistant", "content": result.get('response', '')}
+            {"role": "assistant", "content": ai_response}
         ]
         
         # 转换回响应格式
@@ -244,8 +267,8 @@ async def chat(request: ChatRequest):
             response=ai_response,
             history=response_history,
             is_academic_query=is_academic,
-            search_results=result.get('search_results', []),
-            analysis_result=result.get('analysis_result'),
+            search_results=final_result.get('search_results', []),
+            analysis_result=final_result.get('analysis_result'),
             token_info=token_info
         )
         

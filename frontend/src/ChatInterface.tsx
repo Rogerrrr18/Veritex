@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { api, apiCall, API_CONFIG } from './config';
+import { apiCall, API_CONFIG } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
 import TokenProgress from './components/TokenProgress';
 import { useGlobal } from './contexts/GlobalContext';
@@ -39,7 +39,6 @@ interface Message {
   timestamp: number;
   analysisResult?: any;
   hierarchicalKeywords?: any;
-  needsSearchConfirmation?: boolean;
   isEditing?: boolean;
 }
 
@@ -378,74 +377,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  // 处理搜索确认
-  const handleSearchConfirmation = async (originalQuery: string, messageId: string) => {
-    setIsLoading(true);
-    
-    try {
-      // 切换到auto-search模式执行搜索
-      const response = await api.chat(originalQuery, []);
-      
-      // 更新原始消息，移除确认按钮
-      const updatedMessages = messages.map(msg => 
-        msg.id === messageId 
-          ? { ...msg, needsSearchConfirmation: false }
-          : msg
-      );
-      
-      // 检查是否是学术查询（有搜索结果）
-      let analysisResult = null;
-      let hierarchicalKeywords = null;
-      
-      if (response.analysis_result) {
-        analysisResult = response.analysis_result;
-        if (analysisResult && analysisResult.hierarchical_keywords) {
-          hierarchicalKeywords = analysisResult.hierarchical_keywords;
-          setCurrentAnalysis(analysisResult);
-        }
-      }
-
-      // 创建搜索结果消息
-      const searchResultMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: response.response || '搜索完成。',
-        isUser: false,
-        timestamp: Date.now() + 1,
-        analysisResult,
-        hierarchicalKeywords
-      };
-
-      const finalMessages = [...updatedMessages, searchResultMessage];
-      setMessages(finalMessages);
-      saveChatHistory(finalMessages, analysisResult);
-
-      // 如果有搜索结果，保存到Search历史
-      if (response.is_academic_query && response.search_results && response.search_results.length > 0) {
-        saveSearchResultToHistory(originalQuery, response);
-      }
-
-    } catch (error: any) {
-      console.error('Search confirmation error:', error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: `搜索时发生错误：${error.message || '未知错误'}`,
-        isUser: false,
-        timestamp: Date.now() + 1
-      };
-      
-      const updatedMessages = messages.map(msg => 
-        msg.id === messageId 
-          ? { ...msg, needsSearchConfirmation: false }
-          : msg
-      );
-      
-      const errorMessages = [...updatedMessages, errorMessage];
-      setMessages(errorMessages);
-      saveChatHistory(errorMessages, currentAnalysis);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   // 加载My面板历史记录
   const loadMyPanelHistory = async () => {
@@ -742,17 +673,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     try {
       // 根据LLM模式调用不同的后端API
       let response;
-      if (llmMode === 'auto-search') {
-        // Auto-search模式：使用现有的chat API，支持自动关键词扩展
-        response = await api.chat(userMessage.text, []);
-      } else {
-        // Chat & Plan模式：调用纯聊天API，传递mode参数
-        response = await apiCall(API_CONFIG.ENDPOINTS.CHAT, { 
-          message: userMessage.text, 
-          history: [],
-          mode: 'chat-only'
-        });
-      }
+      // 传递最近的对话历史和模式
+      const mappedHistory = newMessages.map(m => ({
+        role: m.isUser ? 'user' : 'assistant',
+        content: m.text
+      }));
+
+      const payload = {
+        message: userMessage.text,
+        history: mappedHistory,
+        mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search'
+      };
+
+      response = await apiCall(API_CONFIG.ENDPOINTS.CHAT, payload);
       
       // 检查是否是学术查询（有搜索结果）
       let analysisResult = null;
@@ -794,15 +727,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         }
       }
 
-      // 在Chat & Plan模式下，检查是否需要搜索确认
+      // 在Chat & Plan模式下，只返回自然语言响应，不添加搜索确认
       let assistantText = response.response || '抱歉，我无法处理您的请求。';
-      let needsSearchConfirmation = false;
-      
-      if (llmMode === 'chat-plan' && response.is_academic_query && !response.search_results) {
-        // 在Chat & Plan模式下，如果识别到学术查询但没有执行搜索，询问用户
-        assistantText += '\n\n🔍 我注意到您的问题涉及学术研究。是否需要我为您搜索相关文献？';
-        needsSearchConfirmation = true;
-      }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -810,8 +736,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         isUser: false,
         timestamp: Date.now() + 1,
         analysisResult,
-        hierarchicalKeywords,
-        needsSearchConfirmation
+        hierarchicalKeywords
       };
 
       const finalMessages = [...newMessages, assistantMessage];
@@ -885,7 +810,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         // 重新发送消息以获取新的AI回复
         try {
           setIsLoading(true);
-          const response = await api.chat(editedMessage.text, newMessages);
+          const mappedHistory = newMessages.map(m => ({
+            role: m.isUser ? 'user' : 'assistant',
+            content: m.text
+          }));
+          const response = await apiCall(API_CONFIG.ENDPOINTS.CHAT, {
+            message: editedMessage.text,
+            history: mappedHistory,
+            mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search'
+          });
           
           // 保存分析结果以供关键词面板使用
           if (response.hierarchical_keywords) {
@@ -894,11 +827,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           
           const aiMessage: Message = {
             id: Date.now().toString() + '_ai',
-            text: response.analysis || response.message || '分析完成',
+            text: response.response || response.message || '分析完成',
             isUser: false,
             timestamp: Date.now(),
-            analysisResult: response,
-            hierarchicalKeywords: response.hierarchical_keywords
+            analysisResult: response.analysis_result,
+            hierarchicalKeywords: response.analysis_result?.hierarchical_keywords
           };
           
           const finalMessages = [...newMessages, aiMessage];
@@ -1917,64 +1850,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   </button>
                 )}
                 
-                {/* 搜索确认按钮 - 仅在Chat & Plan模式下的AI消息中显示 */}
-                {message.needsSearchConfirmation && !message.isUser && (
-                  <div style={{
-                    marginTop: '12px',
-                    display: 'flex',
-                    gap: '8px',
-                    alignItems: 'center'
-                  }}>
-                    <button
-                      onClick={() => {
-                        // 找到触发搜索确认的原始用户查询
-                        const messageIndex = messages.findIndex(msg => msg.id === message.id);
-                        const userMessage = messageIndex > 0 ? messages[messageIndex - 1] : null;
-                        if (userMessage && userMessage.isUser) {
-                          handleSearchConfirmation(userMessage.text, message.id);
-                        }
-                      }}
-                      disabled={isLoading}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: '6px',
-                        border: '1px solid #10b981',
-                        backgroundColor: 'rgba(16,185,129,0.1)',
-                        color: '#10b981',
-                        cursor: isLoading ? 'not-allowed' : 'pointer',
-                        fontSize: '12px',
-                        fontWeight: '500'
-                      }}
-                    >
-                      {isLoading ? 'Searching...' : 'Start Search'}
-                    </button>
-                    <button
-                      onClick={() => {
-                        // 移除搜索确认
-                        const updatedMessages = messages.map(msg => 
-                          msg.id === message.id 
-                            ? { ...msg, needsSearchConfirmation: false }
-                            : msg
-                        );
-                        setMessages(updatedMessages);
-                        saveChatHistory(updatedMessages, currentAnalysis);
-                      }}
-                      disabled={isLoading}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: '6px',
-                        border: '1px solid #666',
-                        backgroundColor: 'transparent',
-                        color: '#666',
-                        cursor: isLoading ? 'not-allowed' : 'pointer',
-                        fontSize: '12px',
-                        fontWeight: '500'
-                      }}
-                    >
-                      Skip
-                    </button>
-                  </div>
-                )}
                 
 
                 {/* 如果有学术分析结果，显示提示 */}

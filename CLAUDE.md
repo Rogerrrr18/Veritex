@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an AI-powered academic literature search system that supports all academic disciplines. It consists of a FastAPI backend and React frontend with intelligent keyword expansion using Groq LLM and Google Scholar integration via scholarly library.
+This is an AI-powered academic literature search system that supports all academic disciplines. It consists of a FastAPI backend and React frontend with intelligent keyword expansion using LLM and Google Scholar integration via scholarly library.
 
 ## Architecture
 
 ### Backend (FastAPI)
-- **main.py**: Core literature collection engine with `GroqKeywordExpander`, `QueryBuilder`, and `LiteratureCollector` classes
+- **main.py**: Core literature collection engine with keyword expansion, query building, and literature collection
 - **backend.py**: FastAPI REST API that wraps main.py functionality
 - **Key Features**:
-  - Multi-discipline keyword expansion using Groq LLM
+  - Multi-discipline keyword expansion using LLM
   - Automatic academic field detection (10+ disciplines supported)
   - Two-phase search strategy (precise AND queries, then broader OR queries)
   - Direct result display without file generation
@@ -28,7 +28,7 @@ This is an AI-powered academic literature search system that supports all academ
 
 ### Data Flow
 1. User enters keywords → Frontend sends to `/expand_keywords`
-2. Groq LLM expands keywords based on detected academic discipline
+2. LLM expands keywords based on detected academic discipline
 3. User initiates search → Frontend sends to `/search_papers`
 4. Backend performs two-phase Google Scholar search with relevance filtering
 5. Results returned directly to frontend
@@ -88,7 +88,7 @@ npm run preview
 - Use `/docs` endpoint for interactive API testing
 
 ## Important Notes
-- Requires active Groq API key for keyword expansion
+- Uses LLM for intelligent keyword expansion
 - Google Scholar rate limiting handled with random delays (1-3 seconds)
 - Results are returned as JSON and displayed in the frontend
 - Supports both English and Chinese keyword inputs
