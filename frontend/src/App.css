@@ -769,7 +769,7 @@ body {
 }
 
 .link-button {
-  display: inline-block;
+  display: block;
   background: #2563eb;
   color: white;
   text-decoration: none;
@@ -780,6 +780,7 @@ body {
   transition: all 0.2s;
   text-align: center;
   min-width: 40px;
+  margin: 0 auto;
 }
 
 .link-button:hover {
@@ -1012,7 +1013,7 @@ body[data-theme='dark'] {
 }
 
 .report-page.light {
-  background: #fff;
+  background: #fefcf3;
   color: #222;
 }
 .report-page.light .report-header h2 {
@@ -1039,12 +1040,12 @@ body[data-theme='dark'] {
   color: #cf1322;
 }
 .report-page.light .report-table-wrapper {
-  background: #fff;
+  background: #fefcf3;
   box-shadow: 0 2px 16px rgba(180,200,220,0.10);
   border-radius: 14px;
 }
 .report-page.light .report-table {
-  background: #fff;
+  background: #fefcf3;
   color: #18181b;
   border-collapse: separate;
   border-spacing: 0;
@@ -1054,23 +1055,23 @@ body[data-theme='dark'] {
 .report-page.light .report-table th,
 .report-page.light .report-table td {
   border: 1px solid #e5e7eb;
-  background: #fff;
+  background: #fefcf3;
   color: #18181b;
   padding: 14px 10px;
   transition: background 0.2s;
 }
 .report-page.light .report-table th {
-  background: #f7fafc;
+  background: #f5f3ea;
   color: #18181b;
   font-weight: 700;
   font-size: 16px;
   border-bottom: 2px solid #e5e7eb;
 }
 .report-page.light .report-table tr:nth-child(even) {
-  background: #fafbfc;
+  background: #f9f7eb;
 }
 .report-page.light .report-table tr:hover {
-  background: #f2f6fa;
+  background: #f0ede0;
 }
 .report-page.light .title-content {
   color: #18181b;

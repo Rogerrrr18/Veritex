@@ -205,6 +205,7 @@ function HomePage() {
   const [isAnimating, setIsAnimating] = useState(false)
   const [typingText, setTypingText] = useState('')
   const [isTyping, setIsTyping] = useState(true)
+  const [showUserMenu, setShowUserMenu] = useState(false)
   const navigate = useNavigate()
   // const { t } = useGlobal() - not currently needed
 
@@ -254,10 +255,40 @@ function HomePage() {
     return () => clearInterval(interval)
   }, [])
 
+  // 点击外部关闭菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showUserMenu) {
+        const target = event.target as Element
+        if (!target.closest('.user-menu-container')) {
+          setShowUserMenu(false)
+        }
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showUserMenu])
+
   // 检查登录状态
   const isLoggedIn = localStorage.getItem('invite_logged_in') === '1'
   const userId = localStorage.getItem('user_id')
   const hasValidSession = isLoggedIn && userId
+  
+  // 生成用户头像字母（基于内测码首字母）
+  const generateAvatar = (userId: string) => {
+    if (!userId) return '?'
+    const firstChar = userId.charAt(0).toUpperCase()
+    return /[A-Z0-9]/.test(firstChar) ? firstChar : '?'
+  }
+  
+  // 处理登出
+  const handleLogout = () => {
+    localStorage.removeItem('invite_logged_in')
+    localStorage.removeItem('user_id')
+    setShowUserMenu(false)
+    window.location.reload()
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -309,7 +340,113 @@ function HomePage() {
           </ul>
         </nav>
         <div className="header-right">
-          <button className="btn btn-primary" onClick={() => navigate('/invite')}>Start free trial</button>
+          {hasValidSession ? (
+            <div className="user-menu-container" style={{ position: 'relative' }}>
+              {/* 用户头像按钮 */}
+              <button
+                onClick={() => setShowUserMenu(!showUserMenu)}
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #3bb0e6, #10b981)',
+                  color: '#fff',
+                  fontSize: '20px',
+                  fontWeight: '900',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.3s ease',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.05)'
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1)'
+                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)'
+                }}
+              >
+                {generateAvatar(userId || '')}
+              </button>
+              
+              {/* 用户菜单 */}
+              {showUserMenu && (
+                <div style={{
+                  position: 'absolute',
+                  top: '50px',
+                  right: '0',
+                  background: '#1a1a1a',
+                  border: '1px solid #333',
+                  borderRadius: '8px',
+                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.3)',
+                  padding: '8px',
+                  minWidth: '180px',
+                  zIndex: 1000
+                }}>
+                  {/* 账号信息 */}
+                  <div style={{
+                    padding: '6px 10px',
+                    borderBottom: '1px solid #333',
+                    marginBottom: '6px'
+                  }}>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '2px' }}>Account</div>
+                    <div style={{ fontSize: '13px', color: '#fff', fontWeight: '500' }}>{userId}</div>
+                  </div>
+                  
+                  {/* 菜单项 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <button
+                      style={{
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#a1a1aa',
+                        fontSize: '13px',
+                        textAlign: 'left',
+                        cursor: 'not-allowed',
+                        borderRadius: '4px',
+                        opacity: 0.5,
+                        height: '28px'
+                      }}
+                      disabled
+                    >
+                      Settings (Coming Soon)
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      style={{
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#ef4444',
+                        fontSize: '13px',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        borderRadius: '4px',
+                        transition: 'background 0.2s',
+                        height: '28px'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent'
+                      }}
+                    >
+                      Log Out
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button className="btn btn-primary" onClick={() => navigate('/invite')}>Start free trial</button>
+          )}
         </div>
       </header>
       {/* 主体内容整体左移 */}
@@ -545,9 +682,8 @@ function ReportPage() {
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {/* 导出和主题切换 */}
+          {/* 导出按钮 */}
           <button onClick={handleExport} className="export-button">{t('report.export')}</button>
-          <ReportThemeToggle theme={theme} toggle={toggleTheme} />
         </div>
       </div>
       

@@ -63,6 +63,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [isMyPanelCollapsed, setIsMyPanelCollapsed] = useState(false);
   const [myPanelWidth] = useState(300);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   
   // My面板历史记录状态
   const [unifiedHistory, setUnifiedHistory] = useState<HistoryItem[]>([]);
@@ -84,6 +85,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   // 从首页传来的初始输入
   const initialInput = location.state?.input || '';
   const preserveChat = location.state?.preserveChat || false;
+  
+  // 生成用户头像字母（基于内测码首字母）
+  const generateAvatar = (userId: string) => {
+    if (!userId) return '?'
+    const firstChar = userId.charAt(0).toUpperCase()
+    return /[A-Z0-9]/.test(firstChar) ? firstChar : '?'
+  }
+  
+  // 处理登出
+  const handleLogout = () => {
+    localStorage.removeItem('invite_logged_in')
+    localStorage.removeItem('user_id')
+    setShowUserMenu(false)
+    navigate('/')
+  }
 
   // 保存聊天记录到localStorage（会话级别）
   const saveChatHistory = (messages: Message[], analysis: any = null) => {
@@ -205,7 +221,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       
       // 保存到统一历史
       // 使用Exact Terms作为Search results的标题
-      const exactTerms = response.analysis_result?.exact_terms || userQuery;
+      const exactTermsArray = response.analysis_result?.hierarchical_keywords?.exact_terms?.terms || [];
+      const exactTermsString = exactTermsArray.length > 0 ? exactTermsArray.join(', ') : userQuery;
+      const exactTerms = exactTermsString;
       const unifiedItem = {
         id: searchId,
         timestamp: searchHistory.timestamp,
@@ -606,6 +624,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     };
   }, [isResizing]);
 
+  // 点击外部关闭用户菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showUserMenu) {
+        const target = event.target as Element
+        if (!target.closest('.user-menu-container')) {
+          setShowUserMenu(false)
+        }
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showUserMenu]);
+
   // 检查登录状态
   useEffect(() => {
     const isLoggedIn = localStorage.getItem('invite_logged_in') === '1';
@@ -836,7 +869,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       color: theme === 'dark' ? '#fff' : '#1f2937',
       overflow: 'hidden'
     }}>
-      {/* 左侧My面板 */}
+      {/* 左侧区域（My面板 + 聊天区域） */}
+      <div style={{
+        display: 'flex',
+        flex: 1,
+        position: 'relative'
+      }}>
+        {/* 左侧My面板 */}
       {!isMyPanelCollapsed && (
         <div style={{
           width: isMobile ? '100vw' : `${myPanelWidth}px`,
@@ -1301,6 +1340,156 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               </div>
             )}
           </div>
+          
+          {/* 个人主页入口 - 固定在My面板底部 */}
+          <div style={{
+            position: 'absolute',
+            bottom: '0',
+            left: '0',
+            right: '0',
+            backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3',
+            borderTop: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+            padding: '12px 8px'
+          }}>
+            <div className="user-menu-container" style={{ position: 'relative' }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                backgroundColor: theme === 'dark' ? '#111' : '#f5f3ea',
+                border: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = theme === 'dark' ? '#1a1a1a' : '#ede9d9';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = theme === 'dark' ? '#111' : '#f5f3ea';
+              }}
+              >
+                {/* 用户头像 */}
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #3bb0e6, #10b981)',
+                  color: '#fff',
+                  fontSize: '16px',
+                  fontWeight: '900',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  boxShadow: '0 2px 6px rgba(0, 0, 0, 0.1)'
+                }}>
+                  {generateAvatar(localStorage.getItem('user_id') || '')}
+                </div>
+                
+                {/* 用户信息 */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: theme === 'dark' ? '#fff' : '#1f2937',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}>
+                    {localStorage.getItem('user_id') || 'Unknown'}
+                  </div>
+                  <div style={{
+                    fontSize: '11px',
+                    color: theme === 'dark' ? '#a1a1aa' : '#6b7280'
+                  }}>
+                    Personal Profile
+                  </div>
+                </div>
+                
+                {/* 箭头图标 */}
+                <div style={{
+                  fontSize: '12px',
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280'
+                }}>
+                  →
+                </div>
+              </div>
+              
+              {/* 用户菜单 */}
+              {showUserMenu && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: '60px',
+                  left: '8px',
+                  right: '8px',
+                  background: theme === 'dark' ? '#1a1a1a' : '#f5f3ea',
+                  border: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+                  borderRadius: '8px',
+                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.3)',
+                  padding: '8px',
+                  zIndex: 1000
+                }}>
+                  {/* 账号信息 */}
+                  <div style={{
+                    padding: '6px 10px',
+                    borderBottom: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
+                    marginBottom: '6px'
+                  }}>
+                    <div style={{ fontSize: '11px', color: theme === 'dark' ? '#a1a1aa' : '#6b7280', marginBottom: '2px' }}>Account</div>
+                    <div style={{ fontSize: '13px', color: theme === 'dark' ? '#fff' : '#1f2937', fontWeight: '500' }}>{localStorage.getItem('user_id')}</div>
+                  </div>
+                  
+                  {/* 菜单项 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <button
+                      style={{
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                        fontSize: '13px',
+                        textAlign: 'left',
+                        cursor: 'not-allowed',
+                        borderRadius: '4px',
+                        opacity: 0.5,
+                        height: '28px'
+                      }}
+                      disabled
+                    >
+                      Settings (Coming Soon)
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      style={{
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#ef4444',
+                        fontSize: '13px',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        borderRadius: '4px',
+                        transition: 'background 0.2s',
+                        height: '28px'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent'
+                      }}
+                    >
+                      Log Out
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
       {/* 中间聊天区域 */}
@@ -1585,79 +1774,79 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   </ReactMarkdown>
                 )}
 
-                {/* 悬停按钮 */}
-                <div 
-                  className="hover-buttons" 
-                  style={{
-                    position: 'absolute',
-                    top: '8px',
-                    right: message.isUser ? '-80px' : 'auto',
-                    left: !message.isUser ? '-80px' : 'auto',
-                    display: 'flex',
-                    gap: '4px',
-                    opacity: 0,
-                    transition: 'opacity 0.2s ease',
-                    zIndex: 10
-                  }}
-                >
-                  {message.isUser && editingMessageId !== message.id && (
-                    <button
-                      onClick={() => startEditMessage(message)}
-                      style={{
-                        width: '32px',
-                        height: '32px',
-                        borderRadius: '50%',
-                        border: 'none',
-                        backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                        color: theme === 'dark' ? '#fff' : '#1f2937',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '14px',
-                        transition: 'all 0.2s ease'
-                      }}
-                      title="编辑消息"
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
-                      }}
-                    >
-                      ✏️
-                    </button>
-                  )}
+                {/* 用户消息的Edit按钮 - 左下角 */}
+                {message.isUser && editingMessageId !== message.id && (
                   <button
-                    onClick={() => copyMessage(message.text)}
+                    className="hover-button-edit"
+                    onClick={() => startEditMessage(message)}
                     style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
+                      position: 'absolute',
+                      bottom: '-6px',
+                      left: '8px',
+                      padding: '4px 8px',
+                      borderRadius: '8px',
                       border: 'none',
-                      backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                      backgroundColor: theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)',
                       color: theme === 'dark' ? '#fff' : '#1f2937',
                       cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '14px',
-                      transition: 'all 0.2s ease'
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      opacity: 0,
+                      transition: 'all 0.2s ease',
+                      zIndex: 10,
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                      backdropFilter: 'blur(4px)'
+                    }}
+                    title="编辑消息"
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.9)' : 'rgba(255,255,255,1)';
+                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)';
+                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
+
+                {/* AI消息的Copy按钮 - 右下角 */}
+                {!message.isUser && (
+                  <button
+                    className="hover-button-copy"
+                    onClick={() => copyMessage(message.text)}
+                    style={{
+                      position: 'absolute',
+                      bottom: '-6px',
+                      right: '8px',
+                      padding: '4px 8px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      backgroundColor: theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)',
+                      color: theme === 'dark' ? '#fff' : '#1f2937',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      opacity: 0,
+                      transition: 'all 0.2s ease',
+                      zIndex: 10,
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                      backdropFilter: 'blur(4px)'
                     }}
                     title="复制消息"
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)';
+                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.9)' : 'rgba(255,255,255,1)';
+                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)';
+                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
                     }}
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
+                    Copy
                   </button>
-                </div>
+                )}
                 
                 {/* 搜索确认按钮 - 仅在Chat & Plan模式下的AI消息中显示 */}
                 {message.needsSearchConfirmation && !message.isUser && (
@@ -2036,19 +2225,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             50% { opacity: 1; transform: scale(1.2); }
           }
           
-          .message-container:hover .hover-buttons {
+          .message-container:hover .hover-button-edit {
             opacity: 1 !important;
           }
           
-          .user-message:hover .hover-buttons {
+          .message-container:hover .hover-button-copy {
             opacity: 1 !important;
           }
           
-          .ai-message:hover .hover-buttons {
+          .user-message:hover .hover-button-edit {
+            opacity: 1 !important;
+          }
+          
+          .ai-message:hover .hover-button-copy {
             opacity: 1 !important;
           }
         `}
       </style>
+    </div>
     </div>
   );
 };

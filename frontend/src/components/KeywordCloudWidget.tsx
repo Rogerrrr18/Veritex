@@ -148,11 +148,16 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         ? searchResult.data.papers 
         : (searchResult.papers || []);
 
+      // 获取Exact Terms作为标题
+      const exactTerms = keywords.filter(k => k.level === 'exact_terms').map(k => k.term);
+      const titleFromExactTerms = exactTerms.length > 0 ? exactTerms.join(', ') : '';
+      const finalTitle = titleFromExactTerms || keywords.map(k => k.term).slice(0, 3).join(', ') || 'Keywords Search';
+
       // 创建搜索历史记录
       const searchHistory = {
         id: Date.now().toString(),
         timestamp: Date.now(),
-        originalQuery: originalQuery || 'Keywords Search',
+        originalQuery: finalTitle,
         expandedKeywords: keywords.map(k => k.term),
         papers: papers,
         maxResults: searchSettings.maxResults
@@ -173,7 +178,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           papers,
           searchHistory,
           expandedKeywords: keywords.map(k => k.term),
-          originalQuery: originalQuery || 'Keywords Search',
+          originalQuery: finalTitle,
           maxResults: searchSettings.maxResults,
           searchSource: 'keyword_cloud'
         }
@@ -495,17 +500,20 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                   <div key={level}>
                     {/* 层级标题 */}
                     <div style={{
-                      fontSize: '12px',
-                      fontWeight: '600',
-                      color: levelColors[level as keyof typeof levelColors],
-                      marginBottom: '8px',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.5px'
+                      marginBottom: '8px'
                     }}>
-                      {levelNames[level as keyof typeof levelNames]} ({levelKeywords.length})
+                      <div style={{
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        color: levelColors[level as keyof typeof levelColors],
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.5px'
+                      }}>
+                        {levelNames[level as keyof typeof levelNames]} ({levelKeywords.length})
+                      </div>
                     </div>
                     
-                    {/* 该层级的关键词 */}
+                    {/* 该层级的关键词和Add按钮 */}
                     <div style={{
                       display: 'flex',
                       flexWrap: 'wrap',
@@ -547,6 +555,48 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                           </div>
                         );
                       })}
+                      
+                      {/* Add按钮放在关键词之后 */}
+                      <button
+                        onClick={() => {
+                          const newTerm = prompt(`添加新的${levelNames[level as keyof typeof levelNames]}关键词:`);
+                          if (newTerm && newTerm.trim()) {
+                            setKeywords(prev => [...prev, {
+                              term: newTerm.trim(),
+                              level: level,
+                              weight: 1.0,
+                              color: levelColors[level as keyof typeof levelColors],
+                              editable: true
+                            }]);
+                          }
+                        }}
+                        style={{
+                          width: '24px',
+                          height: '24px',
+                          borderRadius: '12px',
+                          border: `1px solid ${levelColors[level as keyof typeof levelColors]}`,
+                          backgroundColor: levelColors[level as keyof typeof levelColors] + '15',
+                          color: levelColors[level as keyof typeof levelColors],
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          transition: 'all 0.2s'
+                        }}
+                        title={`添加${levelNames[level as keyof typeof levelNames]}关键词`}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = levelColors[level as keyof typeof levelColors] + '25';
+                          e.currentTarget.style.borderColor = levelColors[level as keyof typeof levelColors] + '50';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = levelColors[level as keyof typeof levelColors] + '15';
+                          e.currentTarget.style.borderColor = levelColors[level as keyof typeof levelColors] + '30';
+                        }}
+                      >
+                        +
+                      </button>
                     </div>
                   </div>
                 );
