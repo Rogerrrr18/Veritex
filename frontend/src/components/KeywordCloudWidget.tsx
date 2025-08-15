@@ -1,0 +1,820 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { api } from '../config';
+import { UserStorage, USER_DATA_KEYS } from '../utils/userStorage';
+
+interface HierarchicalKeywords {
+  exact_terms?: {
+    terms: string[];
+    weight: number;
+  };
+  core_synonyms?: {
+    terms: string[];
+    weight: number;
+  };
+  related_terms?: {
+    terms: string[];
+    weight: number;
+  };
+  context_terms?: {
+    terms: string[];
+    weight: number;
+  };
+}
+
+interface KeywordCloudWidgetProps {
+  hierarchicalKeywords: HierarchicalKeywords | null;
+  originalQuery?: string;
+  isDraggable?: boolean;
+  theme?: 'light' | 'dark';
+}
+
+interface SearchSettings {
+  maxResults: number;
+  yearFrom: string;
+  yearTo: string;
+}
+
+interface KeywordItem {
+  term: string;
+  level: string;
+  weight: number;
+  color: string;
+  editable?: boolean;
+}
+
+const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
+  hierarchicalKeywords,
+  theme = 'dark'
+}) => {
+  const navigate = useNavigate();
+  const [keywords, setKeywords] = useState<KeywordItem[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [newKeyword, setNewKeyword] = useState('');
+  const [searchSettings, setSearchSettings] = useState<SearchSettings>({
+    maxResults: 20,
+    yearFrom: '',
+    yearTo: ''
+  });
+
+  // 颜色配置：不同层级使用不同颜色
+  const levelColors = {
+    exact_terms: '#3b82f6',      // 蓝色 - 精确术语
+    core_synonyms: '#10b981',    // 绿色 - 核心同义词
+    related_terms: '#f59e0b',    // 橙色 - 相关术语  
+    context_terms: '#8b5cf6'     // 紫色 - 上下文术语
+  };
+
+  // 层级名称
+  const levelNames = {
+    exact_terms: 'Exact Terms',
+    core_synonyms: 'Core Synonyms',
+    related_terms: 'Related Terms',
+    context_terms: 'Context Terms'
+  };
+
+  // 解析层次化关键词数据
+  useEffect(() => {
+    if (!hierarchicalKeywords) {
+      setKeywords([]);
+      return;
+    }
+
+    const newKeywords: KeywordItem[] = [];
+
+    // 按层级处理关键词
+    Object.entries(hierarchicalKeywords).forEach(([level, data]) => {
+      if (data && data.terms && Array.isArray(data.terms)) {
+        data.terms.forEach((term: string) => {
+          if (term && term.trim()) {
+            newKeywords.push({
+              term: term.trim(),
+              level,
+              weight: data.weight || 1.0,
+              color: levelColors[level as keyof typeof levelColors] || '#6b7280'
+            });
+          }
+        });
+      }
+    });
+
+    setKeywords(newKeywords);
+  }, [hierarchicalKeywords]);
+
+  // 添加自定义关键词
+  const addCustomKeyword = () => {
+    if (newKeyword.trim()) {
+      setKeywords(prev => [...prev, {
+        term: newKeyword.trim(),
+        level: 'custom',
+        weight: 1.0,
+        color: '#6366f1',
+        editable: true
+      }]);
+      setNewKeyword('');
+    }
+  };
+
+  // 删除关键词
+  const removeKeyword = (index: number) => {
+    setKeywords(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // 执行搜索
+  const handleSearch = async () => {
+    if (keywords.length === 0) {
+      alert('请先添加关键词');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // 构建搜索查询
+      const searchQuery = keywords.map(k => k.term).join(' OR ');
+
+      // 🔑 关键优化：构建预扩展关键词，避免重复LLM分析
+      const preExpandedKeywords = {
+        hierarchical_keywords: {
+          exact_terms: {
+            terms: keywords.filter(k => k.level === 'exact_terms').map(k => k.term),
+            weight: 1.0
+          },
+          core_synonyms: {
+            terms: keywords.filter(k => k.level === 'core_synonyms').map(k => k.term),
+            weight: 0.9
+          },
+          related_terms: {
+            terms: keywords.filter(k => k.level === 'related_terms').map(k => k.term),
+            weight: 0.8
+          },
+          context_terms: {
+            terms: keywords.filter(k => k.level === 'context_terms').map(k => k.term),
+            weight: 0.7
+          }
+        },
+        domain: 'academic_research',
+        core_concepts: keywords.map(k => k.term)
+      };
+
+      console.log('🚀 使用预扩展关键词执行搜索，避免重复LLM分析');
+      console.log('📊 预扩展关键词结构:', preExpandedKeywords);
+
+      // 调用搜索API，传递预扩展关键词以避免重复LLM分析
+      const searchResult = await api.searchPapers(
+        searchQuery, 
+        searchSettings.maxResults, 
+        false, // enable_expansion
+        searchSettings.yearFrom, 
+        searchSettings.yearTo,
+        preExpandedKeywords  // 🔑 传递预扩展关键词
+      );
+      
+      // 处理搜索结果
+      const papers = searchResult.success && searchResult.data 
+        ? searchResult.data.papers 
+        : (searchResult.papers || []);
+
+      // 获取Exact Terms作为标题
+      const exactTerms = keywords.filter(k => k.level === 'exact_terms').map(k => k.term);
+      const titleFromExactTerms = exactTerms.length > 0 ? exactTerms.join(', ') : '';
+      const finalTitle = titleFromExactTerms || keywords.map(k => k.term).slice(0, 3).join(', ') || 'Keywords Search';
+
+      // 创建搜索历史记录
+      const searchHistory = {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        originalQuery: finalTitle,
+        expandedKeywords: keywords.map(k => k.term),
+        papers: papers,
+        maxResults: searchSettings.maxResults
+      };
+
+      // 保存搜索历史到用户隔离存储
+      const SEARCH_STORAGE_KEY = USER_DATA_KEYS.SEARCH_HISTORY;
+      const UNIFIED_HISTORY_KEY = USER_DATA_KEYS.UNIFIED_HISTORY;
+      
+      // 保存到搜索历史
+      const existingSearchHistory = JSON.parse(UserStorage.getUserData(SEARCH_STORAGE_KEY) || '[]');
+      existingSearchHistory.unshift(searchHistory);
+      if (existingSearchHistory.length > 50) {
+        existingSearchHistory.splice(50);
+      }
+      UserStorage.setUserData(SEARCH_STORAGE_KEY, JSON.stringify(existingSearchHistory));
+      
+      // 保存到统一历史（My面板）
+      const unifiedItem = {
+        id: searchHistory.id,
+        timestamp: searchHistory.timestamp,
+        type: 'search' as const,
+        title: finalTitle.length > 50 ? finalTitle.slice(0, 50) + '...' : finalTitle,
+        data: searchHistory
+      };
+      
+      const existingUnifiedHistory = JSON.parse(UserStorage.getUserData(UNIFIED_HISTORY_KEY) || '[]');
+      existingUnifiedHistory.unshift(unifiedItem);
+      existingUnifiedHistory.sort((a: any, b: any) => b.timestamp - a.timestamp);
+      
+      if (existingUnifiedHistory.length > 100) {
+        existingUnifiedHistory.splice(100);
+      }
+      UserStorage.setUserData(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
+      
+      console.log('✅ 关键词搜索结果已保存到用户隔离存储和My面板');
+
+      // 跳转到报告页面
+      navigate('/report', {
+        state: {
+          papers,
+          searchHistory,
+          expandedKeywords: keywords.map(k => k.term),
+          originalQuery: finalTitle,
+          maxResults: searchSettings.maxResults,
+          searchSource: 'keyword_cloud'
+        }
+      });
+
+    } catch (error: any) {
+      console.error('Search failed:', error);
+      alert(`搜索失败：${error.message || '未知错误'}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 如果没有关键词数据，显示空状态
+  if (!hierarchicalKeywords && keywords.length === 0) {
+    return (
+      <div style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3'
+      }}>
+        {/* 搜索参数设置区域 */}
+        <div style={{
+          padding: '16px',
+          backgroundColor: theme === 'dark' ? '#111' : '#f5f3ea',
+          borderBottom: '1px solid #333'
+        }}>
+          <h4 style={{ 
+            margin: '0 0 12px 0', 
+            fontSize: '14px', 
+            color: theme === 'dark' ? '#fff' : '#1f2937',
+            fontWeight: '600'
+          }}>
+            Search Parameters
+          </h4>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* 论文数量 */}
+            <div>
+              <label style={{ 
+                display: 'block', 
+                fontSize: '12px', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+                marginBottom: '4px' 
+              }}>
+                Max Papers
+              </label>
+              <input
+                type="number"
+                value={searchSettings.maxResults}
+                onChange={(e) => setSearchSettings(prev => ({
+                  ...prev,
+                  maxResults: parseInt(e.target.value) || 20
+                }))}
+                min="1"
+                max="100"
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
+                  borderRadius: '6px',
+                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
+                  outline: 'none'
+                }}
+              />
+            </div>
+            
+            {/* 时间范围 */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ 
+                  display: 'block', 
+                  fontSize: '12px', 
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+                  marginBottom: '4px' 
+                }}>
+                  From Year
+                </label>
+                <input
+                  type="number"
+                  placeholder="2020"
+                  value={searchSettings.yearFrom}
+                  onChange={(e) => setSearchSettings(prev => ({
+                    ...prev,
+                    yearFrom: e.target.value
+                  }))}
+                  style={{
+                    width: '100%',
+                    padding: '8px',
+                    fontSize: '13px',
+                    border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
+                    borderRadius: '6px',
+                    backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                    color: theme === 'dark' ? '#fff' : '#1f2937',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ 
+                  display: 'block', 
+                  fontSize: '12px', 
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+                  marginBottom: '4px' 
+                }}>
+                  To Year
+                </label>
+                <input
+                  type="number"
+                  placeholder="2024"
+                  value={searchSettings.yearTo}
+                  onChange={(e) => setSearchSettings(prev => ({
+                    ...prev,
+                    yearTo: e.target.value
+                  }))}
+                  style={{
+                    width: '100%',
+                    padding: '8px',
+                    fontSize: '13px',
+                    border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
+                    borderRadius: '6px',
+                    backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                    color: theme === 'dark' ? '#fff' : '#1f2937',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          flex: 1,
+          padding: '20px',
+          textAlign: 'center',
+          color: theme === 'dark' ? '#6b7280' : '#9ca3af',
+          fontSize: '14px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <div style={{ fontSize: '32px', marginBottom: '12px' }}>⌕</div>
+          <div>Send academic queries</div>
+          <div>Keywords cloud will appear here</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3'
+    }}>
+      {/* 搜索参数设置区域 - 移至顶部 */}
+      <div style={{
+        padding: '12px',
+        backgroundColor: theme === 'dark' ? '#111' : '#f5f3ea',
+        borderBottom: theme === 'dark' ? '1px solid #333' : '1px solid #e5e2d9'
+      }}>
+        <h4 style={{ 
+          margin: '0 0 8px 0', 
+          fontSize: '13px', 
+          color: theme === 'dark' ? '#fff' : '#1f2937',
+          fontWeight: '600'
+        }}>
+          Search Parameters
+        </h4>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* 论文数量 */}
+          <div>
+            <label style={{ 
+              display: 'block', 
+              fontSize: '12px', 
+              color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+              marginBottom: '4px' 
+            }}>
+              Max Papers
+            </label>
+            <input
+              type="number"
+              value={searchSettings.maxResults}
+              onChange={(e) => setSearchSettings(prev => ({
+                ...prev,
+                maxResults: parseInt(e.target.value) || 20
+              }))}
+              min="1"
+              max="100"
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                fontSize: '13px',
+                border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
+                borderRadius: '6px',
+                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                color: theme === 'dark' ? '#fff' : '#1f2937',
+                outline: 'none'
+              }}
+            />
+          </div>
+          
+          {/* 时间范围 */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ 
+                display: 'block', 
+                fontSize: '12px', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+                marginBottom: '4px' 
+              }}>
+                From Year
+              </label>
+              <input
+                type="number"
+                placeholder="2020"
+                value={searchSettings.yearFrom}
+                onChange={(e) => setSearchSettings(prev => ({
+                  ...prev,
+                  yearFrom: e.target.value
+                }))}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
+                  borderRadius: '6px',
+                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
+                  outline: 'none'
+                }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ 
+                display: 'block', 
+                fontSize: '12px', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+                marginBottom: '4px' 
+              }}>
+                To Year
+              </label>
+              <input
+                type="number"
+                placeholder="2024"
+                value={searchSettings.yearTo}
+                onChange={(e) => setSearchSettings(prev => ({
+                  ...prev,
+                  yearTo: e.target.value
+                }))}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
+                  borderRadius: '6px',
+                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                  color: theme === 'dark' ? '#fff' : '#1f2937',
+                  outline: 'none'
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 关键词云内容区域 */}
+      <div style={{
+        flex: 1,
+        padding: '16px',
+        overflowY: 'auto'
+      }}>
+        {/* 关键词云标题 */}
+        <div style={{
+          marginBottom: '16px',
+          paddingBottom: '12px',
+          borderBottom: theme === 'dark' ? '1px solid #333' : '1px solid #e5e2d9'
+        }}>
+          <h4 style={{ 
+            margin: '0 0 4px 0', 
+            fontSize: '16px', 
+            color: theme === 'dark' ? '#fff' : '#1f2937',
+            fontWeight: '600'
+          }}>
+            Keywords Cloud
+          </h4>
+          <div style={{ fontSize: '12px', color: theme === 'dark' ? '#a1a1aa' : '#6b7280' }}>
+            {keywords.length} keywords • Click to remove
+          </div>
+        </div>
+
+        {/* 关键词显示区域 */}
+        <div style={{
+          marginBottom: '20px',
+          minHeight: '100px'
+        }}>
+          {keywords.length === 0 ? (
+            <div style={{
+              textAlign: 'center',
+              color: theme === 'dark' ? '#6b7280' : '#9ca3af',
+              fontSize: '13px',
+              padding: '20px'
+            }}>
+              No keywords available
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {Object.keys(levelNames).map(level => {
+                const levelKeywords = keywords.filter(k => k.level === level);
+                if (levelKeywords.length === 0) return null;
+                
+                return (
+                  <div key={level}>
+                    {/* 层级标题 */}
+                    <div style={{
+                      marginBottom: '8px'
+                    }}>
+                      <div style={{
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        color: levelColors[level as keyof typeof levelColors],
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.5px'
+                      }}>
+                        {levelNames[level as keyof typeof levelNames]} ({levelKeywords.length})
+                      </div>
+                    </div>
+                    
+                    {/* 该层级的关键词和Add按钮 */}
+                    <div style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '6px',
+                      marginBottom: '4px'
+                    }}>
+                      {levelKeywords.map((keyword) => {
+                        const globalIndex = keywords.findIndex(k => k === keyword);
+                        return (
+                          <div
+                            key={globalIndex}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '4px 8px',
+                              backgroundColor: keyword.color + '15',
+                              border: `1px solid ${keyword.color}30`,
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              color: keyword.color,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s',
+                              userSelect: 'none'
+                            }}
+                            onClick={() => removeKeyword(globalIndex)}
+                            title={`Click to remove`}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = keyword.color + '25';
+                              e.currentTarget.style.borderColor = keyword.color + '50';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = keyword.color + '15';
+                              e.currentTarget.style.borderColor = keyword.color + '30';
+                            }}
+                          >
+                            <span>{keyword.term}</span>
+                            <span style={{ fontSize: '10px', opacity: 0.7 }}>×</span>
+                          </div>
+                        );
+                      })}
+                      
+                      {/* Add按钮放在关键词之后 */}
+                      <button
+                        onClick={() => {
+                          const newTerm = prompt(`添加新的${levelNames[level as keyof typeof levelNames]}关键词:`);
+                          if (newTerm && newTerm.trim()) {
+                            setKeywords(prev => [...prev, {
+                              term: newTerm.trim(),
+                              level: level,
+                              weight: 1.0,
+                              color: levelColors[level as keyof typeof levelColors],
+                              editable: true
+                            }]);
+                          }
+                        }}
+                        style={{
+                          width: '24px',
+                          height: '24px',
+                          borderRadius: '12px',
+                          border: `1px solid ${levelColors[level as keyof typeof levelColors]}`,
+                          backgroundColor: levelColors[level as keyof typeof levelColors] + '15',
+                          color: levelColors[level as keyof typeof levelColors],
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          transition: 'all 0.2s'
+                        }}
+                        title={`添加${levelNames[level as keyof typeof levelNames]}关键词`}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = levelColors[level as keyof typeof levelColors] + '25';
+                          e.currentTarget.style.borderColor = levelColors[level as keyof typeof levelColors] + '50';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = levelColors[level as keyof typeof levelColors] + '15';
+                          e.currentTarget.style.borderColor = levelColors[level as keyof typeof levelColors] + '30';
+                        }}
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+              }
+              
+              {/* 自定义关键词单独显示 */}
+              {(() => {
+                const customKeywords = keywords.filter(k => k.level === 'custom');
+                if (customKeywords.length === 0) return null;
+                
+                return (
+                  <div>
+                    <div style={{
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#6366f1',
+                      marginBottom: '8px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px'
+                    }}>
+                      CUSTOM KEYWORDS ({customKeywords.length})
+                    </div>
+                    
+                    <div style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '6px'
+                    }}>
+                      {customKeywords.map((keyword) => {
+                        const globalIndex = keywords.findIndex(k => k === keyword);
+                        return (
+                          <div
+                            key={globalIndex}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '4px 8px',
+                              backgroundColor: '#6366f115',
+                              border: '1px solid #6366f130',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              color: '#6366f1',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s',
+                              userSelect: 'none'
+                            }}
+                            onClick={() => removeKeyword(globalIndex)}
+                            title="Click to remove"
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = '#6366f125';
+                              e.currentTarget.style.borderColor = '#6366f150';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = '#6366f115';
+                              e.currentTarget.style.borderColor = '#6366f130';
+                            }}
+                          >
+                            <span>{keyword.term}</span>
+                            <span style={{ fontSize: '10px', opacity: 0.7 }}>×</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()
+              }
+            </div>
+          )}
+        </div>
+
+        {/* 添加自定义关键词 */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            marginBottom: '8px'
+          }}>
+            <input
+              type="text"
+              value={newKeyword}
+              onChange={(e) => setNewKeyword(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && addCustomKeyword()}
+              placeholder="Add custom keyword..."
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                fontSize: '13px',
+                border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
+                borderRadius: '6px',
+                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
+                color: theme === 'dark' ? '#fff' : '#1f2937',
+                outline: 'none'
+              }}
+            />
+            <button
+              onClick={addCustomKeyword}
+              style={{
+                padding: '8px 16px',
+                fontSize: '13px',
+                border: '1px solid #3bb0e6',
+                borderRadius: '6px',
+                backgroundColor: 'rgba(59,176,230,0.1)',
+                color: '#3bb0e6',
+                cursor: 'pointer',
+                fontWeight: '600'
+              }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        {/* 搜索按钮 */}
+        <div style={{ marginTop: 'auto' }}>
+          <button
+            onClick={handleSearch}
+            disabled={isLoading || keywords.length === 0}
+            style={{
+              width: '100%',
+              padding: '12px',
+              fontSize: '14px',
+              fontWeight: '600',
+              border: 'none',
+              borderRadius: '8px',
+              backgroundColor: keywords.length > 0 && !isLoading ? '#10b981' : '#666',
+              color: theme === 'dark' ? '#fff' : '#1f2937',
+              cursor: keywords.length > 0 && !isLoading ? 'pointer' : 'not-allowed',
+              transition: 'all 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            {isLoading ? (
+              <>
+                <span>Searching...</span>
+                <div style={{
+                  width: '16px',
+                  height: '16px',
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  borderTop: '2px solid #fff',
+                  borderRadius: '50%',
+                  animation: 'spin 1s linear infinite'
+                }}></div>
+              </>
+            ) : (
+              <>
+                <span>Search Papers</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      <style>
+        {`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}
+      </style>
+    </div>
+  );
+};
+
+export default KeywordCloudWidget;

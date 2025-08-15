@@ -1,0 +1,44 @@
+# Paper God 3.0 - 智能对话式学术文献搜索系统依赖
+
+# 核心框架
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+
+# 异步HTTP客户端
+aiohttp>=3.9.5
+httpx>=0.27.0
+
+# LangGraph和LangChain生态
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+
+# LLM客户端库
+openai>=1.0.0
+anthropic>=0.18.0
+
+# 学术搜索和文本处理
+scholarly>=1.7.0
+feedparser>=6.0.10
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# 配置和环境管理
+python-dotenv>=1.0.1
+pydantic>=2.6.0
+
+# 工具库
+tenacity>=8.2.0
+python-dateutil>=2.8.0
+xmltodict>=0.13.0
+
+# JSON处理和数据验证
+jsonschema>=4.17.0
+
+# 开发和测试工具
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# 可选依赖（用于增强功能）
+# numpy>=1.24.0  # 用于向量计算
+# scikit-learn>=1.3.0  # 用于文本相似度计算

@@ -1,0 +1,52 @@
+# Python build artifacts and environment
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+env/
+venv/
+ENV/
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# Secrets and sensitive configuration - VERY IMPORTANT
+.env
+*.env
+.env.*
+!.env.example
+
+# Log files
+*.log
+logs/
+
+# Frontend specific (already handled by frontend/.gitignore but good for completeness if frontend is nested)
+# node_modules/
+# frontend/node_modules/
+# frontend/dist/
+
+# Test results
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints 
