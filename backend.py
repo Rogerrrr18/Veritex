@@ -228,8 +228,9 @@ async def chat(request: ChatRequest):
         is_academic = result.get('is_academic_query', False)
         final_result = result
 
-        # 第二阶段：当模式为 auto-search 且判定为学术时，执行搜索
-        if mode != 'chat-only' and is_academic:
+        # 第二阶段：当模式为 auto-search 且判定为学术 且 关键词扩展成功时，执行搜索
+        analysis_ok = bool(result.get('analysis_result'))
+        if mode != 'chat-only' and is_academic and analysis_ok:
             search_result = await chat_with_search_strategy(
                 query=request.message,
                 force_search=True,
@@ -247,6 +248,9 @@ async def chat(request: ChatRequest):
             }
             ai_response = final_result.get('response', ai_response)
             is_academic = final_result.get('is_academic_query', is_academic)
+        else:
+            if mode != 'chat-only' and is_academic and not analysis_ok:
+                logger.warning("🔇 关键词扩展失败，已跳过自动搜索阶段")
 
         # 构建完整的对话历史
         updated_history = history + [
@@ -397,41 +401,74 @@ async def search_papers_api(req: SearchRequest):
                     }
                 }
         
-        # 🔄 回退模式：没有预扩展关键词时才使用智能工作流
-        logger.info("⚠️ 未提供预扩展关键词，使用智能工作流（包含LLM分析）")
-        logger.warning("💰 注意：将消耗LLM tokens进行关键词分析")
+        # 🔄 回退模式：没有预扩展关键词时拆分为「仅分析」→「条件搜索」两阶段
+        logger.info("⚠️ 未提供预扩展关键词，先进行关键词扩展分析，再按需执行搜索")
         
-        result = await chat_with_search_strategy(
+        # 阶段1：仅做分析（不执行搜索）
+        analysis_only = await chat_with_search_strategy(
+            query=req.query, 
+            force_search=False,
+            max_results=0,
+            year_from=req.year_from,
+            year_to=req.year_to,
+            sources=req.sources,
+            allow_search=False
+        )
+        is_academic = analysis_only.get('is_academic_query', False)
+        analysis_result = analysis_only.get('analysis_result')
+        
+        # 若扩展失败（通常为LLM调用失败）或非学术，跳过搜索
+        if not (is_academic and analysis_result):
+            logger.warning("🔇 关键词扩展失败或非学术查询，已跳过文献搜索")
+            return {
+                "success": False,
+                "error": analysis_only.get('error_message', '关键词扩展失败或非学术查询，已跳过搜索'),
+                "data": {"papers": [], "total_found": 0},
+                "query_info": {
+                    "original_query": req.query,
+                    "is_academic_query": is_academic,
+                    "analysis_result": analysis_result
+                },
+                "performance": {
+                    "llm_analysis": bool(analysis_result),
+                    "token_consumed": bool(analysis_result),
+                    "search_skipped": True
+                }
+            }
+        
+        # 阶段2：仅当扩展成功且为学术查询时，执行搜索
+        search_result = await chat_with_search_strategy(
             query=req.query, 
             force_search=True,
             max_results=req.max_results,
             year_from=req.year_from,
             year_to=req.year_to,
-            sources=req.sources
+            sources=req.sources,
+            allow_search=True
         )
         
-        if result.get('success') and result.get('search_results'):
+        if search_result.get('success') and search_result.get('search_results'):
             return {
                 "success": True,
                 "data": {
-                    "papers": result['search_results'],
-                    "total_found": len(result['search_results']),
+                    "papers": search_result['search_results'],
+                    "total_found": len(search_result['search_results']),
                     "query_info": {
                         "original_query": req.query,
-                        "is_academic_query": result.get('is_academic_query', True),
-                        "analysis_result": result.get('analysis_result')
+                        "is_academic_query": search_result.get('is_academic_query', True),
+                        "analysis_result": search_result.get('analysis_result') or analysis_result
                     },
                     "performance": {
                         "intelligent_workflow": True,
-                        "llm_analysis": True,  # 标记使用了LLM分析
-                        "token_consumed": True  # 消耗了token
+                        "llm_analysis": True,
+                        "token_consumed": True
                     }
                 }
             }
         else:
             return {
                 "success": False,
-                "error": result.get('error_message', '智能工作流搜索失败'),
+                "error": search_result.get('error_message', '智能工作流搜索失败'),
                 "data": {"papers": [], "total_found": 0}
             }
             
