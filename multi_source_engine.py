@@ -770,7 +770,7 @@ class MultiSourceEngine:
         try:
             # 并行调用核心搜索源（arXiv和Google Scholar享受相同权重）
             tasks = []
-            per_task_timeout = float(os.getenv("SEARCH_TASK_TIMEOUT", "20.0"))  # 增加超时时间
+            per_task_timeout = float(os.getenv("SEARCH_TASK_TIMEOUT", "60.0"))  # 增加到60秒超时
             
             # 核心数据源 - arXiv和Google Scholar权重相同
             if self.arxiv:

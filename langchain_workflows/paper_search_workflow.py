@@ -18,6 +18,8 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
+from prompt_manager import get_prompt_manager, PromptType
+
 from llm_interface import get_llm_for_langgraph
 from langchain_workflows.state_schemas import PaperSearchState, create_initial_state
 
@@ -31,7 +33,7 @@ class IntelligentPaperSearchAgent:
         self.enable_memory = enable_memory
         # 使用统一LLM接口
         self.llm = get_llm_for_langgraph()
-        self.system_prompt = self._load_system_prompt()
+        self.prompt_manager = get_prompt_manager()  # 使用新的prompt管理器
         self.checkpointer = MemorySaver() if enable_memory else None
         self.graph = self._build_graph()
         
@@ -52,35 +54,6 @@ class IntelligentPaperSearchAgent:
                 self._search_engine = MockSearchEngine()
         return self._search_engine
     
-    def _load_system_prompt(self) -> str:
-        """加载专业学术分析系统提示词"""
-        try:
-            # 优先使用增强版prompt
-            prompt_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), 
-                "prompts", 
-                "enhanced_system_prompt.txt"
-            )
-            with open(prompt_path, 'r', encoding='utf-8') as f:
-                original_prompt = f.read().strip()
-                print(f"📄 成功加载增强版学术分析提示词，长度: {len(original_prompt)}")
-                return original_prompt
-        except Exception as e:
-            print(f"❌ 无法加载增强版提示词，尝试原版: {e}")
-            # 回退到原版prompt
-            try:
-                prompt_path = os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)), 
-                    "prompts", 
-                    "refined_system_prompt.txt"
-                )
-                with open(prompt_path, 'r', encoding='utf-8') as f:
-                    original_prompt = f.read().strip()
-                    print(f"📄 回退到原版学术分析提示词，长度: {len(original_prompt)}")
-                    return original_prompt
-            except Exception as e2:
-                print(f"❌ 无法加载任何版本的学术分析提示词: {e2}")
-                return """你是专业的学术检索分析专家。请分析用户查询，判断是否为学术需求，并提供专业的关键词扩展分析。始终用中文回答。"""
     
     def _build_graph(self) -> StateGraph:
         """构建LangGraph工作流"""
@@ -110,19 +83,21 @@ class IntelligentPaperSearchAgent:
         return workflow.compile(checkpointer=self.checkpointer)
     
     async def intent_analysis_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """意图分析节点 - 使用专业学术分析Prompt"""
+        """意图分析节点 - 使用智能Prompt管理器"""
         try:
             query = state.get("query", "")
             user_message = state.get("messages", [])[-1].content if state.get("messages") else query
             
             print(f"🤖 开始智能分析用户请求: {user_message}")
-            print(f"🔧 系统提示词长度: {len(self.system_prompt)}")
+            
+            # 使用智能prompt管理器获取最优prompt
+            optimal_prompt = self.prompt_manager.get_prompt(user_message)
             print(f"🔧 LLM模型信息: {type(self.llm).__name__}")
             
-            # 直接使用系统提示词和用户输入
+            # 使用优化后的prompt进行LLM调用
             ai_response = await self.llm.simple_chat(
-                prompt=user_message,
-                system_prompt=self.system_prompt
+                prompt=optimal_prompt,
+                system_prompt=None  # prompt已经完整，不需要额外system_prompt
             )
             
             # 增强的LLM响应检查
@@ -137,11 +112,31 @@ class IntelligentPaperSearchAgent:
                     "messages": [AIMessage(content=f"抱歉，分析过程失败：{error_msg}")]
                 }
             
-            # 检查是否返回错误消息
+            # 检查是否返回错误消息 - 启用降级策略
             if "抱歉，我现在无法回复" in ai_response or "请稍后再试" in ai_response:
                 error_msg = "LLM API调用失败"
                 print(f"❌ {error_msg}: {ai_response[:100]}...")
                 print(f"🔧 可能原因: API key无效、网络问题或服务异常")
+                
+                # 降级策略：尝试使用最简单的prompt
+                print(f"🔄 启用降级策略，尝试基础prompt...")
+                try:
+                    base_prompt = self.prompt_manager.get_prompt(user_message, PromptType.BASE)
+                    print(f"📏 降级prompt长度: {len(base_prompt)}字符")
+                    
+                    ai_response = await self.llm.simple_chat(
+                        prompt=base_prompt,
+                        system_prompt=None
+                    )
+                    
+                    if ai_response and "抱歉，我现在无法回复" not in ai_response:
+                        print(f"✅ 降级策略成功，获得响应: {ai_response[:100]}...")
+                    else:
+                        print(f"❌ 降级策略也失败，进入兜底模式")
+                        raise Exception("降级策略失败")
+                except Exception as fallback_error:
+                    print(f"❌ 降级策略失败: {fallback_error}")
+                    # 进入兜底模式
                 
                 # 返回一个基本的学术分析以保持功能性
                 fallback_response = f"""基于您的查询"{user_message}"，这似乎是一个学术研究相关的问题。
