@@ -9,7 +9,7 @@ import re
 import time
 import hashlib
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+ 
 
 from langchain_core.messages import HumanMessage, SystemMessage
 # AIMessage将在每个需要的函数内部局部导入以避免作用域冲突
@@ -219,6 +219,10 @@ class IntelligentPaperSearchAgent:
             # 调用LLM生成对话回复（设置较短超时）
             response = await self.llm.simple_chat(prompt=prompt, timeout=45.0)
             
+            # 🧹 应用统一的消息清洗处理
+            cleaned_response = self._final_clean_response(response)
+            print(f"📝 闲聊消息清洗完成，清洗前: {len(response)} 字符，清洗后: {len(cleaned_response)} 字符")
+            
             # 明确导入AIMessage避免作用域问题
             from langchain_core.messages import AIMessage
             
@@ -228,7 +232,7 @@ class IntelligentPaperSearchAgent:
                 "analysis_result": None,
                 "is_academic_query": False,
                 "need_search_strategy": False,
-                "messages": [AIMessage(content=response)],
+                "messages": [AIMessage(content=cleaned_response)],  # 使用清洗后的响应
                 "fast_chat": False  # 标记为LLM聊天
             }
             
@@ -640,38 +644,26 @@ class IntelligentPaperSearchAgent:
             from prompt_utils import get_academic_discussion_prompt
             prompt = get_academic_discussion_prompt(user_message, mode=mode)
             
-            # 调用LLM进行学术讨论（设置适中超时）
-            response = await self.llm.simple_chat(prompt=prompt, timeout=45.0)
+            # 调用LLM进行学术讨论（增加超时时间）
+            print(f"🤖 开始LLM学术讨论分析...")
+            import time
+            start_time = time.time()
             
-            # 验证LLM响应
+            response = await self.llm.simple_chat(prompt=prompt, timeout=60.0)  # 增加到60秒
+            end_time = time.time()
+            print(f"✅ LLM调用完成，耗时: {end_time - start_time:.2f}秒，响应长度: {len(response) if response else 0}字符")
+            
+            # 验证LLM响应 - 如果失败直接抛出异常
             if not response or len(response.strip()) < 20:
-                print(f"⚠️ 学术讨论LLM响应过短或为空，长度: {len(response) if response else 0}")
-                print(f"⚠️ 使用回退机制提供基本讨论: {user_message}")
-                
-                # 提供基本的学术讨论回退
-                fallback_response = f"""关于"{user_message}"这个学术问题，这是一个值得深入探讨的研究方向。
-
-🎓 **学术观点**：
-这个领域涉及多个理论层面和实践应用，需要综合考虑相关的研究方法和技术发展。
-
-📚 **研究建议**：
-建议从理论基础、方法论和实际应用三个角度进行深入研究。
-
-如果您需要更详细的文献资料，我可以为您搜索相关的学术论文。"""
-                
-                return {
-                    "current_step": "discussion_completed",
-                    "is_completed": True,
-                    "analysis_result": None,
-                    "is_academic_query": True,
-                    "need_search_strategy": False,
-                    "mode": mode,
-                    "messages": [AIMessage(content=fallback_response)],
-                    "search_suggestion": False,
-                    "is_fallback": True
-                }
+                error_msg = f"学术讨论LLM响应无效: 长度={len(response) if response else 0}, 内容='{response}'"
+                print(f"❌ {error_msg}")
+                raise Exception(error_msg)
             
-            # 解析可能的关键词信息
+            # 🧹 应用统一的消息清洗处理
+            cleaned_response = self._final_clean_response(response)
+            print(f"📝 学术探讨消息清洗完成，清洗前: {len(response)} 字符，清洗后: {len(cleaned_response)} 字符")
+            
+            # 解析可能的关键词信息（恢复原始逻辑）
             keywords_analysis = self._extract_json_analysis(response)
             
             # 根据模式决定搜索建议策略
@@ -690,7 +682,7 @@ class IntelligentPaperSearchAgent:
                 "is_academic_query": True,
                 "need_search_strategy": False,  # 默认不自动搜索
                 "mode": mode,
-                "messages": [AIMessage(content=response)],
+                "messages": [AIMessage(content=cleaned_response)],  # 使用清洗后的响应
                 "search_suggestion": should_suggest_search  # 是否建议搜索
             }
             
@@ -705,242 +697,13 @@ class IntelligentPaperSearchAgent:
                 "messages": [AIMessage(content="抱歉，学术讨论处理失败，请重新尝试。")]
             }
     
-    async def _map_intent_to_workflow(self, intent_result, user_message: str, state: PaperSearchState) -> Dict[str, Any]:
-        """将新的意图分类结果映射到原有工作流格式"""
-        
-        if intent_result.intent == "查文献":
-            # 触发完整搜索流程 - 生成搜索关键词
-            print("🔍 意图：查文献 - 生成搜索关键词")
-            
-            # 简化的关键词生成（基于用户输入）
-            search_keywords = {
-                "core_concepts": [user_message.strip()],
-                "hierarchical_keywords": {
-                    "exact_terms": {"terms": user_message.split(), "weight": 1.0},
-                    "core_synonyms": {"terms": [], "weight": 0.9},
-                    "related_terms": {"terms": [], "weight": 0.5},
-                    "context_terms": {"terms": [], "weight": 0.4}
-                },
-                "domain": "academic_research",
-                "optimized_boolean_query": user_message.strip()
-            }
-            
-            # 局部导入AIMessage
-            from langchain_core.messages import AIMessage
-            return {
-                "current_step": "completed",
-                "is_completed": True,
-                "analysis_result": search_keywords,
-                "is_academic_query": True,
-                "need_search_strategy": True,
-                "messages": [AIMessage(content=f"理解您要查找关于「{user_message}」的文献，正在为您搜索...")]
-            }
-        
-        elif intent_result.intent == "闲聊":
-            # 对话模式，不搜索
-            print("💬 意图：闲聊 - 进入对话模式")
-            
-            # 如果LLM已经生成了回复，使用它；否则生成友好回复
-            if intent_result.response:
-                response_text = intent_result.response
-            else:
-                response_text = self._generate_friendly_response(user_message)
-            
-            # 局部导入AIMessage
-            from langchain_core.messages import AIMessage
-            return {
-                "current_step": "completed",
-                "is_completed": True,
-                "analysis_result": None,
-                "is_academic_query": False,
-                "need_search_strategy": False,
-                "messages": [AIMessage(content=response_text)]
-            }
-        
-        elif intent_result.intent == "学术探讨":
-            # 学术讨论，分析但不自动搜索
-            print("🎓 意图：学术探讨 - 提供分析讨论")
-            
-            # 生成学术讨论回复
-            discussion_response = await self._generate_academic_discussion(user_message)
-            
-            # 提供可选的搜索关键词（用户可手动触发搜索）
-            optional_keywords = {
-                "core_concepts": [user_message.strip()],
-                "hierarchical_keywords": {
-                    "exact_terms": {"terms": user_message.split(), "weight": 1.0},
-                    "core_synonyms": {"terms": [], "weight": 0.9},
-                    "related_terms": {"terms": [], "weight": 0.5},
-                    "context_terms": {"terms": [], "weight": 0.4}
-                },
-                "domain": "academic_discussion"
-            }
-            
-            # 局部导入AIMessage
-            from langchain_core.messages import AIMessage
-            return {
-                "current_step": "completed",
-                "is_completed": True,
-                "analysis_result": optional_keywords,  # 提供可选关键词
-                "is_academic_query": True,
-                "need_search_strategy": False,  # 关键：不自动搜索
-                "messages": [AIMessage(content=discussion_response)]
-            }
-        
-        else:
-            # 默认降级为闲聊
-            print("⚠️ 未知意图，降级为闲聊模式")
-            # 局部导入AIMessage
-            from langchain_core.messages import AIMessage
-            return {
-                "current_step": "completed",
-                "is_completed": True,
-                "analysis_result": None,
-                "is_academic_query": False,
-                "need_search_strategy": False,
-                "messages": [AIMessage(content="抱歉，我没有完全理解您的需求。您是想要搜索文献、进行学术讨论，还是有其他需要帮助的地方？")]
-            }
+    # 已弃用：_map_intent_to_workflow 保留在版本历史中；当前工作流直接由节点路由函数驱动
     
-    def _generate_friendly_response(self, user_message: str) -> str:
-        """生成友好的对话回复"""
-        message_lower = user_message.lower()
-        
-        if any(greeting in message_lower for greeting in ["你好", "hello", "hi"]):
-            return "你好！我是学术文献搜索助手，可以帮您查找学术论文、进行学术讨论。有什么可以帮助您的吗？"
-        elif any(thanks in message_lower for thanks in ["谢谢", "感谢", "thanks"]):
-            return "不客气！很高兴能够帮助您。如果您需要查找文献或有学术问题想讨论，随时告诉我。"
-        elif any(help_word in message_lower for help_word in ["怎么用", "如何使用", "功能"]):
-            return "我可以帮您：\n1. 🔍 搜索学术文献 - 告诉我您要查找的主题\n2. 💭 学术讨论 - 提出学术问题我们一起探讨\n3. 💬 日常对话 - 随时可以聊天交流"
-        else:
-            return "我明白了。如果您需要搜索学术文献或想讨论学术问题，我很乐意帮助您！"
+    # 已移除：_generate_friendly_response（由快速闲聊逻辑取代）
     
-    async def _generate_academic_discussion(self, user_message: str) -> str:
-        """生成学术讨论回复"""
-        try:
-            # 使用LLM生成深度学术讨论
-            discussion_prompt = f"""请对以下学术问题提供深入的分析和讨论：
-
-问题：{user_message}
-
-请从以下角度进行分析：
-1. 问题的学术背景和重要性
-2. 当前研究现状和主要观点
-3. 存在的挑战和争议
-4. 未来发展方向
-
-回复应该专业但易懂，体现学术深度。"""
-
-            response = await self.llm.simple_chat(discussion_prompt)
-            if response and len(response.strip()) > 50:
-                return response
-            else:
-                return self._generate_fallback_discussion(user_message)
-                
-        except Exception as e:
-            print(f"❌ 生成学术讨论失败: {e}")
-            return self._generate_fallback_discussion(user_message)
+    # 已移除：_generate_academic_discussion 与其备用逻辑（当前在节点中直接处理）
     
-    def _generate_fallback_discussion(self, user_message: str) -> str:
-        """生成备用学术讨论回复"""
-        return f"""关于「{user_message}」这个问题很有深度！
-
-🎓 **学术角度分析**
-这是一个值得深入探讨的学术问题，涉及多个研究层面和理论视角。
-
-💭 **思考方向**
-我们可以从理论基础、实践应用、技术发展、社会影响等多个维度来分析这个问题。
-
-📚 **建议深入**
-如果您想要查找相关的学术文献来深入了解这个问题，我可以帮您搜索最新的研究成果和权威观点。
-
-您希望从哪个角度进一步讨论，或者需要我帮您搜索相关文献吗？"""
-    
-    async def _process_original_llm_response(self, ai_response: str, user_message: str) -> Dict[str, Any]:
-        """处理原有LLM响应的逻辑（兼容旧版本）"""
-        
-        # 增强的LLM响应检查
-        if not ai_response or ai_response.strip() == "":
-            error_msg = "LLM分析失败，返回空响应"
-            print(f"❌ {error_msg}")
-            # 局部导入AIMessage
-            from langchain_core.messages import AIMessage
-            return {
-                "error_message": error_msg,
-                "current_step": "failed",
-                "is_completed": False,
-                "messages": [AIMessage(content=f"抱歉，分析过程失败：{error_msg}")]
-            }
-        
-        # 检查是否返回错误消息 - 启用降级策略
-        if "抱歉，我现在无法回复" in ai_response or "请稍后再试" in ai_response:
-            error_msg = "LLM API调用失败"
-            print(f"❌ {error_msg}: {ai_response[:100]}...")
-            
-            # 降级策略：提供基础回复
-            print("⚠️ LLM回复异常，启用降级策略")
-            try:
-                # 简单的fallback回复
-                fallback_prompt = f"请简单回应用户查询：{user_message}"
-                ai_response = await self.llm.simple_chat(prompt=fallback_prompt, system_prompt=None)
-                
-                if ai_response and "抱歉，我现在无法回复" not in ai_response:
-                    print(f"✅ 降级策略成功")
-                else:
-                    raise Exception("降级策略失败")
-            except Exception:
-                # 返回基本的学术分析以保持功能性
-                    return self._generate_fallback_analysis(user_message)
-        
-        # 尝试解析JSON分析结果
-        analysis_result = self._extract_json_analysis(ai_response)
-        is_academic = analysis_result is not None
-        
-        # 清理最终回复格式
-        final_response = self._final_clean_response(ai_response)
-        
-        # 局部导入AIMessage
-        from langchain_core.messages import AIMessage
-        return {
-            "current_step": "completed",
-            "is_completed": True,
-            "analysis_result": analysis_result,
-            "is_academic_query": is_academic,
-            "need_search_strategy": is_academic,
-            "messages": [AIMessage(content=final_response)]
-        }
-    
-    def _generate_fallback_analysis(self, user_message: str) -> Dict[str, Any]:
-        """生成备用分析结果"""
-        
-        basic_analysis = {
-            "core_concepts": [user_message],
-            "hierarchical_keywords": {
-                "exact_terms": {"terms": user_message.split(), "weight": 1.0},
-                "core_synonyms": {"terms": [], "weight": 0.9},
-                "related_terms": {"terms": [], "weight": 0.5},
-                "context_terms": {"terms": [], "weight": 0.4}
-            },
-            "domain": "academic_research"
-        }
-        
-        fallback_response = f"""基于您的查询「{user_message}」，我将为您提供基础的搜索支持。
-
-🔍 **搜索策略**
-我们将使用多个学术数据库为您搜索相关文献，包括arXiv和Semantic Scholar等权威来源。
-
-💡 **建议**
-如果需要更精确的搜索结果，您可以提供更具体的关键词或研究方向。"""
-        
-        # 局部导入AIMessage
-        from langchain_core.messages import AIMessage
-        return {
-            "current_step": "completed",
-            "is_completed": True,
-            "analysis_result": basic_analysis,
-            "is_academic_query": True,
-            "need_search_strategy": True,
-            "messages": [AIMessage(content=fallback_response)]
-        }
+    # 已移除：旧版响应处理与备用分析逻辑（现有节点已覆盖同等回退）
     
     def _extract_json_analysis(self, response: str) -> Optional[Dict[str, Any]]:
         """从LLM响应中提取JSON分析结果"""
@@ -1020,257 +783,188 @@ class IntelligentPaperSearchAgent:
             print(f"⚠️ 响应内容前200字符: {response[:200]}")
             return None
     
-    def _extract_user_friendly_response(self, response: str) -> str:
-        """从LLM响应中提取用户友好的回复部分（保留完整回复用于后续处理）"""
-        # 在这个阶段，保留完整响应，让后续的JSON分析和最终清理来处理
-        return response.strip()
+    # 已移除：_extract_user_friendly_response（不再需要单独提取）
     
     def _final_clean_response(self, response: str) -> str:
-        """最终清理响应，智能处理JSON和用户友好内容"""
+        """最终清理响应，统一处理JSON剥离和中文用户友好展示"""
         try:
-            print(f"🔍 开始清理响应，原始长度: {len(response)}")
+            print(f"🧹 开始消息清洗，原始长度: {len(response)}")
             
-            # 使用与JSON提取相同的智能逻辑检查是否包含JSON
-            json_end_pos = None
-            if '"query_analysis"' in response or '"core_concepts"' in response:
-                # 查找完整的JSON块（从第一个{到最后一个}）
-                json_start = response.find('{')
-                if json_start != -1:
-                    brace_count = 0
+            # 第一步：检测并剥离JSON内容
+            cleaned_response = self._strip_json_content(response)
+            
+            # 第二步：优化中文表述和格式
+            user_friendly_response = self._enhance_chinese_readability(cleaned_response)
+            
+            # 第三步：验证和质量保证
+            final_response = self._ensure_response_quality(user_friendly_response, response)
+            
+            print(f"✅ 消息清洗完成，最终长度: {len(final_response)}")
+            return final_response
                     
-                    for i in range(json_start, len(response)):
-                        if response[i] == '{':
-                            brace_count += 1
-                        elif response[i] == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                json_end_pos = i + 1
-                                break
-                    print(f"🔍 检测到JSON结构，结束位置: {json_end_pos}")
+        except Exception as e:
+            print(f"⚠️ 消息清洗失败: {e}")
+            # 安全降级：返回基础清理版本
+            return self._safe_fallback_cleaning(response)
+    
+    def _strip_json_content(self, response: str) -> str:
+        """智能剥离JSON内容，保留用户友好的文本"""
+        try:
+            # 检测JSON存在
+            json_indicators = ['"query_analysis"', '"core_concepts"', '"hierarchical_keywords"', '"domain"']
+            has_json = any(indicator in response for indicator in json_indicators)
+            
+            if not has_json:
+                print("📝 未检测到JSON内容，直接处理")
+                return response
+            
+            # 查找JSON边界
+            json_start = response.find('{')
+            if json_start == -1:
+                return response
+            
+            brace_count = 0
+            json_end_pos = None
+            
+            for i in range(json_start, len(response)):
+                if response[i] == '{':
+                    brace_count += 1
+                elif response[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_end_pos = i + 1
+                        break
             
             if json_end_pos:
-                # 学术查询：提取JSON后面的解释部分
-                explanation_part = response[json_end_pos:].strip()
+                # 提取JSON前后的用户友好内容
+                before_json = response[:json_start].strip()
+                after_json = response[json_end_pos:].strip()
                 
-                # 清理代码块标记和多余格式
-                explanation_part = re.sub(r'```[\s\S]*?```', '', explanation_part)
-                explanation_part = explanation_part.strip()
+                # 清理代码块标记
+                after_json = re.sub(r'```[\s\S]*?```', '', after_json).strip()
                 
-                print(f"🔍 提取到解释部分，长度: {len(explanation_part)}")
-                
-                # 🔑 关键修改：大幅放宽质量检查条件
-                if explanation_part and len(explanation_part) > 30:  # 从100降低到30
-                    # 验证是否包含学术解释标识符（放宽要求）
-                    required_sections = ['🎓', '📊', '🔍', '💡']
-                    missing_sections = [section for section in required_sections if section not in explanation_part]
-                    
-                    print(f"🔍 质量检查 - 缺失标识符: {len(missing_sections)}/4")
-                    
-                    if len(missing_sections) == 0:
-                        print(f"✅ 学术查询响应完整，包含所有四个部分，长度: {len(explanation_part)}")
-                        return explanation_part
-                    elif len(missing_sections) <= 3:  # 从2改为3，更宽松
-                        print(f"✅ 学术查询响应可接受，缺失少量部分: {missing_sections}")
-                        return self._enhance_incomplete_explanation(explanation_part, missing_sections)
-                    else:
-                        # 即使缺失很多部分，也优先使用原始内容而不是错误消息
-                        print(f"⚠️ 学术查询解释不完整但仍可用，长度: {len(explanation_part)}")
-                        return self._generate_enhanced_response(explanation_part)
-                else:
-                    # 🔑 关键修改：改进降级策略
-                    print(f"⚠️ 学术查询解释内容较少，尝试优化处理")
-                    if explanation_part:
-                        print(f"📝 使用现有内容并增强: {explanation_part[:50]}...")
-                        return self._generate_enhanced_response(explanation_part)
-                    else:
-                        print(f"📝 生成智能分析回复基于JSON内容")
-                        return self._generate_fallback_explanation(response)
-            else:
-                # 普通对话：直接清理格式标记
-                cleaned = response.strip()
-                # 移除可能的代码块标记
-                cleaned = re.sub(r'```[\s\S]*?```', '', cleaned).strip()
-                # 移除提示性分支标签
-                cleaned = re.sub(r'^\s*[#*\-\s]*普通对话模式[:：]?\s*', '', cleaned)
-                print(f"✅ 普通对话清理完成，长度: {len(cleaned)}")
-                return cleaned if cleaned else "抱歉，我无法理解您的问题，请重新表述。"
-                    
+                # 组合前后内容
+                combined = (before_json + "\n\n" + after_json).strip()
+                print(f"🔍 JSON剥离完成，提取内容长度: {len(combined)}")
+                return combined if combined else after_json
+            
+            return response
+            
         except Exception as e:
-            print(f"⚠️ 最终清理失败: {e}")
-            # 🔑 关键修改：即使出错也尝试返回有用的内容
-            if response and len(response) > 10:
-                print("📝 清理失败，返回原始内容的安全版本")
-                return response.strip()[:500] + ("..." if len(response) > 500 else "")
-            return "你好！我是学术搜索助手，有什么可以帮助你的吗？"
+            print(f"⚠️ JSON剥离失败: {e}")
+            return response
     
-    def _enhance_incomplete_explanation(self, explanation: str, missing_sections: List[str]) -> str:
-        """增强不完整的学术解释"""
+    def _enhance_chinese_readability(self, text: str) -> str:
+        """优化中文表述和可读性"""
+        if not text or len(text) < 10:
+            return text
+            
         try:
-            print(f"🔧 开始补充缺失的学术解释部分: {missing_sections}")
-            enhanced = explanation
+            # 移除多余的格式标记
+            cleaned = re.sub(r'```[\s\S]*?```', '', text)
+            cleaned = re.sub(r'^\s*[#*\-\s]*普通对话模式[:：]?\s*', '', cleaned, flags=re.MULTILINE)
             
-            # 尝试从现有内容中提取信息来生成更个性化的补充
-            content_keywords = self._extract_keywords_from_content(explanation)
+            # 优化段落分隔
+            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
             
-            for section in missing_sections:
-                if section == '🎓':
-                    if content_keywords:
-                        domain_hint = content_keywords[0] if content_keywords else "学术研究"
-                        enhanced += f"\n\n🎓 **专业解读**\n已完成{domain_hint}相关的专业术语分析。这一领域涉及多个重要概念，通过系统化的关键词扩展，我们能够更全面地理解研究主题的核心内容和发展脉络。"
-                    else:
-                        enhanced += "\n\n🎓 **专业解读**\n已为您完成专业术语分析，相关概念已在上述关键词中体现。这些术语代表了该研究领域的核心概念和前沿发展方向。"
-                        
-                elif section == '📊':
-                    enhanced += "\n\n📊 **现状分析**\n该研究领域目前正处于快速发展阶段，国内外学者在理论创新和技术应用方面都取得了重要进展。建议关注最近3-5年的研究趋势，特别是在方法学创新和跨学科融合方面的突破。"
-                    
-                elif section == '🔍':
-                    enhanced += "\n\n🔍 **搜索策略**\n采用了多层次关键词扩展策略，包括精确术语、核心同义词和相关概念的组合。这种方法能够确保检索结果既有高度的相关性，又具备足够的覆盖面，帮助您发现更多有价值的研究文献。"
-                    
-                elif section == '💡':
-                    if '机理' in explanation or 'mechanism' in explanation.lower():
-                        enhanced += "\n\n💡 **学术指导**\n对于机理研究，建议采用理论建模与实验验证相结合的方法。可以关注分子层面的作用机制、动力学分析以及关键影响因素的识别。推荐使用先进的分析表征技术和计算模拟方法来深入理解研究对象的本质规律。"
-                    elif '应用' in explanation or 'application' in explanation.lower():
-                        enhanced += "\n\n💡 **学术指导**\n在应用研究方面，建议重点关注技术的实用性和可行性。从实验室规模向工业化应用转化时，需要考虑成本效益、环境影响和技术成熟度等因素。建议查阅相关的技术标准和行业报告。"
-                    else:
-                        enhanced += "\n\n💡 **学术指导**\n建议采用系统性的研究方法，从基础理论出发，结合实证分析，逐步构建完整的知识体系。重点关注方法创新和实际应用价值，同时注意与现有研究的对比和差异化。"
+            # 确保emoji后有适当间距
+            cleaned = re.sub(r'([🎓📊🔍💡🚀📚⚡✨])(\S)', r'\1 \2', cleaned)
             
-            print(f"✅ 已智能补充 {len(missing_sections)} 个缺失的解释部分")
+            # 优化列表格式
+            cleaned = re.sub(r'\n\s*[-*]\s*', '\n• ', cleaned)
+            
+            print(f"📝 中文可读性优化完成")
+            return cleaned.strip()
+            
+        except Exception as e:
+            print(f"⚠️ 中文优化失败: {e}")
+            return text
+    
+    def _ensure_response_quality(self, processed_text: str, original_response: str) -> str:
+        """确保响应质量，必要时进行补充"""
+        if not processed_text or len(processed_text) < 20:
+            print(f"⚠️ 处理后内容过少，尝试从原始响应恢复")
+            
+            # 尝试从原始响应中提取有用内容
+            fallback = self._extract_meaningful_content(original_response)
+            if len(fallback) > len(processed_text):
+                return fallback
+        
+        # 检查是否包含基本的学术讨论要素
+        if len(processed_text) > 50 and any(indicator in processed_text for indicator in ['🎓', '📊', '🔍', '💡']):
+            print(f"✅ 学术讨论内容质量良好")
+            return processed_text
+        elif len(processed_text) > 100:  # 提高阈值，避免过度增强
+            print(f"✅ 基础讨论内容质量可接受")
+            return processed_text
+        elif len(processed_text) > 30:  # 中等长度内容，检查是否需要增强
+            print(f"📝 内容长度适中，保持原样")
+            return processed_text
+        else:
+            print(f"⚠️ 内容质量需要增强")
+            return self._generate_enhanced_discussion(processed_text, original_response)
+    
+    def _safe_fallback_cleaning(self, response: str) -> str:
+        """安全降级清理方案"""
+        if not response:
+            return "抱歉，我无法生成完整的回复，请重新尝试。"
+        
+        # 基础清理
+        cleaned = response.strip()
+        cleaned = re.sub(r'```[\s\S]*?```', '', cleaned)
+        cleaned = re.sub(r'\{[\s\S]*?\}', '', cleaned)  # 简单移除大括号内容
+        cleaned = cleaned.strip()
+        
+        return cleaned if len(cleaned) > 10 else response[:200]
+    
+    def _extract_meaningful_content(self, text: str) -> str:
+        """从文本中提取有意义的内容"""
+        if not text:
+            return ""
+        
+        # 按段落分割，保留较长的非JSON段落
+        paragraphs = text.split('\n')
+        meaningful_parts = []
+        
+        for para in paragraphs:
+            para = para.strip()
+            if (len(para) > 20 and 
+                not para.startswith('{') and 
+                not '"' in para[:10] and
+                '🎓' in para or '📊' in para or '🔍' in para or '💡' in para or len(para) > 50):
+                meaningful_parts.append(para)
+        
+        return '\n\n'.join(meaningful_parts)
+    
+    def _generate_enhanced_discussion(self, base_content: str, original_response: str) -> str:
+        """生成增强的学术讨论内容"""
+        try:
+            # 从原始响应尝试提取主题
+            topic_hints = re.findall(r'["""]([^"""]+)["""]', original_response)
+            topic = topic_hints[0] if topic_hints else "该学术问题"
+            
+            enhanced = base_content if base_content else f"关于{topic}的学术探讨："
+            
+            if '🎓' not in enhanced:
+                enhanced += f"\n\n🎓 **专业分析**\n这是一个值得深入研究的学术问题，涉及多个理论层面和实践应用。"
+            
+            if '📊' not in enhanced:
+                enhanced += f"\n\n📊 **研究现状**\n当前在这一领域的研究正在快速发展，国内外都有重要进展。"
+            
+            if '💡' not in enhanced:
+                enhanced += f"\n\n💡 **研究建议**\n建议从多角度进行综合分析，结合理论研究和实证分析。"
+            
             return enhanced
             
         except Exception as e:
-            print(f"⚠️ 智能补充失败，使用基础补充: {e}")
-            # 回退到简单补充方式
-            enhanced = explanation
-            for section in missing_sections:
-                if section == '🎓':
-                    enhanced += "\n\n🎓 **专业解读**\n已完成专业分析，相关概念已在关键词中体现。"
-                elif section == '📊':
-                    enhanced += "\n\n📊 **现状分析**\n该研究领域发展活跃，值得深入关注。"
-                elif section == '🔍':
-                    enhanced += "\n\n🔍 **搜索策略**\n采用智能关键词扩展策略。"
-                elif section == '💡':
-                    enhanced += "\n\n💡 **学术指导**\n建议从基础概念入手，逐步深入研究。"
-            return enhanced
+            print(f"⚠️ 增强讨论生成失败: {e}")
+            return base_content or "感谢您的学术问题，这是一个很有价值的研究方向。"
     
-    def _extract_keywords_from_content(self, content: str) -> List[str]:
-        """从内容中提取关键词来指导补充策略"""
-        try:
-            if not content:
-                return []
-            
-            # 预定义的学科领域关键词
-            domain_keywords = {
-                '机械工程': ['机械', '机器', '设备', '制造'],
-                '化学工程': ['化学', '反应', '催化', '合成', '分离'],
-                '材料科学': ['材料', '复合材料', '纳米', '薄膜', '晶体'],
-                '生物医学': ['生物', '医学', '细胞', '基因', '蛋白质', '药物'],
-                '计算机科学': ['算法', '计算', '软件', '数据', '网络', '人工智能'],
-                '物理学': ['物理', '量子', '光学', '电磁', '热力学'],
-                '环境科学': ['环境', '污染', '生态', '可持续', '绿色'],
-                '经济管理': ['经济', '管理', '市场', '金融', '企业']
-            }
-            
-            content_lower = content.lower()
-            found_domains = []
-            
-            # 检测学科领域
-            for domain, keywords in domain_keywords.items():
-                if any(keyword in content_lower for keyword in keywords):
-                    found_domains.append(domain)
-            
-            # 提取其他可能的关键概念
-            import re
-            # 匹配可能的专业术语（中英文）
-            terms = re.findall(r'[a-zA-Z]{3,}|[\u4e00-\u9fff]{2,}', content)
-            
-            # 过滤常见词汇
-            common_words = {'研究', '分析', '方法', '技术', '系统', '结果', '问题', '发展', '应用', 
-                          'research', 'analysis', 'method', 'system', 'result', 'development', 'application'}
-            
-            meaningful_terms = [term for term in terms if term not in common_words and len(term) > 1]
-            
-            # 合并结果
-            result = found_domains + meaningful_terms[:5]  # 限制返回的关键词数量
-            print(f"📝 从内容中提取到关键词: {result[:3]}...")  # 只显示前3个
-            
-            return result
-            
-        except Exception as e:
-            print(f"⚠️ 关键词提取失败: {e}")
-            return []
+    # 已移除：不再使用的解释增强与关键词提取辅助函数
     
-    def _generate_enhanced_response(self, partial_content: str) -> str:
-        """基于部分内容生成增强响应"""
-        try:
-            print(f"🔧 开始增强部分内容，原始长度: {len(partial_content)}")
-            
-            # 如果内容已经相对完整，直接使用
-            if len(partial_content) > 200:
-                print(f"✅ 内容相对完整，直接使用")
-                return partial_content
-            
-            # 检查是否已包含一些学术解释标识符
-            sections = ['🎓', '📊', '🔍', '💡']
-            existing_sections = [s for s in sections if s in partial_content]
-            
-            if len(existing_sections) > 0:
-                print(f"✅ 部分内容包含 {len(existing_sections)} 个学术标识符，适当增强")
-                
-                # 为现有内容添加总结
-                enhanced_content = partial_content
-                
-                if '🎓' not in partial_content:
-                    enhanced_content += "\n\n🎓 **专业解读**\n已完成相关概念的专业分析，核心内容见上述解释。"
-                    
-                if '💡' not in partial_content:
-                    enhanced_content += "\n\n💡 **学术指导**\n建议关注最新研究进展，结合理论基础深入探索该领域的发展趋势。"
-                
-                return enhanced_content
-            else:
-                print(f"📝 内容缺少学术标识符，生成基础增强版本")
-                # 将现有内容作为专业解读的一部分
-                return f"""🎓 **专业解读**
-{partial_content}
-
-📊 **现状分析**  
-该研究领域目前发展活跃，相关研究不断涌现，值得深入关注。
-
-🔍 **搜索策略**
-已采用智能关键词分析，结合多层次搜索策略确保结果的相关性和完整性。
-
-💡 **学术指导**  
-建议从基础概念入手，逐步扩展到具体应用和前沿研究方向。关注顶级期刊的最新发表论文。"""
-                
-        except Exception as e:
-            print(f"⚠️ 增强响应生成失败: {e}")
-            # 即使增强失败，也返回原始内容而不是错误消息
-            return partial_content if partial_content else "✅ 已完成学术分析处理。"
+    # 已移除：_generate_enhanced_response（质量保障流程已足够）
     
-    def _generate_fallback_explanation(self, original_response: str) -> str:
-        """生成备用的学术解释"""
-        try:
-            # 尝试从JSON中提取一些信息来生成解释
-            analysis = self._extract_json_analysis(original_response)
-            if analysis:
-                domain = analysis.get('domain', '学术研究')
-                core_concepts = analysis.get('core_concepts', [])
-                concepts_text = "、".join(core_concepts[:3]) if core_concepts else "相关概念"
-                
-                return f"""🎓 **专业解读**
-已为您分析了{concepts_text}等核心概念，这些术语在{domain}领域中具有重要意义。
-
-📊 **现状分析**
-该研究方向目前处于活跃发展阶段，相关研究不断涌现，建议关注最新进展。
-
-🔍 **搜索策略**
-采用了多层次关键词扩展方法，结合精确术语和相关概念，确保检索结果的完整性。
-
-💡 **学术指导**
-建议从基础概念开始深入学习，逐步扩展到具体应用和前沿研究方向。"""
-            else:
-                return "✅ 已完成学术分析和关键词扩展。请查看右侧关键词云进行进一步的文献搜索。"
-        except:
-            return "✅ 已完成学术分析。如需了解更多信息，请提供更详细的查询内容。"
+    # 已移除：_generate_fallback_explanation（不再需要）
     
     def route_after_literature_search(self, state: PaperSearchState) -> str:
         """文献搜索节点后的路由决策（优化版）"""
@@ -1306,25 +1000,7 @@ class IntelligentPaperSearchAgent:
         # 这里暂时都返回 "end"，未来可以根据需要添加更复杂的逻辑
         return "end"
     
-    def should_execute_search(self, state: PaperSearchState) -> str:
-        """判断是否需要执行搜索"""
-        is_academic = state.get("is_academic_query", False)
-        need_search = state.get("need_search_strategy", False)
-        force_search = state.get("force_search", False)  # 新增强制搜索标志
-        allow_search = state.get("allow_search", True)
-        
-        # 如果设置了强制搜索，且允许搜索，直接执行搜索（用于Search Papers按钮）
-        if force_search and allow_search:
-            print("🔍 强制搜索模式，执行搜索")
-            return "search"
-        
-        # 正常模式：需要学术分析且需要搜索策略时才执行搜索，且必须允许搜索
-        if allow_search and is_academic and need_search:
-            print("🔍 判断为学术查询，执行搜索")
-            return "search"
-        else:
-            print("💬 判断为学术分析或普通对话，返回分析结果")
-            return "direct_reply"
+    # 已移除：未使用的路由决策辅助函数 should_execute_search
     
     async def search_execution_node(self, state: PaperSearchState) -> Dict[str, Any]:
         """搜索执行节点 - 调用现有多源搜索引擎"""
@@ -1663,79 +1339,7 @@ class IntelligentPaperSearchAgent:
                 "messages": [AIMessage(content=f"结果处理出错：{error_msg}")]
             }
     
-    def _build_search_response(self, results: List[Dict[str, Any]], analysis: Dict[str, Any], keywords: List[str]) -> str:
-        """构建搜索结果回复"""
-        try:
-            response_parts = []
-            
-            # 添加搜索概述
-            if analysis and keywords:
-                domain = analysis.get("domain", "未知领域")
-                response_parts.append(f"🔍 **搜索领域**: {domain}")
-                response_parts.append(f"🏷️ **关键词**: {', '.join(keywords[:5])}")
-                response_parts.append("")
-            
-            # 添加结果统计
-            response_parts.append(f"📚 **找到 {len(results)} 篇相关论文**：")
-            response_parts.append("=" * 50)
-            
-            # 添加论文列表
-            for i, paper in enumerate(results[:10], 1):  # 限制显示10篇
-                paper_info = []
-                paper_info.append(f"**{i}. {paper.get('title', '无标题')}**")
-                
-                # 作者信息
-                authors = paper.get('authors', [])
-                if authors:
-                    author_str = ', '.join(authors[:3])
-                    if len(authors) > 3:
-                        author_str += f" 等 {len(authors)} 位作者"
-                    paper_info.append(f"   👤 **作者**: {author_str}")
-                
-                # 期刊和年份
-                journal = paper.get('journal', '')
-                year = paper.get('year', '')
-                if journal and year:
-                    paper_info.append(f"   📖 **期刊**: {journal} ({year})")
-                elif journal:
-                    paper_info.append(f"   📖 **期刊**: {journal}")
-                elif year:
-                    paper_info.append(f"   📅 **年份**: {year}")
-                
-                # 引用数和相关性
-                citations = paper.get('citations', 0)
-                relevance = paper.get('relevance_score', 0)
-                if citations > 0:
-                    paper_info.append(f"   📊 **引用**: {citations} 次")
-                if relevance > 0:
-                    paper_info.append(f"   🎯 **相关性**: {relevance:.2f}")
-                
-                # 摘要预览
-                abstract = paper.get('abstract', '')
-                if abstract:
-                    preview = abstract[:200] + "..." if len(abstract) > 200 else abstract
-                    paper_info.append(f"   📝 **摘要**: {preview}")
-                
-                # URL
-                url = paper.get('url', '')
-                if url:
-                    paper_info.append(f"   🔗 **链接**: {url}")
-                
-                response_parts.append('\n'.join(paper_info))
-                response_parts.append("")  # 空行分隔
-            
-            # 添加搜索建议
-            if len(results) < 5:
-                response_parts.append("💡 **搜索建议**：")
-                response_parts.append("- 尝试使用更通用的关键词")
-                response_parts.append("- 考虑相关的技术术语")
-                response_parts.append("- 扩大时间范围搜索")
-            
-            return '\n'.join(response_parts)
-            
-        except Exception as e:
-            print(f"❌ 构建搜索回复失败: {e}")
-            return f"搜索完成，找到 {len(results)} 篇论文，但格式化过程出现问题。"
+    # 已移除：未使用的结果构建辅助函数 _build_search_response
     
     def get_cache_stats(self) -> Dict[str, Any]:
         """获取缓存统计信息"""
@@ -1815,6 +1419,8 @@ class IntelligentPaperSearchAgent:
             
             final_response = ""
             if messages:
+                # 导入AIMessage避免作用域错误
+                from langchain_core.messages import AIMessage
                 ai_messages = [msg for msg in messages if isinstance(msg, AIMessage)]
                 if ai_messages:
                     # 直接使用已经清理过的响应
@@ -1837,10 +1443,21 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"工作流执行错误: {str(e)}"
-            print(f"❌ {error_msg}")
+            error_str = str(e).lower()
+            
+            # 检查是否是CAPTCHA相关错误
+            if 'captcha' in error_str or 'blocked' in error_str:
+                user_friendly_msg = "搜索服务暂时受限，请稍等片刻后重试，或尝试使用其他关键词。"
+                print(f"⚠️ CAPTCHA限制: {error_msg}")
+            else:
+                user_friendly_msg = "处理您的请求时出现错误，请稍后再试。"
+                print(f"❌ {error_msg}")
+                import traceback
+                print(f"🔧 详细错误堆栈: {traceback.format_exc()}")
+            
             return {
                 "success": False,
-                "response": "处理您的请求时出现错误，请稍后再试。",
+                "response": user_friendly_msg,
                 "error_message": error_msg,
                 "thread_id": thread_id,
                 "query": query,

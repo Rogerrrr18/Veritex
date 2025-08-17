@@ -19,20 +19,21 @@
 ```json
 {{
   "original_query": "{user_query}",
-  "core_concepts": ["主要概念"],
+  "translated_query": "English translation if needed",
+  "core_concepts": ["core concepts in English"],
   "hierarchical_keywords": {{
-    "exact_terms": {{"terms": ["精确术语"], "weight": 1.0}},
-    "core_synonyms": {{"terms": ["核心同义词"], "weight": 0.9}},
-    "related_concepts": {{"terms": ["相关概念"], "weight": 0.7}},
-    "research_areas": {{"terms": ["研究领域"], "weight": 0.8}}
+    "exact_terms": {{"terms": ["exact English terms"], "weight": 1.0}},
+    "core_synonyms": {{"terms": ["3-4个精准英文同义词"], "weight": 0.9}}, 
+    "related_terms": {{"terms": ["related English terms"], "weight": 0.5}},
+    "context_terms": {{"terms": ["contextual English terms"], "weight": 0.4}}
   }},
-  "domain": "学术领域",
-  "optimized_boolean_query": "布尔查询",
-  "search_suggestions": ["specific search terms if user wants literature"]
+  "domain": "academic domain in English",
+  "optimized_boolean_query": "Boolean query in English",
+  "search_strategy": "balanced|precision_focused|recall_focused"
 }}
 ```
 
-## 模式化后续建议
+## 后续建议
 
 **如果当前模式是 auto-search：**
 在学术讨论后，主动提供搜索建议：
@@ -42,7 +43,7 @@
 在学术讨论后，提供被动建议：
 "如果您希望进一步了解相关研究，我已经为您准备了搜索关键词。您可以选择搜索文献或继续我们的学术讨论。"
 
-## 讨论引导
+## 讨论
 - 鼓励用户提出更深入的问题
 - 提供相关的学术思考方向  
 - 支持话题的自然延伸和发展

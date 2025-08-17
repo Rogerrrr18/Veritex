@@ -130,18 +130,26 @@ class LLMIntentClassifier:
         query_lower = query.lower()
         query_clean = query.strip()
         
-        # 查文献关键词（扩展和优化）
-        search_keywords = [
+        # 强搜索关键词（明确的搜索意图）
+        strong_search_keywords = [
             # 直接搜索词汇
             "找", "搜索", "检索", "查找", "查询", "寻找", "搜", "查",
             # 英文搜索词汇
             "find", "search", "lookup", "retrieve",
             # 中文文献词汇
-            "文献", "论文", "paper", "研究", "文章", "资料", "材料",
-            # 搜索句式
-            "帮我找", "请检索", "我需要", "我想找", "我要找", "需要一些",
-            "查一下", "搜一下", "找一下", "看看", "了解", "获取",
-            # 学术领域词汇（当与搜索意图结合时）
+            "文献", "论文", "paper", "文章", "资料", "材料",
+            # 明确搜索句式
+            "帮我找", "请检索", "我想找", "我要找", "需要一些",
+            "查一下", "搜一下", "找一下", "获取"
+        ]
+        
+        # 弱搜索关键词（可能是搜索意图，但也可能是讨论意图）
+        weak_search_keywords = [
+            "了解", "看看", "我需要"
+        ]
+        
+        # 学术术语（当与其他线索结合时有助于分类）
+        academic_terms = [
             "催化剂", "算法", "技术", "方法", "模型", "系统", "理论",
             "机器学习", "深度学习", "人工智能", "量子计算", "神经网络",
             "数据挖掘", "计算机视觉", "自然语言处理", "智能体"
@@ -166,6 +174,12 @@ class LLMIntentClassifier:
             "恶化", "糟糕"  # 针对用户的具体例子
         ]
         
+        # 系统使用相关的特殊模式
+        system_usage_patterns = [
+            "系统怎么", "怎么使用", "如何使用", "使用方法", 
+            "操作指南", "功能介绍", "怎么用"
+        ]
+        
         # 学术探讨特征词汇
         question_words = [
             "什么", "如何", "为什么", "能否", "是否", "怎样", "会不会", "能不能",
@@ -175,49 +189,105 @@ class LLMIntentClassifier:
         
         academic_concepts = [
             "机理", "原理", "理论", "概念", "现象", "问题", "挑战", "前景", "趋势",
-            "发展", "影响", "应用", "突破", "创新", "未来", "可能性", "意义"
+            "发展", "影响", "应用", "突破", "创新", "未来", "可能性", "意义",
+            "优势", "缺点", "优缺点", "特点", "特性", "机制", "作用", "效果"
+        ]
+        
+        # 学术探讨的典型句式
+        discussion_patterns = [
+            "想知道为什么", "想了解", "为什么", "如何看待", "有什么优势",
+            "有什么特点", "原理是什么", "机制是什么", "作用机理"
         ]
         
         # 计算匹配得分
-        search_score = sum(1 for kw in search_keywords if kw in query_lower)
+        strong_search_score = sum(1 for kw in strong_search_keywords if kw in query_lower)
+        weak_search_score = sum(1 for kw in weak_search_keywords if kw in query_lower)
         chat_score = sum(1 for kw in chat_keywords if kw in query_lower)
+        
+        # 特殊模式检测
+        has_system_usage = any(pattern in query_lower for pattern in system_usage_patterns)
         
         # 学术探讨检测
         has_question = any(qw in query_lower for qw in question_words)
         has_academic_concept = any(ac in query_lower for ac in academic_concepts)
+        has_discussion_pattern = any(dp in query_lower for dp in discussion_patterns)
         is_question_form = query_clean.endswith('？') or query_clean.endswith('?')
         
-        # 特殊关键词检测
-        has_academic_term = any(term in query_lower for term in [
+        # 学术术语检测（扩展版）
+        has_academic_term = any(term in query_lower for term in academic_terms + [
             "机器学习", "深度学习", "人工智能", "量子", "神经网络", "算法",
-            "催化", "重整", "材料", "化学", "物理", "生物", "医学", "智能体"
+            "催化", "重整", "材料", "化学", "物理", "生物", "医学", "智能体",
+            "费托", "合成", "反应", "分子", "离子", "电子"
         ])
         
         # 明确的搜索意图检测
-        explicit_search_intent = any(word in query_lower for word in [
-            "找", "搜索", "检索", "查找", "查询", "我需要", "帮我", "寻找",
-            "我想找", "我要", "给我", "提供", "获取"
+        explicit_search_intent = strong_search_score > 0
+        
+        # 混合意图检测（新增）
+        has_mixed_intent = any(pattern in query_lower for pattern in [
+            "帮我找", "能帮我找", "可以帮我找", "帮忙找", "找些", "找一些"
         ])
         
-        # 分类逻辑（优化后更精确）
-        if search_score >= 2 or explicit_search_intent:
-            # 强搜索意图
+        # 研究相关的语境判断
+        has_research_context = "研究" in query_lower
+        is_research_discussion = has_research_context and (
+            has_question or has_discussion_pattern or has_academic_concept
+        )
+        
+        # 分类逻辑（重新优化，解决所有识别问题）
+        
+        # 最高优先级：系统使用咨询
+        if has_system_usage:
+            return IntentResult(
+                intent="闲聊",
+                confidence=0.95,
+                method="rule",
+                reasoning="系统使用咨询，属于非学术对话"
+            )
+        
+        # 高优先级：混合意图（先探讨后明确要求搜索）
+        elif has_mixed_intent or (weak_search_score > 0 and strong_search_score > 0):
             return IntentResult(
                 intent="查文献",
-                confidence=min(0.85 + search_score * 0.05, 0.95),
+                confidence=0.9,
                 method="rule",
-                reasoning=f"明确搜索意图，匹配{search_score}个搜索关键词"
+                reasoning="检测到混合意图，但最终倾向于搜索文献"
             )
-        elif has_academic_term and (explicit_search_intent or "研究" in query_lower):
-            # 学术术语 + 搜索意图
+        
+        # 中高优先级：明确搜索意图
+        elif strong_search_score >= 2 or explicit_search_intent:
+            return IntentResult(
+                intent="查文献",
+                confidence=min(0.85 + strong_search_score * 0.05, 0.95),
+                method="rule",
+                reasoning=f"明确搜索意图，匹配{strong_search_score}个强搜索关键词"
+            )
+        elif has_academic_term and explicit_search_intent:
             return IntentResult(
                 intent="查文献",
                 confidence=0.85,
                 method="rule",
-                reasoning="包含学术术语且有搜索意图"
+                reasoning="包含学术术语且有明确搜索意图"
             )
+        
+        # 中优先级：学术探讨
+        elif has_discussion_pattern or (is_research_discussion and not explicit_search_intent):
+            return IntentResult(
+                intent="学术探讨",
+                confidence=0.9,
+                method="rule",
+                reasoning="明确的学术探讨句式，无明确搜索意图"
+            )
+        elif (has_question or is_question_form) and (has_academic_concept or has_academic_term) and not explicit_search_intent and not has_system_usage:
+            return IntentResult(
+                intent="学术探讨",
+                confidence=0.85,
+                method="rule", 
+                reasoning="学术疑问形式，无明确搜索意图"
+            )
+        
+        # 低优先级：闲聊
         elif chat_score > 0:
-            # 提高闲聊识别的置信度，特别是针对明显的日常用语
             base_confidence = 0.85 if chat_score >= 2 else 0.8
             return IntentResult(
                 intent="闲聊", 
@@ -225,24 +295,21 @@ class LLMIntentClassifier:
                 method="rule",
                 reasoning=f"日常对话，匹配{chat_score}个对话关键词"
             )
-        elif (has_question or is_question_form) and has_academic_concept:
-            # 学术探讨：有疑问词 + 学术概念，但无明确搜索意图
+        elif has_academic_term and not explicit_search_intent:
             return IntentResult(
                 intent="学术探讨",
-                confidence=0.8,
-                method="rule", 
-                reasoning="学术疑问形式，无明确搜索意图"
+                confidence=0.75,
+                method="rule",
+                reasoning="包含学术概念但无明确搜索意图"
             )
-        elif has_academic_term and not explicit_search_intent:
-            # 仅提及学术概念，无搜索意图
+        elif weak_search_score > 0 and has_academic_term:
             return IntentResult(
                 intent="学术探讨",
                 confidence=0.7,
                 method="rule",
-                reasoning="包含学术概念但无明确搜索意图"
+                reasoning="弱搜索意图结合学术术语，倾向于学术探讨"
             )
         else:
-            # 默认归类为闲聊
             return IntentResult(
                 intent="闲聊",
                 confidence=0.6,

@@ -58,12 +58,12 @@ const translations = {
     // 报告页面
     'report.back': '← Back',
     'report.export': 'Export CSV',
-    'report.table.title': '标题',
-    'report.table.authors': '作者',
-    'report.table.year': '年份',
-    'report.table.citations': '引用数',
-    'report.table.abstract': '摘要',
-    'report.table.link': '链接',
+    'report.table.title': 'Title',
+    'report.table.authors': 'Authors',
+    'report.table.year': 'Year',
+    'report.table.citations': 'Citations',
+    'report.table.abstract': 'Abstract',
+    'report.table.link': 'Link',
     'report.abstract.more': 'More',
     'report.abstract.less': 'Less',
     

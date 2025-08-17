@@ -471,22 +471,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     }
   };
 
-  const handleClearAll = async () => {
-    if (confirm('确定要清空所有历史记录吗？此操作不可恢复。')) {
-      const userId = localStorage.getItem('user_id');
-      if (userId) {
-        try {
-          // 清空所有历史记录
-          UserStorage.setUserData(USER_DATA_KEYS.UNIFIED_HISTORY, JSON.stringify([]));
-          setUnifiedHistory([]);
-          setSelectedIds([]);
-          setSelectAll(false);
-        } catch (error) {
-          console.error('Clear all failed:', error);
-        }
-      }
-    }
-  };
+  
 
   const handleViewItem = (item: HistoryItem) => {
     if (item.type === 'search') {
@@ -502,8 +487,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       });
     } else if (item.type === 'chat') {
       const chatData = item.data as ChatHistory;
-      localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
-      window.location.reload();
+      try {
+        // 使用用户隔离存储，避免整页刷新，确保即时渲染
+        UserStorage.setUserData(USER_DATA_KEYS.CHAT_HISTORY, JSON.stringify(chatData.messages));
+      } catch (error) {
+        console.error('保存聊天记录失败:', error);
+      }
+      setMessages(chatData.messages);
+      setCurrentAnalysis(null);
+      setActiveMenuId(null);
+      // 平滑滚动到底部
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 0);
     }
   };
 
@@ -1086,19 +1080,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                     >
                       Delete({selectedIds.length})
                     </button>
-                    <button
-                      onClick={handleClearAll}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: '#ff6b6b',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        padding: '2px 4px'
-                      }}
-                    >
-                      Clear all
-                    </button>
+                    
                   </>
                 )}
               </div>
@@ -1851,13 +1833,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                                 timestamp: message.timestamp,
                                 originalQuery: message.searchMetadata?.originalQuery || '',
                                 expandedKeywords: message.searchMetadata?.expandedKeywords || [],
-                                papers: message.searchResults,
-                                maxResults: message.searchMetadata?.maxResults || message.searchResults.length,
+                                papers: message.searchResults || [],
+                                maxResults: message.searchMetadata?.maxResults || (message.searchResults?.length || 0),
                                 domain: message.searchMetadata?.analysisResult?.domain || 'unknown'
                               },
                               expandedKeywords: message.searchMetadata?.expandedKeywords || [],
                               originalQuery: message.searchMetadata?.originalQuery || '',
-                              maxResults: message.searchMetadata?.maxResults || message.searchResults.length
+                              maxResults: message.searchMetadata?.maxResults || (message.searchResults?.length || 0)
                             }
                           });
                         }}

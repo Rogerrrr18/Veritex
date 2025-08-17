@@ -3,6 +3,7 @@ import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { registerUser } from './auth';
 import ChatInterface from './ChatInterface';
+import { UserStorage, USER_DATA_KEYS } from './utils/userStorage';
 import { APP_CONFIG } from './config';
 import { useGlobal } from './contexts/GlobalContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -65,16 +66,7 @@ const deleteUnifiedHistory = async (ids: string[]) => {
   }
 };
 
-const clearAllHistory = async () => {
-  const userId = localStorage.getItem('user_id');
-  if (!userId) return;
-
-  try {
-    localStorage.removeItem(`paper_god_unified_history_user_${userId}`);
-  } catch (error) {
-    console.error('清空所有历史失败:', error);
-  }
-};
+ 
 
 // 简洁主题切换icon，仅用于报告页
 // 简洁主题切换组件（移除未使用警告）
@@ -673,11 +665,11 @@ function ReportPage() {
       } else if (Array.isArray(authors)) {
         authorArray = authors.filter(a => a && typeof a === 'string' && a.trim().length > 0)
       } else {
-        return '未知作者'
+        return 'Unknown Author'
       }
 
       if (authorArray.length === 0) {
-        return '未知作者'
+        return 'Unknown Author'
       }
 
       // 格式化作者名称（处理常见的姓名格式）
@@ -719,14 +711,13 @@ function ReportPage() {
       } else if (authorArray.length === 3) {
         return `${formatSingleAuthor(authorArray[0])}, ${formatSingleAuthor(authorArray[1])}, ${formatSingleAuthor(authorArray[2])}`
       } else {
-        // 超过3个作者：显示前3个 + 等N位作者
+        // 超过3个作者：显示前3个 + et al.
         const firstThree = authorArray.slice(0, 3).map(formatSingleAuthor)
-        const remainingCount = authorArray.length - 3
-        return `${firstThree.join(', ')} 等 ${authorArray.length} 位作者`
+        return `${firstThree.join(', ')} et al. (${authorArray.length} authors)`
       }
     } catch (error) {
-      console.warn('作者格式化错误:', error)
-      return typeof authors === 'string' ? authors : '未知作者'
+      console.warn('Author formatting error:', error)
+      return typeof authors === 'string' ? authors : 'Unknown Author'
     }
   }
 
@@ -738,7 +729,7 @@ function ReportPage() {
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
-    link.download = '文献报告.csv'
+    link.download = 'Literature_Report.csv'
     link.click()
   }
 
@@ -1070,14 +1061,7 @@ function MyPage() {
     }
   }
 
-  const handleClearAll = async () => {
-    if (confirm('确定要清空所有历史记录吗？此操作不可恢复。')) {
-      await clearAllHistory()
-      setUnifiedHistory([])
-      setSelectedIds([])
-      setSelectAll(false)
-    }
-  }
+  
 
   const handleViewItem = (item: HistoryItem) => {
     if (item.type === 'search') {
@@ -1093,10 +1077,14 @@ function MyPage() {
         }
       })
     } else if (item.type === 'chat') {
-      // 恢复聊天记录并跳转
+      // 恢复聊天记录并跳转（使用用户隔离存储，避免刷新）
       const chatData = item.data as ChatHistory;
-      // 先保存聊天记录到当前会话
-      localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
+      try {
+        UserStorage.setUserData(USER_DATA_KEYS.CHAT_HISTORY, JSON.stringify(chatData.messages));
+      } catch (e) {
+        console.warn('保存聊天记录到隔离存储失败，尝试使用本地存储作为降级方案');
+        localStorage.setItem('veritex_chat_history', JSON.stringify(chatData.messages));
+      }
       navigate('/conversation');
     }
   }
@@ -1247,20 +1235,7 @@ function MyPage() {
                 Delete ({selectedIds.length})
               </button>
             </div>
-            <button
-              onClick={handleClearAll}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 4,
-                border: '1px solid #dc3545',
-                background: 'transparent',
-                color: '#dc3545',
-                cursor: 'pointer',
-                fontSize: 12
-              }}
-            >
-              Clear All
-            </button>
+            
           </div>
         )}
 
