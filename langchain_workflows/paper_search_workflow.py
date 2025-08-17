@@ -9,7 +9,8 @@ import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
+# AIMessage将在每个需要的函数内部局部导入以避免作用域冲突
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -18,7 +19,8 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from prompt_manager import get_prompt_manager, PromptType
+# prompt_manager已删除，使用简化的prompt_utils
+from llm_intent_classifier import get_intent_classifier
 
 from llm_interface import get_llm_for_langgraph
 from langchain_workflows.state_schemas import PaperSearchState, create_initial_state
@@ -33,7 +35,11 @@ class IntelligentPaperSearchAgent:
         self.enable_memory = enable_memory
         # 使用统一LLM接口
         self.llm = get_llm_for_langgraph()
-        self.prompt_manager = get_prompt_manager()  # 使用新的prompt管理器
+        
+        # 使用优化的LLM意图分类器
+        self.intent_classifier = get_intent_classifier()
+        print("✅ 使用优化的LLM意图分类器（已移除embedding步骤）")
+        
         self.checkpointer = MemorySaver() if enable_memory else None
         self.graph = self._build_graph()
         
@@ -44,14 +50,13 @@ class IntelligentPaperSearchAgent:
         """获取搜索引擎实例（延迟加载）- 避免循环依赖"""
         if self._search_engine is None:
             try:
-                # 直接使用MultiSourceEngine避免循环依赖
+                # 使用真实的MultiSourceEngine，删除模拟引擎依赖
                 from multi_source_engine import MultiSourceEngine
                 self._search_engine = MultiSourceEngine()
                 print("✅ 多源搜索引擎实例化成功")
             except Exception as e:
                 print(f"❌ 搜索引擎实例化失败: {e}")
-                # 创建一个模拟搜索引擎
-                self._search_engine = MockSearchEngine()
+                raise Exception(f"无法初始化搜索引擎: {e}，请检查依赖包安装")
         return self._search_engine
     
     
@@ -61,19 +66,49 @@ class IntelligentPaperSearchAgent:
         
         # 添加核心节点
         workflow.add_node("intent_analysis", self.intent_analysis_node)
+        
+        # 三个意图专门处理节点
+        workflow.add_node("chat_conversation", self.chat_conversation_node)
+        workflow.add_node("literature_search", self.literature_search_node) 
+        workflow.add_node("academic_discussion", self.academic_discussion_node)
+        
+        # 搜索和结果处理节点
         workflow.add_node("search_execution", self.search_execution_node)
         workflow.add_node("result_formatting", self.result_formatting_node)
         
         # 定义流程路径
         workflow.add_edge(START, "intent_analysis")
         
-        # 根据意图分析结果选择路径
+        # 根据意图分析结果分发到对应节点
         workflow.add_conditional_edges(
             "intent_analysis",
-            self.should_execute_search,
+            self.route_by_intent,
+            {
+                "chat_conversation": "chat_conversation",
+                "literature_search": "literature_search", 
+                "academic_discussion": "academic_discussion"
+            }
+        )
+        
+        # 闲聊对话直接结束
+        workflow.add_edge("chat_conversation", END)
+        
+        # 文献搜索和学术讨论的后续路径
+        workflow.add_conditional_edges(
+            "literature_search",
+            self.should_execute_search_after_analysis,
             {
                 "search": "search_execution",
-                "direct_reply": END
+                "end": END
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "academic_discussion", 
+            self.should_execute_search_after_discussion,
+            {
+                "search": "search_execution",
+                "end": END
             }
         )
         
@@ -83,124 +118,30 @@ class IntelligentPaperSearchAgent:
         return workflow.compile(checkpointer=self.checkpointer)
     
     async def intent_analysis_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """意图分析节点 - 使用智能Prompt管理器"""
+        """意图分析节点 - Embedding + LLM精排版本"""
         try:
             query = state.get("query", "")
             user_message = state.get("messages", [])[-1].content if state.get("messages") else query
             
             print(f"🤖 开始智能分析用户请求: {user_message}")
             
-            # 使用智能prompt管理器获取最优prompt
-            optimal_prompt = self.prompt_manager.get_prompt(user_message)
-            print(f"🔧 LLM模型信息: {type(self.llm).__name__}")
+            # 使用Embedding + LLM精排分类器
+            intent_result = await self.intent_classifier.classify_intent(user_message)
+            print(f"🔧 意图分类结果: {intent_result.intent} (置信度: {intent_result.confidence:.3f})")
             
-            # 使用优化后的prompt进行LLM调用
-            ai_response = await self.llm.simple_chat(
-                prompt=optimal_prompt,
-                system_prompt=None  # prompt已经完整，不需要额外system_prompt
-            )
-            
-            # 增强的LLM响应检查
-            if not ai_response or ai_response.strip() == "":
-                error_msg = "LLM分析失败，返回空响应"
-                print(f"❌ {error_msg}")
-                print(f"🔧 调试信息: LLM返回了空响应")
-                return {
-                    "error_message": error_msg,
-                    "current_step": "failed",
-                    "is_completed": False,
-                    "messages": [AIMessage(content=f"抱歉，分析过程失败：{error_msg}")]
-                }
-            
-            # 检查是否返回错误消息 - 启用降级策略
-            if "抱歉，我现在无法回复" in ai_response or "请稍后再试" in ai_response:
-                error_msg = "LLM API调用失败"
-                print(f"❌ {error_msg}: {ai_response[:100]}...")
-                print(f"🔧 可能原因: API key无效、网络问题或服务异常")
-                
-                # 降级策略：尝试使用最简单的prompt
-                print(f"🔄 启用降级策略，尝试基础prompt...")
-                try:
-                    base_prompt = self.prompt_manager.get_prompt(user_message, PromptType.BASE)
-                    print(f"📏 降级prompt长度: {len(base_prompt)}字符")
-                    
-                    ai_response = await self.llm.simple_chat(
-                        prompt=base_prompt,
-                        system_prompt=None
-                    )
-                    
-                    if ai_response and "抱歉，我现在无法回复" not in ai_response:
-                        print(f"✅ 降级策略成功，获得响应: {ai_response[:100]}...")
-                    else:
-                        print(f"❌ 降级策略也失败，进入兜底模式")
-                        raise Exception("降级策略失败")
-                except Exception as fallback_error:
-                    print(f"❌ 降级策略失败: {fallback_error}")
-                    # 进入兜底模式
-                
-                # 返回一个基本的学术分析以保持功能性
-                fallback_response = f"""基于您的查询"{user_message}"，这似乎是一个学术研究相关的问题。
-
-🎓 **专业解读**
-您提到的研究主题涉及重要的学术领域。虽然当前AI分析服务暂时不可用，但我们仍可以为您提供基础的搜索支持。
-
-📊 **现状分析**  
-该研究领域是当前学术界关注的重要方向，建议您关注最新的研究进展和发展趋势。
-
-🔍 **搜索策略**
-我们将使用多个学术数据库为您搜索相关文献，包括arXiv和Semantic Scholar等权威来源。
-
-💡 **学术指导**  
-建议您从基础理论入手，逐步深入到具体应用和前沿研究。关注顶级期刊的最新发表成果。"""
-
-                # 创建基本分析结果以支持搜索
-                basic_analysis = {
-                    "core_concepts": [user_message],
-                    "hierarchical_keywords": {
-                        "exact_terms": {"terms": user_message.split(), "weight": 1.0},
-                        "core_synonyms": {"terms": [], "weight": 0.9}
-                    },
-                    "domain": "academic_research"
-                }
-                
-                return {
-                    "current_step": "completed",
-                    "is_completed": True,
-                    "analysis_result": basic_analysis,
-                    "is_academic_query": True,  # 强制标记为学术查询
-                    "need_search_strategy": True,
-                    "messages": [AIMessage(content=fallback_response)]
-                }
-            
-            print(f"📝 LLM分析完成，响应长度: {len(ai_response)}")
-            print(f"🔧 响应前100字符: {ai_response[:100]}...")
-            
-            # 尝试解析是否包含JSON分析结果
-            print(f"🔧 开始提取JSON分析结果...")
-            analysis_result = self._extract_json_analysis(ai_response)
-            is_academic = analysis_result is not None
-            
-            print(f"🔧 JSON提取结果: {'成功' if analysis_result else '失败'}")
-            if analysis_result:
-                print(f"🔧 JSON包含字段: {list(analysis_result.keys())}")
-            
-            # 清理最终回复格式
-            print(f"🔧 开始清理最终响应格式...")
-            print(f"🔍 调试：LLM原始响应: {ai_response[:200]}...")
-            final_response = self._final_clean_response(ai_response)
-            print(f"🔍 调试：清理后响应: {final_response[:200]}...")
-            print(f"🔧 最终响应长度: {len(final_response)}")
-            
-            print(f"📊 分析结果: 学术查询={is_academic}")
-            print(f"🔧 返回状态总结: current_step=completed, is_completed=True, messages_count=1")
-            
+            # 将意图结果保存到state中供后续节点使用
             return {
-                "current_step": "completed",
-                "is_completed": True,
-                "analysis_result": analysis_result,
-                "is_academic_query": is_academic,
-                "need_search_strategy": is_academic,
-                "messages": [AIMessage(content=final_response)]
+                "current_step": "intent_analyzed",
+                "is_completed": False,
+                "intent_result": {
+                    "intent": intent_result.intent,
+                    "confidence": float(intent_result.confidence),  # 转换为Python float
+                    "method": intent_result.method,
+                    "reasoning": intent_result.reasoning or ""
+                },
+                "analysis_result": None,
+                "is_academic_query": intent_result.intent in ["查文献", "学术探讨"],
+                "need_search_strategy": intent_result.intent == "查文献"
             }
                 
         except Exception as e:
@@ -209,12 +150,398 @@ class IntelligentPaperSearchAgent:
             print(f"🔧 异常详情: {type(e).__name__}: {str(e)}")
             import traceback
             print(f"🔧 堆栈跟踪: {traceback.format_exc()}")
+            # 局部导入AIMessage
+            from langchain_core.messages import AIMessage
             return {
                 "error_message": error_msg,
                 "current_step": "failed",
                 "is_completed": False,
                 "messages": [AIMessage(content=f"系统错误：{error_msg}")]
             }
+    
+    def route_by_intent(self, state: PaperSearchState) -> str:
+        """根据意图分析结果路由到对应的处理节点"""
+        intent_result = state.get("intent_result")
+        
+        if not intent_result:
+            print("⚠️ 未找到意图分析结果，默认进入对话模式")
+            return "chat_conversation"
+        
+        intent = intent_result.get("intent", "闲聊")
+        print(f"🎯 路由决策：意图 '{intent}' → 对应处理节点")
+        
+        if intent == "闲聊":
+            return "chat_conversation"
+        elif intent == "查文献":
+            return "literature_search"
+        elif intent == "学术探讨":
+            return "academic_discussion"
+        else:
+            print(f"⚠️ 未知意图 '{intent}'，默认进入对话模式")
+            return "chat_conversation"
+    
+    async def chat_conversation_node(self, state: PaperSearchState) -> Dict[str, Any]:
+        """闲聊对话处理节点"""
+        try:
+            user_message = state.get("user_message", "")
+            print(f"💬 闲聊对话处理: {user_message}")
+            
+            # 使用简化的prompt工具函数
+            from prompt_utils import get_chat_conversation_prompt
+            prompt = get_chat_conversation_prompt(user_message)
+            
+            # 调用LLM生成对话回复
+            response = await self.llm.simple_chat(prompt=prompt)
+            
+            # 明确导入AIMessage避免作用域问题
+            from langchain_core.messages import AIMessage
+            
+            return {
+                "current_step": "completed",
+                "is_completed": True,
+                "analysis_result": None,
+                "is_academic_query": False,
+                "need_search_strategy": False,
+                "messages": [AIMessage(content=response)]
+            }
+            
+        except Exception as e:
+            error_msg = f"对话处理失败: {str(e)}"
+            print(f"❌ {error_msg}")
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "failed",
+                "is_completed": False,
+                "error_message": error_msg,
+                "messages": [AIMessage(content="抱歉，我现在无法正常对话，请稍后重试。")]
+            }
+    
+    async def literature_search_node(self, state: PaperSearchState) -> Dict[str, Any]:
+        """文献搜索处理节点"""
+        try:
+            user_message = state.get("user_message", "")
+            mode = state.get("mode", "auto-search")
+            print(f"📚 文献搜索处理: {user_message} (模式: {mode})")
+            
+            # 使用简化的prompt工具函数
+            from prompt_utils import get_literature_search_prompt
+            prompt = get_literature_search_prompt(user_message, mode=mode)
+            
+            # 调用LLM进行关键词扩展和搜索分析
+            response = await self.llm.simple_chat(prompt=prompt)
+            
+            # 解析LLM响应中的JSON部分（如果有）
+            keywords_analysis = self._extract_json_analysis(response)
+            
+            # 明确导入AIMessage避免作用域问题
+            from langchain_core.messages import AIMessage
+            
+            return {
+                "current_step": "search_ready",
+                "is_completed": False,  # 可能还需要执行搜索
+                "analysis_result": keywords_analysis,
+                "is_academic_query": True,
+                "need_search_strategy": True,
+                "mode": mode,
+                "messages": [AIMessage(content=response)],
+                "should_search": mode == "auto-search"  # 标记是否应该自动搜索
+            }
+            
+        except Exception as e:
+            error_msg = f"文献搜索分析失败: {str(e)}"
+            print(f"❌ {error_msg}")
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "failed",
+                "is_completed": False,
+                "error_message": error_msg,
+                "messages": [AIMessage(content="抱歉，文献搜索分析失败，请重新尝试。")]
+            }
+    
+    async def academic_discussion_node(self, state: PaperSearchState) -> Dict[str, Any]:
+        """学术探讨处理节点"""
+        try:
+            user_message = state.get("user_message", "")
+            mode = state.get("mode", "auto-search")
+            print(f"🎓 学术探讨处理: {user_message} (模式: {mode})")
+            
+            # 使用简化的prompt工具函数
+            from prompt_utils import get_academic_discussion_prompt
+            prompt = get_academic_discussion_prompt(user_message, mode=mode)
+            
+            # 调用LLM进行学术讨论
+            response = await self.llm.simple_chat(prompt=prompt)
+            
+            # 解析可能的关键词信息
+            keywords_analysis = self._extract_json_analysis(response)
+            
+            # 根据模式决定搜索建议策略
+            should_suggest_search = False
+            if mode == "auto-search":
+                # 在auto-search模式下，学术探讨可以主动建议搜索
+                should_suggest_search = bool(keywords_analysis)
+            
+            # 明确导入AIMessage避免作用域问题
+            from langchain_core.messages import AIMessage
+            
+            return {
+                "current_step": "discussion_completed",
+                "is_completed": True,  # 学术探讨通常不需要后续搜索，除非用户主动要求
+                "analysis_result": keywords_analysis,
+                "is_academic_query": True,
+                "need_search_strategy": False,  # 默认不自动搜索
+                "mode": mode,
+                "messages": [AIMessage(content=response)],
+                "search_suggestion": should_suggest_search  # 是否建议搜索
+            }
+            
+        except Exception as e:
+            error_msg = f"学术讨论失败: {str(e)}"
+            print(f"❌ {error_msg}")
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "failed",
+                "is_completed": False,
+                "error_message": error_msg,
+                "messages": [AIMessage(content="抱歉，学术讨论处理失败，请重新尝试。")]
+            }
+    
+    async def _map_intent_to_workflow(self, intent_result, user_message: str, state: PaperSearchState) -> Dict[str, Any]:
+        """将新的意图分类结果映射到原有工作流格式"""
+        
+        if intent_result.intent == "查文献":
+            # 触发完整搜索流程 - 生成搜索关键词
+            print("🔍 意图：查文献 - 生成搜索关键词")
+            
+            # 简化的关键词生成（基于用户输入）
+            search_keywords = {
+                "core_concepts": [user_message.strip()],
+                "hierarchical_keywords": {
+                    "exact_terms": {"terms": user_message.split(), "weight": 1.0},
+                    "core_synonyms": {"terms": [], "weight": 0.9},
+                    "related_terms": {"terms": [], "weight": 0.5},
+                    "context_terms": {"terms": [], "weight": 0.4}
+                },
+                "domain": "academic_research",
+                "optimized_boolean_query": user_message.strip()
+            }
+            
+            # 局部导入AIMessage
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "completed",
+                "is_completed": True,
+                "analysis_result": search_keywords,
+                "is_academic_query": True,
+                "need_search_strategy": True,
+                "messages": [AIMessage(content=f"理解您要查找关于「{user_message}」的文献，正在为您搜索...")]
+            }
+        
+        elif intent_result.intent == "闲聊":
+            # 对话模式，不搜索
+            print("💬 意图：闲聊 - 进入对话模式")
+            
+            # 如果LLM已经生成了回复，使用它；否则生成友好回复
+            if intent_result.response:
+                response_text = intent_result.response
+            else:
+                response_text = self._generate_friendly_response(user_message)
+            
+            # 局部导入AIMessage
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "completed",
+                "is_completed": True,
+                "analysis_result": None,
+                "is_academic_query": False,
+                "need_search_strategy": False,
+                "messages": [AIMessage(content=response_text)]
+            }
+        
+        elif intent_result.intent == "学术探讨":
+            # 学术讨论，分析但不自动搜索
+            print("🎓 意图：学术探讨 - 提供分析讨论")
+            
+            # 生成学术讨论回复
+            discussion_response = await self._generate_academic_discussion(user_message)
+            
+            # 提供可选的搜索关键词（用户可手动触发搜索）
+            optional_keywords = {
+                "core_concepts": [user_message.strip()],
+                "hierarchical_keywords": {
+                    "exact_terms": {"terms": user_message.split(), "weight": 1.0},
+                    "core_synonyms": {"terms": [], "weight": 0.9},
+                    "related_terms": {"terms": [], "weight": 0.5},
+                    "context_terms": {"terms": [], "weight": 0.4}
+                },
+                "domain": "academic_discussion"
+            }
+            
+            # 局部导入AIMessage
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "completed",
+                "is_completed": True,
+                "analysis_result": optional_keywords,  # 提供可选关键词
+                "is_academic_query": True,
+                "need_search_strategy": False,  # 关键：不自动搜索
+                "messages": [AIMessage(content=discussion_response)]
+            }
+        
+        else:
+            # 默认降级为闲聊
+            print("⚠️ 未知意图，降级为闲聊模式")
+            # 局部导入AIMessage
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "completed",
+                "is_completed": True,
+                "analysis_result": None,
+                "is_academic_query": False,
+                "need_search_strategy": False,
+                "messages": [AIMessage(content="抱歉，我没有完全理解您的需求。您是想要搜索文献、进行学术讨论，还是有其他需要帮助的地方？")]
+            }
+    
+    def _generate_friendly_response(self, user_message: str) -> str:
+        """生成友好的对话回复"""
+        message_lower = user_message.lower()
+        
+        if any(greeting in message_lower for greeting in ["你好", "hello", "hi"]):
+            return "你好！我是学术文献搜索助手，可以帮您查找学术论文、进行学术讨论。有什么可以帮助您的吗？"
+        elif any(thanks in message_lower for thanks in ["谢谢", "感谢", "thanks"]):
+            return "不客气！很高兴能够帮助您。如果您需要查找文献或有学术问题想讨论，随时告诉我。"
+        elif any(help_word in message_lower for help_word in ["怎么用", "如何使用", "功能"]):
+            return "我可以帮您：\n1. 🔍 搜索学术文献 - 告诉我您要查找的主题\n2. 💭 学术讨论 - 提出学术问题我们一起探讨\n3. 💬 日常对话 - 随时可以聊天交流"
+        else:
+            return "我明白了。如果您需要搜索学术文献或想讨论学术问题，我很乐意帮助您！"
+    
+    async def _generate_academic_discussion(self, user_message: str) -> str:
+        """生成学术讨论回复"""
+        try:
+            # 使用LLM生成深度学术讨论
+            discussion_prompt = f"""请对以下学术问题提供深入的分析和讨论：
+
+问题：{user_message}
+
+请从以下角度进行分析：
+1. 问题的学术背景和重要性
+2. 当前研究现状和主要观点
+3. 存在的挑战和争议
+4. 未来发展方向
+
+回复应该专业但易懂，体现学术深度。"""
+
+            response = await self.llm.simple_chat(discussion_prompt)
+            if response and len(response.strip()) > 50:
+                return response
+            else:
+                return self._generate_fallback_discussion(user_message)
+                
+        except Exception as e:
+            print(f"❌ 生成学术讨论失败: {e}")
+            return self._generate_fallback_discussion(user_message)
+    
+    def _generate_fallback_discussion(self, user_message: str) -> str:
+        """生成备用学术讨论回复"""
+        return f"""关于「{user_message}」这个问题很有深度！
+
+🎓 **学术角度分析**
+这是一个值得深入探讨的学术问题，涉及多个研究层面和理论视角。
+
+💭 **思考方向**
+我们可以从理论基础、实践应用、技术发展、社会影响等多个维度来分析这个问题。
+
+📚 **建议深入**
+如果您想要查找相关的学术文献来深入了解这个问题，我可以帮您搜索最新的研究成果和权威观点。
+
+您希望从哪个角度进一步讨论，或者需要我帮您搜索相关文献吗？"""
+    
+    async def _process_original_llm_response(self, ai_response: str, user_message: str) -> Dict[str, Any]:
+        """处理原有LLM响应的逻辑（兼容旧版本）"""
+        
+        # 增强的LLM响应检查
+        if not ai_response or ai_response.strip() == "":
+            error_msg = "LLM分析失败，返回空响应"
+            print(f"❌ {error_msg}")
+            # 局部导入AIMessage
+            from langchain_core.messages import AIMessage
+            return {
+                "error_message": error_msg,
+                "current_step": "failed",
+                "is_completed": False,
+                "messages": [AIMessage(content=f"抱歉，分析过程失败：{error_msg}")]
+            }
+        
+        # 检查是否返回错误消息 - 启用降级策略
+        if "抱歉，我现在无法回复" in ai_response or "请稍后再试" in ai_response:
+            error_msg = "LLM API调用失败"
+            print(f"❌ {error_msg}: {ai_response[:100]}...")
+            
+            # 降级策略：提供基础回复
+            print("⚠️ LLM回复异常，启用降级策略")
+            try:
+                # 简单的fallback回复
+                fallback_prompt = f"请简单回应用户查询：{user_message}"
+                ai_response = await self.llm.simple_chat(prompt=fallback_prompt, system_prompt=None)
+                
+                if ai_response and "抱歉，我现在无法回复" not in ai_response:
+                    print(f"✅ 降级策略成功")
+                else:
+                    raise Exception("降级策略失败")
+            except Exception:
+                # 返回基本的学术分析以保持功能性
+                    return self._generate_fallback_analysis(user_message)
+        
+        # 尝试解析JSON分析结果
+        analysis_result = self._extract_json_analysis(ai_response)
+        is_academic = analysis_result is not None
+        
+        # 清理最终回复格式
+        final_response = self._final_clean_response(ai_response)
+        
+        # 局部导入AIMessage
+        from langchain_core.messages import AIMessage
+        return {
+            "current_step": "completed",
+            "is_completed": True,
+            "analysis_result": analysis_result,
+            "is_academic_query": is_academic,
+            "need_search_strategy": is_academic,
+            "messages": [AIMessage(content=final_response)]
+        }
+    
+    def _generate_fallback_analysis(self, user_message: str) -> Dict[str, Any]:
+        """生成备用分析结果"""
+        
+        basic_analysis = {
+            "core_concepts": [user_message],
+            "hierarchical_keywords": {
+                "exact_terms": {"terms": user_message.split(), "weight": 1.0},
+                "core_synonyms": {"terms": [], "weight": 0.9},
+                "related_terms": {"terms": [], "weight": 0.5},
+                "context_terms": {"terms": [], "weight": 0.4}
+            },
+            "domain": "academic_research"
+        }
+        
+        fallback_response = f"""基于您的查询「{user_message}」，我将为您提供基础的搜索支持。
+
+🔍 **搜索策略**
+我们将使用多个学术数据库为您搜索相关文献，包括arXiv和Semantic Scholar等权威来源。
+
+💡 **建议**
+如果需要更精确的搜索结果，您可以提供更具体的关键词或研究方向。"""
+        
+        # 局部导入AIMessage
+        from langchain_core.messages import AIMessage
+        return {
+            "current_step": "completed",
+            "is_completed": True,
+            "analysis_result": basic_analysis,
+            "is_academic_query": True,
+            "need_search_strategy": True,
+            "messages": [AIMessage(content=fallback_response)]
+        }
     
     def _extract_json_analysis(self, response: str) -> Optional[Dict[str, Any]]:
         """从LLM响应中提取JSON分析结果"""
@@ -546,6 +873,31 @@ class IntelligentPaperSearchAgent:
         except:
             return "✅ 已完成学术分析。如需了解更多信息，请提供更详细的查询内容。"
     
+    def should_execute_search_after_analysis(self, state: PaperSearchState) -> str:
+        """文献搜索节点后的路由决策"""
+        mode = state.get("mode", "auto-search")
+        should_search = state.get("should_search", False)
+        
+        print(f"📋 文献搜索后路由: 模式={mode}, 应该搜索={should_search}")
+        
+        if mode == "auto-search" and should_search:
+            print("🔍 自动搜索模式，执行搜索")
+            return "search"
+        else:
+            print("💬 展示关键词分析，等待用户决策")
+            return "end"
+    
+    def should_execute_search_after_discussion(self, state: PaperSearchState) -> str:
+        """学术探讨节点后的路由决策"""
+        mode = state.get("mode", "auto-search") 
+        search_suggestion = state.get("search_suggestion", False)
+        
+        print(f"🎓 学术探讨后路由: 模式={mode}, 搜索建议={search_suggestion}")
+        
+        # 学术探讨通常不自动搜索，只在特殊情况下建议
+        # 这里暂时都返回 "end"，未来可以根据需要添加更复杂的逻辑
+        return "end"
+    
     def should_execute_search(self, state: PaperSearchState) -> str:
         """判断是否需要执行搜索"""
         is_academic = state.get("is_academic_query", False)
@@ -598,13 +950,9 @@ class IntelligentPaperSearchAgent:
             elif hasattr(search_engine, 'search_parallel'):
                 papers = await search_engine.search_parallel(search_query, max_results)
             else:
-                # MockSearchEngine的接口
-                search_result = await search_engine.search(
-                    query=search_query,
-                    max_results=max_results,
-                    enable_expansion=True
-                )
-                papers = search_result.get('papers', [])
+                # 兜底：使用基础搜索接口
+                search_result = await search_engine.search_parallel(search_query, max_results)
+                papers = search_result if isinstance(search_result, list) else search_result.get('papers', [])
             print(f"📚 搜索完成，找到 {len(papers)} 篇论文")
             
             # 转换为标准格式
@@ -626,7 +974,7 @@ class IntelligentPaperSearchAgent:
             }
     
     def _build_search_query(self, original_query: str, analysis: Optional[Dict[str, Any]]) -> str:
-        """根据分析结果构建优化的搜索查询"""
+        """根据分析结果构建优化的布尔搜索查询"""
         if not analysis:
             return original_query
         
@@ -635,22 +983,51 @@ class IntelligentPaperSearchAgent:
             hierarchical = analysis.get("hierarchical_keywords", {})
             exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
             core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
+            related_terms = hierarchical.get("related_terms", {}).get("terms", [])
+            context_terms = hierarchical.get("context_terms", {}).get("terms", [])
             
-            # 优先使用精确术语和核心同义词
+            # 构建布尔查询组件
+            query_parts = []
+            
+            # 1. 核心术语组：exact_terms 用 AND 连接（最高优先级，必须出现）
             if exact_terms:
-                main_terms = exact_terms[:3]  # 取前3个最重要的术语
-            elif core_synonyms:
-                main_terms = core_synonyms[:3]
-            else:
+                # 处理多词术语，用引号包围
+                quoted_exact = [f'"{term}"' if ' ' in term else term for term in exact_terms[:3]]
+                exact_group = " AND ".join(quoted_exact)
+                query_parts.append(f"({exact_group})")
+            
+            # 2. 同义词组：core_synonyms 用 OR 连接（提高召回率）
+            if core_synonyms:
+                quoted_synonyms = [f'"{term}"' if ' ' in term else term for term in core_synonyms[:4]]
+                synonym_group = " OR ".join(quoted_synonyms)
+                query_parts.append(f"({synonym_group})")
+            
+            # 3. 相关词组：related_terms 用 AND 连接（提高精度）
+            if related_terms:
+                quoted_related = [f'"{term}"' if ' ' in term else term for term in related_terms[:3]]
+                related_group = " AND ".join(quoted_related)
+                query_parts.append(f"({related_group})")
+            
+            # 4. 上下文词组：context_terms 用 OR 连接（增加相关性）
+            if context_terms:
+                quoted_context = [f'"{term}"' if ' ' in term else term for term in context_terms[:2]]
+                context_group = " OR ".join(quoted_context)
+                query_parts.append(f"({context_group})")
+            
+            # 如果没有足够的关键词，回退到原始查询
+            if not query_parts:
                 return original_query
             
-            # 构建优化查询
-            search_query = " ".join(main_terms)
-            print(f"🎯 优化后的搜索查询: {search_query}")
-            return search_query
+            # 组合查询：各组之间用 AND 连接
+            boolean_query = " AND ".join(query_parts)
+            
+            print(f"🎯 构建的布尔查询: {boolean_query}")
+            print(f"📊 查询组件: exact_terms={len(exact_terms)}, synonyms={len(core_synonyms)}, related={len(related_terms)}, context={len(context_terms)}")
+            
+            return boolean_query
             
         except Exception as e:
-            print(f"⚠️ 查询构建失败，使用原始查询: {e}")
+            print(f"⚠️ 布尔查询构建失败，使用原始查询: {e}")
             return original_query
     
     def _extract_keywords_from_analysis(self, analysis: Optional[Dict[str, Any]]) -> List[str]:
@@ -661,7 +1038,7 @@ class IntelligentPaperSearchAgent:
         keywords = []
         try:
             hierarchical = analysis.get("hierarchical_keywords", {})
-            for level in ["exact_terms", "core_synonyms", "related_terms"]:
+            for level in ["exact_terms", "core_synonyms", "related_terms", "context_terms"]:
                 terms = hierarchical.get(level, {}).get("terms", [])
                 keywords.extend(terms)
             return keywords[:10]  # 限制关键词数量
@@ -670,34 +1047,154 @@ class IntelligentPaperSearchAgent:
             return []
     
     def _format_search_results(self, papers: List) -> List[Dict[str, Any]]:
-        """格式化搜索结果为标准格式"""
+        """格式化搜索结果为标准格式 - 确保元信息完整性"""
         formatted_results = []
         
-        for paper in papers:
+        for i, paper in enumerate(papers):
             try:
                 # 处理Paper对象或字典
                 if hasattr(paper, '__dict__'):
+                    # Paper对象转换为字典，确保所有字段都被正确提取
                     paper_dict = {
-                        "title": getattr(paper, 'title', ''),
-                        "authors": getattr(paper, 'authors', []),
-                        "abstract": getattr(paper, 'abstract', ''),
-                        "year": getattr(paper, 'year', None),
-                        "journal": getattr(paper, 'journal', ''),
-                        "url": getattr(paper, 'url', ''),
-                        "doi": getattr(paper, 'doi', None),
-                        "citations": getattr(paper, 'citations', 0),
-                        "source": getattr(paper, 'source', 'unknown'),
-                        "relevance_score": getattr(paper, 'relevance_score', 0.0)
+                        "title": self._safe_get_attr(paper, 'title', ''),
+                        "authors": self._safe_get_attr(paper, 'authors', []),
+                        "abstract": self._safe_get_attr(paper, 'abstract', ''),
+                        "year": self._safe_get_attr(paper, 'year', None),
+                        "journal": self._safe_get_attr(paper, 'journal', ''),
+                        "url": self._safe_get_attr(paper, 'url', ''),
+                        "doi": self._safe_get_attr(paper, 'doi', None),
+                        "citations": self._safe_get_attr(paper, 'citations', 0),
+                        "source": self._safe_get_attr(paper, 'source', 'unknown'),
+                        "relevance_score": self._safe_get_attr(paper, 'relevance_score', 0.0),
+                        # 附加字段
+                        "pmid": self._safe_get_attr(paper, 'pmid', None),
+                        "keywords": self._safe_get_attr(paper, 'keywords', None)
+                    }
+                elif isinstance(paper, dict):
+                    # 字典格式，确保包含所有必要字段
+                    paper_dict = {
+                        "title": paper.get('title', ''),
+                        "authors": paper.get('authors', []),
+                        "abstract": paper.get('abstract', ''),
+                        "year": paper.get('year', None),
+                        "journal": paper.get('journal', ''),
+                        "url": paper.get('url', ''),
+                        "doi": paper.get('doi', None),
+                        "citations": paper.get('citations', 0),
+                        "source": paper.get('source', 'unknown'),
+                        "relevance_score": paper.get('relevance_score', 0.0),
+                        "pmid": paper.get('pmid', None),
+                        "keywords": paper.get('keywords', None)
                     }
                 else:
-                    paper_dict = paper
+                    print(f"⚠️ 未知格式的论文对象 (索引 {i}): {type(paper)}")
+                    continue
+                
+                # 数据完整性验证和清理
+                paper_dict = self._validate_and_clean_paper_data(paper_dict, i)
                 
                 formatted_results.append(paper_dict)
+                
             except Exception as e:
-                print(f"⚠️ 论文格式化失败: {e}")
-                continue
+                print(f"❌ 论文格式化失败 (索引 {i}): {e}")
+                # 尝试生成一个最小化的有效条目，避免完全丢失数据
+                try:
+                    fallback_dict = {
+                        "title": str(paper) if hasattr(paper, '__str__') else f"论文 {i+1}",
+                        "authors": [],
+                        "abstract": "",
+                        "year": None,
+                        "journal": "",
+                        "url": "",
+                        "doi": None,
+                        "citations": 0,
+                        "source": "unknown",
+                        "relevance_score": 0.0,
+                        "pmid": None,
+                        "keywords": None,
+                        "_processing_error": str(e)  # 记录错误信息
+                    }
+                    formatted_results.append(fallback_dict)
+                    print(f"⚠️ 使用备用格式保存论文 {i+1}")
+                except:
+                    print(f"❌ 完全无法处理论文 {i+1}，跳过")
+                    continue
         
+        print(f"✅ 论文格式化完成: {len(formatted_results)}/{len(papers)} 篇成功处理")
         return formatted_results
+    
+    def _safe_get_attr(self, obj, attr_name: str, default_value):
+        """安全获取对象属性，避免属性访问错误"""
+        try:
+            value = getattr(obj, attr_name, default_value)
+            # 特殊处理一些可能的空值情况
+            if value is None:
+                return default_value
+            if isinstance(value, str) and value.strip() == "":
+                return default_value if default_value != "" else ""
+            return value
+        except Exception as e:
+            print(f"⚠️ 获取属性 {attr_name} 失败: {e}")
+            return default_value
+    
+    def _validate_and_clean_paper_data(self, paper_dict: Dict[str, Any], index: int) -> Dict[str, Any]:
+        """验证和清理论文数据，确保完整性"""
+        try:
+            # 确保标题不为空
+            if not paper_dict.get('title') or paper_dict['title'].strip() == "":
+                paper_dict['title'] = f"未知标题 #{index + 1}"
+            
+            # 确保作者是列表格式
+            if not isinstance(paper_dict.get('authors'), list):
+                authors = paper_dict.get('authors', '')
+                if isinstance(authors, str) and authors.strip():
+                    # 尝试解析字符串格式的作者
+                    paper_dict['authors'] = [auth.strip() for auth in authors.split(',')]
+                else:
+                    paper_dict['authors'] = []
+            
+            # 清理并验证数值字段
+            try:
+                citations = paper_dict.get('citations', 0)
+                paper_dict['citations'] = int(citations) if citations is not None else 0
+            except (ValueError, TypeError):
+                paper_dict['citations'] = 0
+            
+            try:
+                year = paper_dict.get('year')
+                if year is not None:
+                    year_int = int(year)
+                    # 年份合理性检查
+                    if 1900 <= year_int <= 2030:
+                        paper_dict['year'] = year_int
+                    else:
+                        paper_dict['year'] = None
+                else:
+                    paper_dict['year'] = None
+            except (ValueError, TypeError):
+                paper_dict['year'] = None
+            
+            try:
+                score = paper_dict.get('relevance_score', 0.0)
+                paper_dict['relevance_score'] = float(score) if score is not None else 0.0
+            except (ValueError, TypeError):
+                paper_dict['relevance_score'] = 0.0
+            
+            # 确保字符串字段不为None
+            for field in ['abstract', 'journal', 'url', 'source']:
+                if paper_dict.get(field) is None:
+                    paper_dict[field] = ""
+            
+            # 确保DOI字段格式正确
+            doi = paper_dict.get('doi')
+            if doi and not isinstance(doi, str):
+                paper_dict['doi'] = str(doi)
+            
+            return paper_dict
+            
+        except Exception as e:
+            print(f"⚠️ 论文数据验证失败 (索引 {index}): {e}")
+            return paper_dict
     
     async def result_formatting_node(self, state: PaperSearchState) -> Dict[str, Any]:
         """结果格式化节点 - 保持原有的学术分析内容，不覆盖"""
@@ -722,6 +1219,8 @@ class IntelligentPaperSearchAgent:
                 # 备用响应（正常情况下不会到这里）
                 fallback_response = "✅ 已完成学术分析和关键词扩展。请查看右侧关键词云进行进一步的文献搜索。"
                 print(f"⚠️ 使用备用响应")
+                # 局部导入AIMessage
+                from langchain_core.messages import AIMessage
                 return {
                     "current_step": "completed",  
                     "is_completed": True,
@@ -731,6 +1230,8 @@ class IntelligentPaperSearchAgent:
         except Exception as e:
             error_msg = f"结果格式化失败: {str(e)}"
             print(f"❌ {error_msg}")
+            # 局部导入AIMessage
+            from langchain_core.messages import AIMessage
             return {
                 "error_message": error_msg,
                 "current_step": "failed",
@@ -812,7 +1313,7 @@ class IntelligentPaperSearchAgent:
             print(f"❌ 构建搜索回复失败: {e}")
             return f"搜索完成，找到 {len(results)} 篇论文，但格式化过程出现问题。"
     
-    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, mode: str = "auto-search", force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """主要搜索接口"""
         if thread_id is None:
             thread_id = f"thread_{uuid.uuid4().hex[:8]}"
@@ -820,6 +1321,7 @@ class IntelligentPaperSearchAgent:
         initial_state = create_initial_state(
             query=query,
             user_message=query,
+            mode=mode,  # 传递模式参数
             max_results=max_results,
             force_search=force_search,  # 传递强制搜索标志
             allow_search=allow_search,
@@ -898,34 +1400,7 @@ class IntelligentPaperSearchAgent:
             }
 
 
-class MockSearchEngine:
-    """模拟搜索引擎 - 用于测试和备用"""
-    
-    async def search(self, query: str, max_results: int = 10, **kwargs) -> Dict[str, Any]:
-        """模拟搜索功能"""
-        print(f"🔍 使用模拟搜索引擎: {query}")
-        
-        # 生成模拟论文数据
-        mock_papers = []
-        for i in range(min(max_results, 3)):
-            mock_papers.append(type('Paper', (), {
-                'title': f"关于{query}的研究论文 {i+1}",
-                'authors': [f"作者{i+1}", f"作者{i+2}"],
-                'abstract': f"这是一篇关于{query}的研究论文，探讨了相关理论和应用。",
-                'year': 2023 - i,
-                'journal': f"国际期刊 {i+1}",
-                'url': f"https://example.com/paper{i+1}",
-                'doi': f"10.1000/example{i+1}",
-                'citations': 50 - i*10,
-                'source': 'mock',
-                'relevance_score': 0.9 - i*0.1
-            })())
-        
-        return {
-            'papers': mock_papers,
-            'total_found': len(mock_papers),
-            'query_info': {'original_query': query}
-        }
+# 模拟搜索引擎已删除 - 仅使用真实数据源
 
 
 # 全局实例和便捷函数

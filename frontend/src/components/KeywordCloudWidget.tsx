@@ -146,11 +146,11 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           },
           related_terms: {
             terms: keywords.filter(k => k.level === 'related_terms').map(k => k.term),
-            weight: 0.8
+            weight: 0.5
           },
           context_terms: {
             terms: keywords.filter(k => k.level === 'context_terms').map(k => k.term),
-            weight: 0.7
+            weight: 0.4
           }
         },
         domain: 'academic_research',

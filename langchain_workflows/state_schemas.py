@@ -16,6 +16,8 @@ class PaperSearchState(TypedDict):
     
     # 查询相关
     query: str
+    user_message: str  # 用户原始消息
+    mode: str  # "auto-search" 或 "chat&plan"
     max_results: int
     
     # 新增：搜索筛选参数
@@ -28,6 +30,7 @@ class PaperSearchState(TypedDict):
     is_completed: bool
     
     # 意图分析结果
+    intent_result: Optional[Dict[str, Any]]  # 新增：意图分类器结果
     analysis_result: Optional[Dict[str, Any]]
     is_academic_query: Optional[bool]
     need_search_strategy: Optional[bool]
@@ -48,6 +51,7 @@ class PaperSearchState(TypedDict):
 def create_initial_state(
     query: str,
     user_message: str = None,
+    mode: str = "auto-search",
     max_results: int = 10,
     force_search: bool = False,
     allow_search: bool = True,
@@ -75,12 +79,15 @@ def create_initial_state(
     return PaperSearchState(
         messages=[HumanMessage(content=user_message)],
         query=query,
+        user_message=user_message,
+        mode=mode,
         max_results=max_results,
         year_from=year_from,
         year_to=year_to,
         sources=sources,
         current_step="initialized",
         is_completed=False,
+        intent_result=None,
         analysis_result=None,
         is_academic_query=None,
         need_search_strategy=None,

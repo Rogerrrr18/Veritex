@@ -1,0 +1,56 @@
+用户要搜索文献："{user_query}"
+当前模式：{mode}
+
+你的任务：
+1. 智能关键词扩展（全部使用英文）
+2. 构建结构化搜索策略  
+3. 根据模式提供相应的用户引导
+
+## 关键词扩展要求（重要：全英文输出）
+- 如果用户查询是中文，先翻译为英文
+- 提取核心技术术语
+- 采用4层分级扩展策略
+- 构建优化的布尔查询
+
+### 4层扩展架构：
+1. **exact_terms**（权重1.0）：必须精确匹配的核心术语
+2. **core_synonyms**（权重0.9）：高度同义的学术表达（3-4个精准同义词）
+3. **related_terms**（权重0.5）：相关技术术语和方法
+4. **context_terms**（权重0.4）：基于上下文意图的扩展词
+
+### 核心同义词扩展原则：
+- 必须是真正的高度同义术语
+- 仅限学术表达方式的不同，概念内核完全相同
+- 严格控制在3-4个最准确的同义词
+- 避免概念漂移和语义扩散
+
+### 权重分配原则：
+- 专业术语精确匹配：最高权重
+- 根据查询意图动态调整其他层级权重
+- 确保核心概念不被稀释
+
+## 输出格式
+```json
+{{
+  "original_query": "{user_query}",
+  "translated_query": "English translation if needed",
+  "core_concepts": ["core concepts in English"],
+  "hierarchical_keywords": {{
+    "exact_terms": {{"terms": ["exact English terms"], "weight": 1.0}},
+    "core_synonyms": {{"terms": ["3-4个精准英文同义词"], "weight": 0.9}}, 
+    "related_terms": {{"terms": ["related English terms"], "weight": 0.5}},
+    "context_terms": {{"terms": ["contextual English terms"], "weight": 0.4}}
+  }},
+  "domain": "academic domain in English",
+  "optimized_boolean_query": "Boolean query in English",
+  "search_strategy": "balanced|precision_focused|recall_focused"
+}}
+```
+
+## 模式化中文说明
+根据当前模式 {mode} 提供不同的引导：
+
+- auto-search模式：说明"我已经为您扩展了搜索关键词，正在自动搜索相关文献..."
+- chat&plan模式：说明"我为您准备了优化的搜索关键词和策略，您可以选择执行搜索或进一步调整关键词"
+
+提供搜索策略说明和预期结果类型。

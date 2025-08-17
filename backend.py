@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 导入新的智能搜索系统
-from langchain_workflows.paper_search_workflow import chat_with_search_strategy
+from langchain_workflows.paper_search_workflow import get_intelligent_paper_search_agent
 from llm_interface import get_universal_llm, get_model_config_manager
 from multi_source_engine import Paper
 
@@ -90,18 +90,62 @@ class LogActionRequest(BaseModel):
 """作者分析相关请求模型已移除"""
 
 def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
-    return {
-        "title": paper.title or "",
-        "authors": paper.authors or [],
-        "abstract": paper.abstract or "",
-        "year": paper.year,
-        "journal": paper.journal or "",
-        "url": paper.url or "",
-        "doi": paper.doi,
-        "citations": paper.citations or 0,
-        "source": paper.source,
-        "relevance_score": paper.relevance_score or 0.0
-    }
+    """统一的论文格式化函数 - 确保数据完整性和一致性"""
+    try:
+        # 安全获取所有字段，确保类型正确
+        formatted_paper = {
+            "title": str(paper.title) if paper.title else "",
+            "authors": list(paper.authors) if paper.authors and isinstance(paper.authors, (list, tuple)) else [],
+            "abstract": str(paper.abstract) if paper.abstract else "",
+            "year": int(paper.year) if paper.year is not None and str(paper.year).isdigit() else None,
+            "journal": str(paper.journal) if paper.journal else "",
+            "url": str(paper.url) if paper.url else "",
+            "doi": str(paper.doi) if paper.doi else None,
+            "citations": int(paper.citations) if paper.citations is not None else 0,
+            "source": str(paper.source) if paper.source else "unknown",
+            "relevance_score": float(paper.relevance_score) if paper.relevance_score is not None else 0.0,
+            # 附加字段
+            "pmid": str(paper.pmid) if hasattr(paper, 'pmid') and paper.pmid else None,
+            "keywords": list(paper.keywords) if hasattr(paper, 'keywords') and paper.keywords and isinstance(paper.keywords, (list, tuple)) else None
+        }
+        
+        # 数据验证和清理
+        # 确保作者列表中的每个元素都是字符串
+        if formatted_paper["authors"]:
+            formatted_paper["authors"] = [str(auth) for auth in formatted_paper["authors"] if auth]
+        
+        # 年份合理性检查
+        if formatted_paper["year"] and (formatted_paper["year"] < 1900 or formatted_paper["year"] > 2030):
+            formatted_paper["year"] = None
+        
+        # 引用数非负检查
+        if formatted_paper["citations"] < 0:
+            formatted_paper["citations"] = 0
+        
+        # 相关性得分范围检查
+        if formatted_paper["relevance_score"] < 0:
+            formatted_paper["relevance_score"] = 0.0
+        
+        return formatted_paper
+        
+    except Exception as e:
+        logger.error(f"论文格式化失败: {e}")
+        # 返回最小化的安全格式
+        return {
+            "title": str(paper) if hasattr(paper, '__str__') else "格式化失败的论文",
+            "authors": [],
+            "abstract": "",
+            "year": None,
+            "journal": "",
+            "url": "",
+            "doi": None,
+            "citations": 0,
+            "source": "unknown",
+            "relevance_score": 0.0,
+            "pmid": None,
+            "keywords": None,
+            "_formatting_error": str(e)
+        }
 
 """作者数据格式化方法已移除"""
 
@@ -144,10 +188,11 @@ async def expand_keywords_api(request: KeywordExpansionRequest):
     try:
         logger.info(f"关键词扩展请求: {request.query}")
         
-        # 调用智能工作流进行分析（不执行搜索）
-        result = await chat_with_search_strategy(
+        # 调用新的智能工作流进行分析（不执行搜索）
+        agent = get_intelligent_paper_search_agent()
+        result = await agent.search_papers(
             query=request.query,
-            force_search=False,  # 关键：不强制搜索
+            mode="chat&plan",  # 使用chat&plan模式，只分析不自动搜索
             max_results=0,  # 不需要搜索结果
             allow_search=False  # 禁止自动搜索，只做分析
         )
@@ -210,12 +255,16 @@ async def chat(request: ChatRequest):
         year_to = search_params.get('year_to')
         sources = search_params.get('sources')
         
-        # 调用智能工作流（第一阶段：仅分析，不执行搜索）
+        # 调用新的智能工作流（第一阶段：仅分析，不执行搜索）
         mode = (request.mode or "chat-only").lower()
-        result = await chat_with_search_strategy(
-            query=request.message, 
-            force_search=False,
+        workflow_mode = "auto-search" if mode != "chat-only" else "chat&plan"
+        
+        agent = get_intelligent_paper_search_agent()
+        result = await agent.search_papers(
+            query=request.message,
+            mode=workflow_mode,
             max_results=max_results,
+            force_search=False,
             year_from=year_from,
             year_to=year_to,
             sources=sources,
@@ -231,10 +280,11 @@ async def chat(request: ChatRequest):
         # 第二阶段：当模式为 auto-search 且判定为学术 且 关键词扩展成功时，执行搜索
         analysis_ok = bool(result.get('analysis_result'))
         if mode != 'chat-only' and is_academic and analysis_ok:
-            search_result = await chat_with_search_strategy(
+            search_result = await agent.search_papers(
                 query=request.message,
-                force_search=True,
+                mode="auto-search",
                 max_results=max_results,
+                force_search=True,
                 year_from=year_from,
                 year_to=year_to,
                 sources=sources,
@@ -319,6 +369,7 @@ async def search_papers_api(req: SearchRequest):
                 exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
                 core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
                 related_terms = hierarchical.get("related_terms", {}).get("terms", [])
+                context_terms = hierarchical.get("context_terms", {}).get("terms", [])
                 
                 # 构建最优搜索查询
                 if exact_terms:
@@ -330,6 +381,9 @@ async def search_papers_api(req: SearchRequest):
                 elif related_terms:
                     # 使用相关术语，最多2个
                     search_query = " ".join(related_terms[:2])
+                elif context_terms:
+                    # 使用上下文术语，最多2个
+                    search_query = " ".join(context_terms[:2])
                 else:
                     # 回退到原始查询
                     search_query = req.query
@@ -405,10 +459,12 @@ async def search_papers_api(req: SearchRequest):
         logger.info("⚠️ 未提供预扩展关键词，先进行关键词扩展分析，再按需执行搜索")
         
         # 阶段1：仅做分析（不执行搜索）
-        analysis_only = await chat_with_search_strategy(
-            query=req.query, 
-            force_search=False,
+        agent = get_intelligent_paper_search_agent()
+        analysis_only = await agent.search_papers(
+            query=req.query,
+            mode="chat&plan",  # 只分析不自动搜索
             max_results=0,
+            force_search=False,
             year_from=req.year_from,
             year_to=req.year_to,
             sources=req.sources,
@@ -437,10 +493,11 @@ async def search_papers_api(req: SearchRequest):
             }
         
         # 阶段2：仅当扩展成功且为学术查询时，执行搜索
-        search_result = await chat_with_search_strategy(
-            query=req.query, 
-            force_search=True,
+        search_result = await agent.search_papers(
+            query=req.query,
+            mode="auto-search",  # 自动执行搜索
             max_results=req.max_results,
+            force_search=True,
             year_from=req.year_from,
             year_to=req.year_to,
             sources=req.sources,

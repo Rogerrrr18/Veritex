@@ -655,8 +655,8 @@ function ReportPage() {
 
   const handleExport = () => {
     const csvContent = [
-      [t('report.table.title'), t('report.table.authors'), t('report.table.year'), t('report.table.abstract'), t('report.table.link')],
-      ...papers.map((p: any) => [p.title, p.authors, p.year, p.abstract, p.url])
+      [t('report.table.title'), t('report.table.authors'), t('report.table.year'), t('report.table.citations'), t('report.table.abstract'), t('report.table.link')],
+      ...papers.map((p: any) => [p.title, p.authors, p.year, p.citations || 0, p.abstract, p.url])
     ].map(row => row.map((cell: any) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
@@ -709,6 +709,7 @@ function ReportPage() {
                   <th className="col-title">{t('report.table.title')}</th>
                   <th className="col-authors">{t('report.table.authors')}</th>
                   <th className="col-year">{t('report.table.year')}</th>
+                  <th className="col-citations">{t('report.table.citations')}</th>
                   <th className="col-abstract">{t('report.table.abstract')}</th>
                   <th className="col-link">{t('report.table.link')}</th>
                 </tr>
@@ -728,6 +729,9 @@ function ReportPage() {
                       </td>
                       <td className="col-year">
                         <div className="year-content">{paper.year}</div>
+                      </td>
+                      <td className="col-citations">
+                        <div className="citations-content">{paper.citations || 0}</div>
                       </td>
                       <td className="col-abstract">
                         <div className="abstract-content">

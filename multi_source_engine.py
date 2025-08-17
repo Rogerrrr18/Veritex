@@ -822,21 +822,35 @@ class MultiSourceEngine:
             # 应用年份筛选
             if year_from is not None or year_to is not None:
                 filtered_papers = self._filter_papers_by_year(deduplicated_papers, year_from, year_to)
-                logger.info(f"年份筛选后剩余 {len(filtered_papers)} 篇论文")
+                
+                # 如果筛选后结果太少，考虑适当放宽搜索
+                if len(filtered_papers) < max_results // 2 and len(deduplicated_papers) > len(filtered_papers):
+                    logger.warning(f"年份筛选后仅剩 {len(filtered_papers)} 篇论文，低于期望数量的一半")
+                    # 可以在这里添加扩展搜索逻辑，但暂时保持严格筛选
             else:
                 filtered_papers = deduplicated_papers
             
+            # 排序并限制数量
             ranked_papers = self._rank_papers(filtered_papers, query)
             
-            logger.info(f"多源搜索完成，获得 {len(ranked_papers)} 篇论文")
-            return ranked_papers[:max_results]
+            # 最终结果
+            final_results = ranked_papers[:max_results]
+            
+            # 详细统计信息
+            logger.info(f"多源搜索统计: 原始 {len(all_papers)} 篇 → 去重后 {len(deduplicated_papers)} 篇 → 筛选后 {len(filtered_papers)} 篇 → 最终 {len(final_results)} 篇")
+            
+            # 如果最终结果明显少于预期，记录警告
+            if len(final_results) < max_results * 0.5 and max_results > 5:
+                logger.warning(f"最终结果数量 ({len(final_results)}) 明显少于请求数量 ({max_results})，可能需要调整搜索参数")
+            
+            return final_results
             
         except Exception as e:
             logger.error(f"多源搜索错误: {e}")
             return []
     
     def _deduplicate_papers(self, papers: List[Paper]) -> List[Paper]:
-        """智能去重论文列表 - 优先保留高质量论文"""
+        """智能去重论文列表 - 优先保留高质量论文，智能识别标题相似性"""
         seen_titles = set()
         seen_dois = set()
         unique_papers = []
@@ -851,47 +865,127 @@ class MultiSourceEngine:
         
         for paper in papers_sorted:
             # DOI去重优先级最高
-            if paper.doi and paper.doi not in seen_dois:
+            if paper.doi and paper.doi.strip() and paper.doi not in seen_dois:
                 seen_dois.add(paper.doi)
                 unique_papers.append(paper)
                 continue
-            elif paper.doi and paper.doi in seen_dois:
+            elif paper.doi and paper.doi.strip() and paper.doi in seen_dois:
                 duplicate_count += 1
                 continue
                 
-            # 标题去重
-            title_key = paper.title.lower().strip()
-            if title_key and title_key not in seen_titles:
-                seen_titles.add(title_key)
-                unique_papers.append(paper)
-            else:
+            # 智能标题去重
+            if self._is_duplicate_title(paper.title, seen_titles):
                 duplicate_count += 1
+                continue
+            else:
+                # 标准化标题作为键值
+                normalized_title = self._normalize_title(paper.title)
+                if normalized_title:
+                    seen_titles.add(normalized_title)
+                    unique_papers.append(paper)
+                else:
+                    # 标题为空或无效，仍然保留但用特殊标记
+                    unique_papers.append(paper)
         
-        logger.info(f"去重完成：保留 {len(unique_papers)} 篇，去除重复 {duplicate_count} 篇")
+        logger.info(f"智能去重完成：保留 {len(unique_papers)} 篇，去除重复 {duplicate_count} 篇")
         return unique_papers
     
+    def _normalize_title(self, title: str) -> str:
+        """标准化论文标题，用于去重比较"""
+        if not title:
+            return ""
+        
+        import re
+        
+        # 转换为小写
+        normalized = title.lower().strip()
+        
+        # 移除多余的空白字符
+        normalized = re.sub(r'\s+', ' ', normalized)
+        
+        # 移除常见的标点符号差异
+        normalized = re.sub(r'[:\-–—\.;,!?()[\]{}""''`]', ' ', normalized)
+        
+        # 移除多余空格并返回
+        return re.sub(r'\s+', ' ', normalized).strip()
+    
+    def _is_duplicate_title(self, new_title: str, seen_titles: set) -> bool:
+        """检查新标题是否与已见过的标题重复（考虑相似性）"""
+        if not new_title or not new_title.strip():
+            return False
+            
+        normalized_new = self._normalize_title(new_title)
+        if not normalized_new:
+            return False
+            
+        # 精确匹配
+        if normalized_new in seen_titles:
+            return True
+            
+        # 相似度匹配（用于处理轻微差异）
+        new_words = set(normalized_new.split())
+        if len(new_words) < 3:  # 标题太短，不进行相似度匹配
+            return False
+            
+        for seen_title in seen_titles:
+            seen_words = set(seen_title.split())
+            if len(seen_words) < 3:
+                continue
+                
+            # 计算词汇重叠度
+            intersection = new_words.intersection(seen_words)
+            union = new_words.union(seen_words)
+            
+            if len(union) == 0:
+                continue
+                
+            jaccard_similarity = len(intersection) / len(union)
+            
+            # 如果相似度超过85%，认为是重复
+            if jaccard_similarity > 0.85:
+                return True
+                
+        return False
+    
     def _filter_papers_by_year(self, papers: List[Paper], year_from: Optional[int], year_to: Optional[int]) -> List[Paper]:
-        """按年份筛选论文"""
+        """按年份筛选论文 - 严格按照用户参数过滤"""
         if year_from is None and year_to is None:
             return papers
         
         filtered_papers = []
+        excluded_count = 0
+        no_year_count = 0
+        
         for paper in papers:
             if paper.year is None:
-                # 如果论文没有年份信息，根据筛选策略决定是否保留
-                # 这里选择保留，避免丢失有价值的论文
-                filtered_papers.append(paper)
-                continue
+                # 严格模式：如果用户指定了年份范围，则排除没有年份信息的论文
+                if year_from is not None or year_to is not None:
+                    no_year_count += 1
+                    excluded_count += 1
+                    continue
+                else:
+                    # 用户没有指定年份范围，保留无年份论文
+                    filtered_papers.append(paper)
+                    continue
             
             # 检查年份范围
             include_paper = True
             if year_from is not None and paper.year < year_from:
                 include_paper = False
+                excluded_count += 1
             if year_to is not None and paper.year > year_to:
                 include_paper = False
+                excluded_count += 1
             
             if include_paper:
                 filtered_papers.append(paper)
+        
+        # 详细日志记录
+        if year_from is not None or year_to is not None:
+            year_range = f"{year_from or '∞'} - {year_to or '∞'}"
+            logger.info(f"年份筛选 ({year_range}): 保留 {len(filtered_papers)} 篇, 排除 {excluded_count} 篇")
+            if no_year_count > 0:
+                logger.info(f"排除无年份信息论文: {no_year_count} 篇")
         
         return filtered_papers
     

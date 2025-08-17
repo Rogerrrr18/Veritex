@@ -712,9 +712,10 @@ body {
 }
 
 /* 列宽设置 */
-.col-title { width: 35%; }
-.col-authors { width: 20%; }
-.col-year { width: 8%; text-align: center; }
+.col-title { width: 30%; }
+.col-authors { width: 18%; }
+.col-year { width: 7%; text-align: center; }
+.col-citations { width: 8%; text-align: center; }
 .col-abstract { width: 30%; }
 .col-link { width: 7%; text-align: center; }
 
@@ -743,6 +744,13 @@ body {
   font-weight: 600;
   text-align: center;
   color: #4a90e2;
+}
+
+.citations-content {
+  font-weight: 600;
+  text-align: center;
+  color: #10b981;
+  font-size: 0.95em;
 }
 
 .abstract-content {
@@ -1082,6 +1090,9 @@ body[data-theme='dark'] {
 }
 .report-page.light .year-content {
   color: #2563eb;
+}
+.report-page.light .citations-content {
+  color: #059669;
 }
 .report-page.light .abstract-content {
   color: #444;
