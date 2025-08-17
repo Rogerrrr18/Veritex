@@ -147,12 +147,23 @@ class LLMIntentClassifier:
             "数据挖掘", "计算机视觉", "自然语言处理", "智能体"
         ]
         
-        # 闲聊关键词
+        # 闲聊关键词（扩展版本）
         chat_keywords = [
-            "你好", "谢谢", "感谢", "再见", "拜拜", "hello", "hi", "thanks", "thank you",
+            # 问候语
+            "你好", "hello", "hi", "嗨", "哈喽", "早上好", "下午好", "晚上好", "晚安",
+            # 感谢语
+            "谢谢", "感谢", "thanks", "thank you", "多谢",
+            # 告别语
+            "再见", "拜拜", "bye", "goodbye", "88",
+            # 系统使用
             "怎么用", "怎么使用", "如何使用", "使用方法", "操作指南", "帮助",
-            "功能", "界面", "系统", "你是谁", "你能做什么", "什么功能",
-            "天气", "心情", "今天", "明天", "周末", "假期", "电影", "音乐"
+            "功能", "界面", "系统", "你是谁", "你能做什么", "什么功能", "介绍一下",
+            # 日常话题
+            "天气", "心情", "今天", "明天", "周末", "假期", "电影", "音乐",
+            "吃饭", "睡觉", "工作", "累", "忙", "无聊", "开心", "难过",
+            # 常见口语表达
+            "哦", "嗯", "是的", "好的", "ok", "好吧", "算了", "没事",
+            "恶化", "糟糕"  # 针对用户的具体例子
         ]
         
         # 学术探讨特征词汇
@@ -206,9 +217,11 @@ class LLMIntentClassifier:
                 reasoning="包含学术术语且有搜索意图"
             )
         elif chat_score > 0:
+            # 提高闲聊识别的置信度，特别是针对明显的日常用语
+            base_confidence = 0.85 if chat_score >= 2 else 0.8
             return IntentResult(
                 intent="闲聊", 
-                confidence=min(0.8 + chat_score * 0.05, 0.9),
+                confidence=min(base_confidence + chat_score * 0.05, 0.95),
                 method="rule",
                 reasoning=f"日常对话，匹配{chat_score}个对话关键词"
             )
@@ -238,7 +251,7 @@ class LLMIntentClassifier:
             )
     
     async def classify_intent(self, query: str) -> IntentResult:
-        """主要分类接口：LLM智能分类 + 规则降级"""
+        """优化的分类接口：规则优先 + LLM降级，大幅减少LLM调用"""
         print(f"🔍 开始意图分析: {query}")
         
         # 检查结果缓存
@@ -248,21 +261,43 @@ class LLMIntentClassifier:
             print(f"✅ 命中缓存: {cached_result.intent} ({cached_result.confidence:.3f})")
             return cached_result
         
-        # 直接使用LLM分类（无embedding步骤）
-        print("🤖 使用LLM智能分类...")
-        result = await self._llm_classify(query)
+        # 🚀 优化策略：规则分类优先，仅模糊情况使用LLM
+        rule_result = self._rule_classify(query)
         
-        # 缓存结果
+        # 如果规则分类置信度高（>=0.8），直接返回，避免LLM调用
+        if rule_result.confidence >= 0.8:
+            print(f"⚡ 规则分类高置信度命中: {rule_result.intent} ({rule_result.confidence:.3f}) - 跳过LLM")
+            
+            # 缓存规则结果
+            if len(self.result_cache) >= self.cache_size:
+                keys_to_remove = list(self.result_cache.keys())[:self.cache_size//2]
+                for key in keys_to_remove:
+                    del self.result_cache[key]
+            self.result_cache[cache_key] = rule_result
+            
+            return rule_result
+        
+        # 仅对低置信度情况使用LLM进行精确分类
+        print(f"🤖 规则分类置信度较低({rule_result.confidence:.3f})，使用LLM精确分类...")
+        llm_result = await self._llm_classify(query)
+        
+        # 选择更可信的结果
+        if llm_result.confidence > rule_result.confidence:
+            final_result = llm_result
+        else:
+            final_result = rule_result
+            print(f"🔄 LLM分类置信度不高，保持规则分类结果")
+        
+        # 缓存最终结果
         if len(self.result_cache) >= self.cache_size:
-            # 简单LRU：删除最老的一半
             keys_to_remove = list(self.result_cache.keys())[:self.cache_size//2]
             for key in keys_to_remove:
                 del self.result_cache[key]
         
-        self.result_cache[cache_key] = result
+        self.result_cache[cache_key] = final_result
         
-        print(f"✅ 最终分类结果: {result.intent} (置信度: {result.confidence:.3f}, 方法: {result.method})")
-        return result
+        print(f"✅ 最终分类结果: {final_result.intent} (置信度: {final_result.confidence:.3f}, 方法: {final_result.method})")
+        return final_result
     
     def get_stats(self) -> Dict[str, Any]:
         """获取分类器统计信息"""

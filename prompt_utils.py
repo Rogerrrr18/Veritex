@@ -45,6 +45,7 @@ def get_literature_search_prompt(user_query: str, **kwargs) -> str:
     template = load_prompt_template("literature_search_prompt.txt")
     return format_prompt(template, user_query=user_query, **kwargs)
 
+
 def get_academic_discussion_prompt(user_query: str, **kwargs) -> str:
     """获取学术探讨prompt"""
     template = load_prompt_template("academic_discussion_prompt.txt")

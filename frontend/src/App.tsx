@@ -653,10 +653,87 @@ function ReportPage() {
   const MAX_ABSTRACT = APP_CONFIG.ABSTRACT_PREVIEW_LENGTH
   const toggleAbstract = (idx: number) => setExpandedIdx(e => ({...e, [idx]: !e[idx]}))
 
+  // 格式化作者显示
+  const formatAuthors = (authors: string[] | string): string => {
+    try {
+      // 如果是字符串，尝试解析为数组
+      let authorArray: string[] = []
+      
+      if (typeof authors === 'string') {
+        // 处理各种可能的分隔符
+        if (authors.includes(',')) {
+          authorArray = authors.split(',').map(a => a.trim()).filter(a => a.length > 0)
+        } else if (authors.includes(';')) {
+          authorArray = authors.split(';').map(a => a.trim()).filter(a => a.length > 0)
+        } else if (authors.includes('、')) {
+          authorArray = authors.split('、').map(a => a.trim()).filter(a => a.length > 0)
+        } else {
+          authorArray = [authors.trim()]
+        }
+      } else if (Array.isArray(authors)) {
+        authorArray = authors.filter(a => a && typeof a === 'string' && a.trim().length > 0)
+      } else {
+        return '未知作者'
+      }
+
+      if (authorArray.length === 0) {
+        return '未知作者'
+      }
+
+      // 格式化作者名称（处理常见的姓名格式）
+      const formatSingleAuthor = (author: string): string => {
+        const cleaned = author.trim()
+        
+        // 如果是中文名，直接返回
+        if (/[\u4e00-\u9fff]/.test(cleaned)) {
+          return cleaned
+        }
+        
+        // 英文名处理：尝试提取姓氏的缩写+名字
+        const parts = cleaned.split(' ').filter(p => p.length > 0)
+        if (parts.length >= 2) {
+          // 假设最后一个是姓氏，前面的是名字
+          const lastName = parts[parts.length - 1]
+          const firstNames = parts.slice(0, -1)
+          
+          // 生成名字缩写
+          const initials = firstNames.map(name => {
+            // 处理带点的缩写（如 "J."）
+            if (name.endsWith('.')) {
+              return name.toUpperCase()
+            }
+            return name.charAt(0).toUpperCase()
+          }).join('')
+          
+          return `${initials} ${lastName}`
+        }
+        
+        return cleaned
+      }
+
+      // 根据作者数量决定显示格式
+      if (authorArray.length === 1) {
+        return formatSingleAuthor(authorArray[0])
+      } else if (authorArray.length === 2) {
+        return `${formatSingleAuthor(authorArray[0])}, ${formatSingleAuthor(authorArray[1])}`
+      } else if (authorArray.length === 3) {
+        return `${formatSingleAuthor(authorArray[0])}, ${formatSingleAuthor(authorArray[1])}, ${formatSingleAuthor(authorArray[2])}`
+      } else {
+        // 超过3个作者：显示前3个 + 等N位作者
+        const firstThree = authorArray.slice(0, 3).map(formatSingleAuthor)
+        const remainingCount = authorArray.length - 3
+        return `${firstThree.join(', ')} 等 ${authorArray.length} 位作者`
+      }
+    } catch (error) {
+      console.warn('作者格式化错误:', error)
+      return typeof authors === 'string' ? authors : '未知作者'
+    }
+  }
+
   const handleExport = () => {
     const csvContent = [
       [t('report.table.title'), t('report.table.authors'), t('report.table.year'), t('report.table.citations'), t('report.table.abstract'), t('report.table.link')],
-      ...papers.map((p: any) => [p.title, p.authors, p.year, p.citations || 0, p.abstract, p.url])
+      ...papers.map((p: any) => [p.title, formatAuthors(p.authors), p.year, p.citations || 0, p.abstract, p.url])
     ].map(row => row.map((cell: any) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
@@ -725,7 +802,7 @@ function ReportPage() {
                         <div className="title-content">{paper.title}</div>
                       </td>
                       <td className="col-authors">
-                        <div className="authors-content">{paper.authors}</div>
+                        <div className="authors-content">{formatAuthors(paper.authors)}</div>
                       </td>
                       <td className="col-year">
                         <div className="year-content">{paper.year}</div>

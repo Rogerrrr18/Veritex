@@ -738,6 +738,10 @@ body {
   font-size: 0.9em;
   color: #a1a1aa;
   line-height: 1.3;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  letter-spacing: 0.02em;
+  word-wrap: break-word;
+  max-width: 100%;
 }
 
 .year-content {
@@ -1087,6 +1091,7 @@ body[data-theme='dark'] {
 }
 .report-page.light .authors-content {
   color: #555;
+  font-weight: 500;
 }
 .report-page.light .year-content {
   color: #2563eb;
@@ -2111,4 +2116,40 @@ body[data-theme='dark'] {
   border-top: 2px solid white;
   border-radius: 50%;
   animation: spin 1s linear infinite;
+}
+
+/* ==================== Report界面作者格式优化 ==================== */
+
+/* 移动端Report表格响应式优化 */
+@media (max-width: 768px) {
+  .col-authors { 
+    width: 22%; 
+  }
+  
+  .authors-content {
+    font-size: 0.8em;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
+
+@media (max-width: 480px) {
+  .col-authors { 
+    width: 25%; 
+  }
+  
+  .authors-content {
+    font-size: 0.75em;
+    line-height: 1.1;
+    -webkit-line-clamp: 2;
+  }
+  
+  .report-table th,
+  .report-table td {
+    padding: 8px 4px;
+  }
 }

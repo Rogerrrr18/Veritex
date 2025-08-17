@@ -32,7 +32,7 @@ PUBMED_ENABLED = PUBMED_API_KEY and PUBMED_API_KEY.lower() != "disabled"
 # Semantic Scholar API配置
 SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "true").lower() == "true"
 # Google Scholar配置（使用scholarly库）
-GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "false").lower() == "true"
+GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "true").lower() == "true"
 
 CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "true").lower() == "true" 
 IEEE_API_KEY = os.getenv("IEEE_API_KEY")
@@ -67,15 +67,20 @@ class Paper:
     keywords: Optional[List[str]] = None  # 关键词
 
 class SemanticScholarAPI:
-    """Semantic Scholar API客户端 - 优化的限频处理"""
+    """Semantic Scholar API客户端 - 高度优化的限频处理"""
+    
+    # 类级别的全局限频控制
+    _global_last_request = 0
+    _global_consecutive_429s = 0
+    _circuit_breaker_until = 0  # 熔断器：暂时禁用API直到此时间
     
     def __init__(self):
         self.base_url = "https://api.semanticscholar.org/graph/v1"
         self.session = None
         self._last_request_time = 0
-        self._min_delay = 3.0  # 进一步增加最小请求间隔到3秒
-        self._max_retries = 3  # 减少重试次数以避免超时
-        self._base_backoff_delay = 5.0  # 增加基础退避延时
+        self._min_delay = 6.0  # 增加到6秒最小间隔
+        self._max_retries = 2  # 减少重试次数到2次
+        self._base_backoff_delay = 8.0  # 增加基础退避延时到8秒
         self._consecutive_429s = 0  # 连续429错误计数
         self._total_requests = 0  # 总请求计数
         self._successful_requests = 0  # 成功请求计数
@@ -92,22 +97,43 @@ class SemanticScholarAPI:
         return self.session
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """搜索论文"""
+        """搜索论文 - 带熔断器和全局限频"""
+        current_time = time.time()
+        
+        # 熔断器检查：如果API被临时禁用，直接返回
+        if current_time < self._circuit_breaker_until:
+            remaining_time = self._circuit_breaker_until - current_time
+            logger.warning(f"Semantic Scholar API熔断中，剩余 {remaining_time:.1f} 秒")
+            return []
+        
         self._total_requests += 1
         logger.info(f"开始Semantic Scholar搜索: {query}, 限制: {limit} (总请求数: {self._total_requests})")
+        
         for attempt in range(self._max_retries):
             try:
-                # 确保请求间隔（加入随机抖动避免同步请求）
+                # 全局限频控制（防止并发请求）
                 current_time = time.time()
-                time_since_last = current_time - self._last_request_time
-                required_delay = self._min_delay + random.uniform(0.1, 0.5)
-                if time_since_last < required_delay:
-                    await asyncio.sleep(required_delay - time_since_last)
+                global_time_since_last = current_time - SemanticScholarAPI._global_last_request
+                instance_time_since_last = current_time - self._last_request_time
+                
+                # 使用更严格的延迟（全局和实例级别的最大值）
+                required_delay = max(
+                    self._min_delay + random.uniform(0.5, 1.5),  # 增加随机抖动
+                    8.0 if SemanticScholarAPI._global_consecutive_429s > 0 else self._min_delay  # 全局429时延迟更长
+                )
+                
+                actual_delay = max(
+                    required_delay - global_time_since_last,
+                    required_delay - instance_time_since_last
+                )
+                
+                if actual_delay > 0:
+                    logger.info(f"Semantic Scholar限频等待: {actual_delay:.1f} 秒")
+                    await asyncio.sleep(actual_delay)
                 
                 session = await self._get_session()
                 
                 # 构建搜索URL
-                encoded_query = quote(query)
                 url = f"{self.base_url}/paper/search"
                 params = {
                     'query': query,
@@ -115,28 +141,38 @@ class SemanticScholarAPI:
                     'fields': 'title,authors,abstract,year,journal,url,citationCount,externalIds'
                 }
                 
+                # 更新全局和实例时间戳
+                SemanticScholarAPI._global_last_request = time.time()
                 self._last_request_time = time.time()
                 
                 async with session.get(url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
-                        self._consecutive_429s = 0  # 重置429计数器
+                        # 成功时重置所有429计数器
+                        self._consecutive_429s = 0
+                        SemanticScholarAPI._global_consecutive_429s = 0
                         self._successful_requests += 1
                         papers = self._parse_papers(data.get('data', []))
                         logger.info(f"Semantic Scholar搜索成功，获得 {len(papers)} 篇论文")
                         return papers
+                        
                     elif response.status == 429:
                         self._consecutive_429s += 1
-                        # 如果连续多次429错误，提早放弃以避免超时
-                        if self._consecutive_429s > 2:
-                            logger.warning(f"Semantic Scholar API连续限频 ({self._consecutive_429s}次)，放弃本次搜索")
+                        SemanticScholarAPI._global_consecutive_429s += 1
+                        
+                        # 更激进的限制：第一次429就考虑提早放弃
+                        if self._consecutive_429s >= 1 or SemanticScholarAPI._global_consecutive_429s >= 2:
+                            # 启动熔断器：暂时禁用API 30秒
+                            SemanticScholarAPI._circuit_breaker_until = time.time() + 30.0
+                            logger.warning(f"Semantic Scholar API连续限频，启动30秒熔断器")
                             return []
                         
-                        # 指数退避策略，但等待时间不要太长
-                        wait_time = min(self._base_backoff_delay * (1.5 ** attempt), 10.0) + random.uniform(0.5, 1.0)
+                        # 更长的退避时间
+                        wait_time = min(self._base_backoff_delay * (2 ** attempt), 20.0) + random.uniform(1.0, 3.0)
                         logger.warning(f"Semantic Scholar API限频 (429), 等待 {wait_time:.1f} 秒后重试 (尝试 {attempt + 1}/{self._max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
+                        
                     else:
                         logger.warning(f"Semantic Scholar API错误: {response.status}")
                         if attempt == self._max_retries - 1:
@@ -147,8 +183,8 @@ class SemanticScholarAPI:
                 if attempt == self._max_retries - 1:
                     logger.warning(f"Semantic Scholar搜索最终失败，成功率: {self._successful_requests}/{self._total_requests}")
                     return []
-                # 异常时也采用退避策略
-                wait_time = self._min_delay * (attempt + 1)
+                # 异常时采用更长的退避策略
+                wait_time = self._min_delay * (attempt + 2)
                 await asyncio.sleep(wait_time)
         
         return []
@@ -161,7 +197,9 @@ class SemanticScholarAPI:
                 # 提取作者信息
                 authors = []
                 if paper_data.get('authors'):
-                    authors = [author.get('name', '未知作者') for author in paper_data['authors']]
+                    authors = [author.get('name', '未知作者') for author in paper_data['authors'] if author.get('name')]
+                if not authors:
+                    authors = ['未知作者']
                 
                 # 提取DOI
                 doi = None
@@ -169,13 +207,34 @@ class SemanticScholarAPI:
                 if external_ids and 'DOI' in external_ids:
                     doi = external_ids['DOI']
                 
+                # 提取期刊信息，确保不为空
+                journal_info = paper_data.get('journal', {})
+                journal = journal_info.get('name', '') if journal_info else ''
+                if not journal:
+                    journal = 'Semantic Scholar'
+                
+                # 确保标题不为空
+                title = paper_data.get('title', '').strip()
+                if not title:
+                    title = '无标题'
+                
+                # 确保摘要
+                abstract = paper_data.get('abstract', '').strip()
+                if not abstract:
+                    abstract = '暂无摘要'
+                
+                # 确保URL
+                url = paper_data.get('url', '').strip()
+                if not url and doi:
+                    url = f"https://doi.org/{doi}"
+                
                 paper = Paper(
-                    title=paper_data.get('title', ''),
+                    title=title,
                     authors=authors,
-                    abstract=paper_data.get('abstract', ''),
+                    abstract=abstract,
                     year=paper_data.get('year'),
-                    journal=paper_data.get('journal', {}).get('name', ''),
-                    url=paper_data.get('url', ''),
+                    journal=journal,
+                    url=url,
                     doi=doi,
                     citations=paper_data.get('citationCount', 0),
                     source='semantic_scholar'
@@ -458,7 +517,7 @@ class GoogleScholarAPI:
         self._max_retries = 3
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """搜索Google Scholar文献"""
+        """搜索Google Scholar文献 - 使用简化的scholarly方法"""
         try:
             # 导入scholarly库
             try:
@@ -469,85 +528,62 @@ class GoogleScholarAPI:
             
             logger.info(f"开始Google Scholar搜索: {query}, 限制: {limit}")
             papers = []
-            seen_urls = set()
-            retrieved_count = 0
-            import time as _time
-            # 动态设置时间预算：根据请求量调整，30篇以上给更多时间
-            base_budget = 15.0
-            if limit > 20:
-                time_multiplier = min(2.0, 1.0 + (limit - 20) / 30)  # 最多增加到2倍时间
-                overall_budget_s = base_budget * time_multiplier
-                logger.info(f"大量文献请求({limit}篇)，增加时间预算到 {overall_budget_s:.1f}秒")
-            else:
-                overall_budget_s = base_budget
-            start_ts = _time.time()
             
-            # 使用scholarly库进行搜索，增加超时控制
+            # 🔥 简化方法：直接使用scholarly，不用复杂的异步包装
             try:
-                search_iterator = scholarly.search_pubs(query)
+                search_generator = scholarly.search_pubs(query)
+                count = 0
                 
-                # 获取论文结果，增加超时保护
-                # 根据请求量动态调整迭代次数
-                if limit > 20:
-                    max_iters = max(20, min(limit, 40))  # 大量请求时增加迭代次数
-                else:
-                    max_iters = max(10, min(limit, 20))
-                for i in range(max_iters):
+                # 简单遍历，避免复杂的异步处理
+                for pub in search_generator:
                     try:
-                        # 为每次搜索设置超时
-                        result = await asyncio.wait_for(
-                            asyncio.to_thread(next, search_iterator),
-                            timeout=5  # 单次抓取最多等待5秒
-                        )
-                        retrieved_count += 1
-                        
-                        if not result:
-                            continue
-                        
+                        if count >= limit:
+                            break
+                            
                         # 解析论文信息
-                        bib = result.get('bib', {})
+                        bib = pub.get('bib', {})
                         title = bib.get('title', '').strip()
                         
-                        if not title or len(title) < 3:
+                        if not title or len(title) < 5:
                             continue
                         
-                        # 获取URL
-                        url = result.get('pub_url', '') or result.get('eprint_url', '')
-                        if not url or url in seen_urls:
-                            continue
-                        
-                        seen_urls.add(url)
-                        
-                        # 解析作者信息
-                        authors_list = bib.get('author', [])
-                        if isinstance(authors_list, list):
-                            authors = [str(author) for author in authors_list]
+                        # 获取作者
+                        authors_raw = bib.get('author', [])
+                        if isinstance(authors_raw, list):
+                            authors = [str(author).strip() for author in authors_raw if str(author).strip()]
                         else:
-                            authors = [str(authors_list)] if authors_list else []
+                            authors = [str(authors_raw).strip()] if authors_raw else []
                         
-                        # 解析年份
+                        if not authors:
+                            authors = ['未知作者']
+                        
+                        # 获取年份
                         year = bib.get('pub_year')
                         if year:
                             try:
                                 year = int(year)
-                            except (ValueError, TypeError):
+                            except:
                                 year = None
                         
                         # 获取摘要
-                        abstract = bib.get('abstract', '')
-                        if abstract and len(abstract) > 300:
-                            abstract = abstract[:300] + "..."
+                        abstract = bib.get('abstract', '').strip()
+                        if not abstract:
+                            abstract = '暂无摘要'
+                        elif len(abstract) > 500:
+                            abstract = abstract[:500] + "..."
                         
-                        # 获取期刊信息
-                        journal = bib.get('venue', '') or bib.get('journal', '')
+                        # 获取期刊
+                        journal = bib.get('venue', '') or bib.get('journal', '') or 'Google Scholar'
+                        
+                        # 获取URL
+                        url = pub.get('pub_url', '') or pub.get('eprint_url', '') or ''
                         
                         # 获取引用数
-                        citations = result.get('num_citations', 0)
-                        if citations:
-                            try:
-                                citations = int(citations)
-                            except (ValueError, TypeError):
-                                citations = 0
+                        citations = pub.get('num_citations', 0)
+                        try:
+                            citations = int(citations) if citations else 0
+                        except:
+                            citations = 0
                         
                         # 创建Paper对象
                         paper = Paper(
@@ -557,36 +593,26 @@ class GoogleScholarAPI:
                             year=year,
                             journal=journal,
                             url=url,
-                            doi=None,  # scholarly通常不提供DOI
+                            doi=None,
                             citations=citations,
                             source="google_scholar",
-                            relevance_score=1.0 - (len(papers) * 0.01)  # 简单的相关性评分
+                            relevance_score=1.0 - (count * 0.01)
                         )
                         
                         papers.append(paper)
+                        count += 1
                         
-                        logger.info(f"添加论文: {title[:50]}... (引用: {citations})")
+                        logger.info(f"Google Scholar找到论文: {title[:50]}... (引用: {citations})")
                         
-                        if len(papers) >= limit:
-                            break
+                        # 简单延迟避免被限制
+                        await asyncio.sleep(0.5)
                         
-                        # 随机延迟避免被限制
-                        await asyncio.sleep(random.uniform(*self._min_delay))
-
-                        # 触发整体时间预算检查
-                        if (_time.time() - start_ts) >= overall_budget_s:
-                            logger.info("Google Scholar达到时间预算上限，停止进一步抓取")
-                            break
-                        
-                    except (StopIteration, asyncio.TimeoutError):
-                        logger.info("Google Scholar搜索已无更多结果或超时")
-                        break
                     except Exception as e:
-                        logger.warning(f"处理单个结果时出错: {e}")
+                        logger.warning(f"解析Google Scholar论文出错: {e}")
                         continue
                         
             except Exception as e:
-                logger.error(f"初始化Google Scholar搜索失败: {e}")
+                logger.error(f"Google Scholar搜索失败: {e}")
                 return []
             
             logger.info(f"Google Scholar搜索完成，获得 {len(papers)} 篇论文")
@@ -658,17 +684,26 @@ class CrossrefAPI:
         papers = []
         for item in items:
             try:
-                # 提取标题
+                # 提取标题，确保不为空
                 title_list = item.get('title', [])
-                title = title_list[0] if title_list else "未知标题"
+                title = (title_list[0] if title_list else "").strip()
+                if not title:
+                    title = "无标题"
                 
-                # 提取作者
+                # 提取作者，确保不为空
                 authors = []
                 for author in item.get('author', []):
                     if 'given' in author and 'family' in author:
-                        authors.append(f"{author['given']} {author['family']}")
+                        full_name = f"{author['given']} {author['family']}".strip()
+                        if full_name:
+                            authors.append(full_name)
                     elif 'family' in author:
-                        authors.append(author['family'])
+                        family_name = author['family'].strip()
+                        if family_name:
+                            authors.append(family_name)
+                
+                if not authors:
+                    authors = ['未知作者']
                 
                 # 提取年份
                 year = None
@@ -676,14 +711,31 @@ class CrossrefAPI:
                 if published and 'date-parts' in published:
                     date_parts = published['date-parts'][0]
                     if date_parts:
-                        year = date_parts[0]
+                        try:
+                            year = int(date_parts[0])
+                        except (ValueError, TypeError, IndexError):
+                            year = None
                 
-                # 提取其他信息
-                abstract = item.get('abstract', '')
-                doi = item.get('DOI', '')
-                url = item.get('URL', f"https://doi.org/{doi}" if doi else '')
+                # 提取其他信息，确保不为空
+                abstract = item.get('abstract', '').strip()
+                if not abstract:
+                    abstract = '暂无摘要'
+                
+                doi = item.get('DOI', '').strip()
+                url = item.get('URL', '').strip()
+                if not url and doi:
+                    url = f"https://doi.org/{doi}"
+                
                 citations = item.get('is-referenced-by-count', 0)
-                journal = item.get('publisher', '')
+                if not isinstance(citations, int):
+                    try:
+                        citations = int(citations)
+                    except (ValueError, TypeError):
+                        citations = 0
+                
+                journal = item.get('publisher', '').strip()
+                if not journal:
+                    journal = 'Crossref'
                 
                 paper = Paper(
                     title=title,
@@ -711,18 +763,27 @@ class CrossrefAPI:
             await self.session.close()
 
 class MultiSourceEngine:
-    """多源数据获取引擎 - 核心搜索组件"""
+    """多源数据获取引擎 - 智能优化的搜索组件"""
     
     def __init__(self):
         # 初始化核心数据源
         self.arxiv = ArxivAPI()
-        # 临时完全禁用Google Scholar避免captcha问题
-        self.google_scholar = None  # GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
+        # 启用Google Scholar（使用scholarly库）
+        self.google_scholar = GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
         
         # 可选数据源
         self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
+        
+        # 数据源性能跟踪
+        self.source_performance = {
+            'arxiv': {'attempts': 0, 'successes': 0, 'avg_results': 0, 'avg_time': 0, 'last_success': 0},
+            'google_scholar': {'attempts': 0, 'successes': 0, 'avg_results': 0, 'avg_time': 0, 'last_success': 0},
+            'semantic_scholar': {'attempts': 0, 'successes': 0, 'avg_results': 0, 'avg_time': 0, 'last_success': 0},
+            'crossref': {'attempts': 0, 'successes': 0, 'avg_results': 0, 'avg_time': 0, 'last_success': 0},
+            'pubmed': {'attempts': 0, 'successes': 0, 'avg_results': 0, 'avg_time': 0, 'last_success': 0}
+        }
         
         logger.info(f"多源搜索引擎初始化完成，启用数据源数量: {self._count_enabled_sources()}")
         
@@ -738,6 +799,127 @@ class MultiSourceEngine:
         if self.pubmed:
             count += 1  
         return count
+    
+    def _update_source_performance(self, source_name: str, success: bool, result_count: int, response_time: float):
+        """更新数据源性能统计"""
+        if source_name in self.source_performance:
+            stats = self.source_performance[source_name]
+            stats['attempts'] += 1
+            
+            if success:
+                stats['successes'] += 1
+                stats['last_success'] = time.time()
+                
+                # 更新平均结果数（移动平均）
+                if stats['avg_results'] == 0:
+                    stats['avg_results'] = result_count
+                else:
+                    stats['avg_results'] = (stats['avg_results'] * 0.7) + (result_count * 0.3)
+                
+                # 更新平均响应时间（移动平均）
+                if stats['avg_time'] == 0:
+                    stats['avg_time'] = response_time
+                else:
+                    stats['avg_time'] = (stats['avg_time'] * 0.7) + (response_time * 0.3)
+    
+    def _calculate_source_priority(self, source_name: str) -> float:
+        """计算数据源优先级得分（0-1，越高越好）"""
+        if source_name not in self.source_performance:
+            return 0.5  # 默认中等优先级
+        
+        stats = self.source_performance[source_name]
+        if stats['attempts'] == 0:
+            return 0.5  # 未使用过，中等优先级
+        
+        # 计算成功率
+        success_rate = stats['successes'] / stats['attempts']
+        
+        # 计算结果质量（平均结果数，标准化到0-1）
+        result_quality = min(stats['avg_results'] / 10.0, 1.0)  # 10篇为满分
+        
+        # 计算响应速度（响应时间越短越好，标准化到0-1）
+        if stats['avg_time'] > 0:
+            speed_score = max(0, 1.0 - (stats['avg_time'] / 30.0))  # 30秒为底线
+        else:
+            speed_score = 0.5
+        
+        # 计算最近成功度（最近成功的源优先）
+        current_time = time.time()
+        if stats['last_success'] > 0:
+            time_since_success = current_time - stats['last_success']
+            recency_score = max(0, 1.0 - (time_since_success / 3600.0))  # 1小时内为满分
+        else:
+            recency_score = 0
+        
+        # 综合计算优先级（权重分配）
+        priority = (
+            success_rate * 0.4 +          # 成功率权重40%
+            result_quality * 0.3 +        # 结果质量权重30%
+            speed_score * 0.2 +           # 响应速度权重20%
+            recency_score * 0.1           # 最近成功权重10%
+        )
+        
+        return min(priority, 1.0)
+    
+    def _get_prioritized_sources(self) -> List[tuple]:
+        """获取按优先级排序的数据源列表"""
+        sources = []
+        
+        if self.crossref:
+            priority = self._calculate_source_priority('crossref')
+            sources.append(('crossref', self.crossref, priority))
+        
+        if self.semantic_scholar:
+            priority = self._calculate_source_priority('semantic_scholar')
+            sources.append(('semantic_scholar', self.semantic_scholar, priority))
+        
+        if self.google_scholar:
+            priority = self._calculate_source_priority('google_scholar')
+            sources.append(('google_scholar', self.google_scholar, priority))
+        
+        if self.arxiv:
+            priority = self._calculate_source_priority('arxiv')
+            sources.append(('arxiv', self.arxiv, priority))
+        
+        if self.pubmed:
+            priority = self._calculate_source_priority('pubmed')
+            sources.append(('pubmed', self.pubmed, priority))
+        
+        # 按优先级排序（高到低）
+        sources.sort(key=lambda x: x[2], reverse=True)
+        
+        logger.info(f"数据源优先级排序: {[(name, f'{priority:.2f}') for name, _, priority in sources]}")
+        return sources
+    
+    async def _search_with_tracking(self, source_name: str, source_api, query: str, limit: int, start_time: float, timeout: float) -> List[Paper]:
+        """带性能跟踪的搜索方法"""
+        try:
+            result = await asyncio.wait_for(source_api.search(query, limit), timeout=timeout)
+            end_time = time.time()
+            response_time = end_time - start_time
+            
+            # 更新性能统计（成功）
+            self._update_source_performance(source_name, True, len(result), response_time)
+            
+            return result
+            
+        except asyncio.TimeoutError:
+            end_time = time.time()
+            response_time = end_time - start_time
+            logger.warning(f"搜索源 {source_name} 超时 ({response_time:.1f}s)")
+            
+            # 更新性能统计（超时失败）
+            self._update_source_performance(source_name, False, 0, response_time)
+            return []
+            
+        except Exception as e:
+            end_time = time.time()
+            response_time = end_time - start_time
+            logger.error(f"搜索源 {source_name} 异常: {e}")
+            
+            # 更新性能统计（异常失败）
+            self._update_source_performance(source_name, False, 0, response_time)
+            return []
         
     async def search_parallel(self, query: str, max_results: int = 50) -> List[Paper]:
         """并行搜索多个数据源（兼容旧接口）"""
@@ -768,40 +950,62 @@ class MultiSourceEngine:
             google_scholar_limit = per_source_limit
         
         try:
-            # 并行调用核心搜索源（arXiv和Google Scholar享受相同权重）
+            # 智能源选择：基于优先级进行搜索
+            prioritized_sources = self._get_prioritized_sources()
             tasks = []
-            per_task_timeout = float(os.getenv("SEARCH_TASK_TIMEOUT", "60.0"))  # 增加到60秒超时
+            source_names = []
+            per_task_timeout = float(os.getenv("SEARCH_TASK_TIMEOUT", "30.0"))  # 减少到30秒超时
             
-            # 核心数据源 - arXiv和Google Scholar权重相同
-            if self.arxiv:
-                tasks.append(asyncio.wait_for(self.arxiv.search(query, per_source_limit), timeout=per_task_timeout))
-            if self.google_scholar:
-                # Google Scholar使用专门的限制数量
-                search_limit = google_scholar_limit if max_results > 20 else per_source_limit
-                tasks.append(asyncio.wait_for(self.google_scholar.search(query, search_limit), timeout=per_task_timeout))
+            # 优化策略：优先使用高性能源，如果结果不足再并行所有源
+            high_priority_sources = [s for s in prioritized_sources if s[2] > 0.6]
             
-            # 添加可选数据源
-            if self.semantic_scholar:
-                tasks.append(asyncio.wait_for(self.semantic_scholar.search(query, per_source_limit), timeout=per_task_timeout))
-            if self.crossref:
-                tasks.append(asyncio.wait_for(self.crossref.search(query, per_source_limit), timeout=per_task_timeout))
-            if self.pubmed:
-                tasks.append(asyncio.wait_for(self.pubmed.search(query, per_source_limit), timeout=per_task_timeout))
+            if high_priority_sources:
+                logger.info(f"优先使用高性能数据源: {[s[0] for s in high_priority_sources]}")
+                
+                # 先尝试高优先级源
+                for source_name, source_api, priority in high_priority_sources:
+                    source_names.append(source_name)
+                    search_limit = per_source_limit
+                    
+                    # Google Scholar仍然给予特殊待遇
+                    if source_name == 'google_scholar' and max_results > 20:
+                        search_limit = google_scholar_limit
+                    
+                    start_time = time.time()
+                    task = asyncio.create_task(self._search_with_tracking(
+                        source_name, source_api, query, search_limit, start_time, per_task_timeout
+                    ))
+                    tasks.append(task)
+            else:
+                logger.info("所有数据源优先级较低，并行搜索所有可用源")
+                
+                # 如果没有高优先级源，使用所有可用源
+                for source_name, source_api, priority in prioritized_sources:
+                    source_names.append(source_name)
+                    search_limit = per_source_limit
+                    
+                    if source_name == 'google_scholar' and max_results > 20:
+                        search_limit = google_scholar_limit
+                    
+                    start_time = time.time()
+                    task = asyncio.create_task(self._search_with_tracking(
+                        source_name, source_api, query, search_limit, start_time, per_task_timeout
+                    ))
+                    tasks.append(task)
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # 合并结果，记录各源的贡献
             all_papers = []
             source_stats = {}
-            source_names = ["arXiv", "Google Scholar", "Semantic Scholar", "Crossref", "PubMed"]
             
             for i, result in enumerate(results):
                 source_name = source_names[i] if i < len(source_names) else f"source_{i}"
                 
                 if isinstance(result, Exception):
                     logger.error(f"搜索源 {source_name} 出错: {type(result).__name__}: {result}")
-                    import traceback
-                    logger.error(f"详细错误信息: {traceback.format_exc()}")
+                    # 更新性能统计（失败）
+                    self._update_source_performance(source_name, False, 0, 0)
                     continue
                 elif isinstance(result, list):
                     all_papers.extend(result)

@@ -208,8 +208,8 @@ class LangGraphLLMWrapper:
         await self._ensure_initialized()
         return await self.universal_llm.analyze_query(query, system_prompt)
     
-    async def simple_chat(self, prompt: str, system_prompt: str = None) -> str:
-        """简单聊天接口（与原接口兼容）"""
+    async def simple_chat(self, prompt: str, system_prompt: str = None, timeout: float = 30.0) -> str:
+        """简单聊天接口（与原接口兼容）- 增加超时控制"""
         await self._ensure_initialized()
         
         messages = []
@@ -217,8 +217,19 @@ class LangGraphLLMWrapper:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        result = await self.universal_llm.chat_completion(messages)
-        return result if result else "抱歉，我现在无法回复。请稍后再试。"
+        try:
+            # 添加超时控制
+            result = await asyncio.wait_for(
+                self.universal_llm.chat_completion(messages),
+                timeout=timeout
+            )
+            return result if result else "抱歉，我现在无法回复。请稍后再试。"
+        except asyncio.TimeoutError:
+            print(f"⚠️ LLM调用超时 ({timeout}秒)")
+            return "抱歉，响应时间过长，请稍后再试。"
+        except Exception as e:
+            print(f"❌ LLM调用失败: {e}")
+            return "抱歉，服务暂时不可用，请稍后再试。"
 
 # 向后兼容的全局实例
 _langgraph_llm_instance = None

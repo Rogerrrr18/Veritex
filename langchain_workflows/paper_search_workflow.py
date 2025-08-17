@@ -6,6 +6,8 @@ import asyncio
 import json
 import uuid
 import re
+import time
+import hashlib
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -32,6 +34,11 @@ class IntelligentPaperSearchAgent:
     """
     
     def __init__(self, enable_memory: bool = True):
+        # 简单内存缓存 - 避免重复的LLM调用和搜索
+        self._keyword_expansion_cache = {}  # 关键词扩展缓存
+        self._search_results_cache = {}     # 搜索结果缓存
+        self._cache_ttl = 1800  # 缓存30分钟
+        self._max_cache_size = 100  # 最大缓存条目数
         self.enable_memory = enable_memory
         # 使用统一LLM接口
         self.llm = get_llm_for_langgraph()
@@ -45,6 +52,8 @@ class IntelligentPaperSearchAgent:
         
         # 延迟加载搜索引擎（避免循环依赖）
         self._search_engine = None
+        
+        print("✅ 智能缓存系统已启用 - 30分钟TTL，最大100条目")
     
     async def _get_search_engine(self):
         """获取搜索引擎实例（延迟加载）- 避免循环依赖"""
@@ -96,10 +105,11 @@ class IntelligentPaperSearchAgent:
         # 文献搜索和学术讨论的后续路径
         workflow.add_conditional_edges(
             "literature_search",
-            self.should_execute_search_after_analysis,
+            self.route_after_literature_search,
             {
-                "search": "search_execution",
-                "end": END
+                "search": "search_execution",  # chat&plan模式下可能需要的路径（保留兼容性）
+                "completed": END,  # auto-search模式完成后直接结束
+                "wait_decision": END  # chat&plan模式等待用户决策
             }
         )
         
@@ -268,18 +278,95 @@ class IntelligentPaperSearchAgent:
         
         return None  # 无法快速处理，需要LLM
     
+    def _get_cache_key(self, query: str, mode: str = None, max_results: int = None) -> str:
+        """生成缓存键"""
+        try:
+            # 标准化查询
+            normalized_query = query.strip().lower()
+            # 包含关键参数生成唯一键
+            key_data = f"{normalized_query}|{mode or 'default'}|{max_results or 10}"
+            return hashlib.md5(key_data.encode('utf-8')).hexdigest()[:16]
+        except:
+            return hashlib.md5(query.encode('utf-8', errors='ignore')).hexdigest()[:16]
+    
+    def _is_cache_valid(self, cache_entry: Dict) -> bool:
+        """检查缓存是否有效"""
+        if not cache_entry or 'timestamp' not in cache_entry:
+            return False
+        return (time.time() - cache_entry['timestamp']) < self._cache_ttl
+    
+    def _clean_expired_cache(self, cache_dict: Dict):
+        """清理过期缓存"""
+        try:
+            current_time = time.time()
+            expired_keys = [
+                key for key, entry in cache_dict.items()
+                if not entry or 'timestamp' not in entry or 
+                (current_time - entry['timestamp']) >= self._cache_ttl
+            ]
+            for key in expired_keys:
+                cache_dict.pop(key, None)
+            
+            # 如果缓存过大，删除最旧的条目
+            if len(cache_dict) > self._max_cache_size:
+                sorted_items = sorted(cache_dict.items(), key=lambda x: x[1].get('timestamp', 0))
+                items_to_remove = len(cache_dict) - self._max_cache_size
+                for i in range(items_to_remove):
+                    cache_dict.pop(sorted_items[i][0], None)
+                    
+        except Exception as e:
+            print(f"⚠️ 缓存清理失败: {e}")
+    
     async def literature_search_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """文献搜索处理节点"""
+        """文献搜索处理节点 - 根据模式选择不同的处理策略（支持缓存）"""
+        mode = state.get("mode", "auto-search")
+        user_message = state.get("user_message", "")
+        print(f"📚 文献搜索处理: {user_message} (模式: {mode})")
+        
+        if mode == "auto-search":
+            # 自动搜索模式：整合分析+搜索执行
+            return await self._integrated_auto_search(state)
+        else:
+            # chat&plan模式：仅做分析，等待用户决策
+            return await self._analysis_only_search(state)
+            
+    async def _analysis_only_search(self, state: PaperSearchState) -> Dict[str, Any]:
+        """仅分析模式 - 用于chat&plan模式（支持关键词扩展缓存）"""
         try:
             user_message = state.get("user_message", "")
-            mode = state.get("mode", "auto-search")
-            print(f"📚 文献搜索处理: {user_message} (模式: {mode})")
+            mode = state.get("mode", "chat&plan")
+            
+            # 🚀 检查关键词扩展缓存
+            cache_key = self._get_cache_key(user_message, mode, 0)
+            
+            self._clean_expired_cache(self._keyword_expansion_cache)
+            
+            if cache_key in self._keyword_expansion_cache:
+                cached_entry = self._keyword_expansion_cache[cache_key]
+                if self._is_cache_valid(cached_entry):
+                    print(f"⚡ 命中关键词扩展缓存，跳过LLM分析")
+                    
+                    from langchain_core.messages import AIMessage
+                    cached_response = cached_entry['response']
+                    cached_analysis = cached_entry['analysis']
+                    
+                    return {
+                        "current_step": "search_ready",
+                        "is_completed": False,
+                        "analysis_result": cached_analysis,
+                        "is_academic_query": True,
+                        "need_search_strategy": True,
+                        "mode": mode,
+                        "messages": [AIMessage(content=cached_response)],
+                        "should_search": False,
+                        "cache_hit": True  # 标记缓存命中
+                    }
             
             # 使用完整的文献搜索prompt（支持模式化说明）
             from prompt_utils import get_literature_search_prompt
             prompt = get_literature_search_prompt(user_message, mode=mode)
             
-            # 调用LLM进行关键词扩展和搜索分析（增加超时时间）
+            # 调用LLM进行关键词扩展和搜索分析
             response = await self.llm.simple_chat(prompt=prompt, timeout=60.0)
             
             # 验证LLM响应
@@ -297,6 +384,7 @@ class IntelligentPaperSearchAgent:
                     }
                 }
                 
+                from langchain_core.messages import AIMessage
                 return {
                     "current_step": "search_ready",
                     "is_completed": False,
@@ -304,26 +392,40 @@ class IntelligentPaperSearchAgent:
                     "is_academic_query": True,
                     "need_search_strategy": True,
                     "mode": mode,
-                    "messages": [AIMessage(content=f"已为您分析查询：{user_message}，正在准备搜索...")],
-                    "should_search": mode == "auto-search",
+                    "messages": [AIMessage(content=f"已为您分析查询：{user_message}，请选择是否执行搜索。")],
+                    "should_search": False,  # chat&plan模式不自动搜索
                     "is_fallback": True
                 }
             
-            # 解析LLM响应中的JSON部分（如果有）
+            # 解析LLM响应中的JSON部分
             keywords_analysis = self._extract_json_analysis(response)
             
-            # 明确导入AIMessage避免作用域问题
-            from langchain_core.messages import AIMessage
+            # 🚀 缓存关键词扩展结果
+            if keywords_analysis:
+                try:
+                    cache_entry = {
+                        'timestamp': time.time(),
+                        'response': response,
+                        'analysis': keywords_analysis,
+                        'query': user_message,
+                        'mode': mode
+                    }
+                    self._keyword_expansion_cache[cache_key] = cache_entry
+                    print(f"💾 已缓存关键词扩展结果")
+                except Exception as e:
+                    print(f"⚠️ 缓存关键词扩展失败: {e}")
             
+            from langchain_core.messages import AIMessage
             return {
                 "current_step": "search_ready",
-                "is_completed": False,  # 可能还需要执行搜索
+                "is_completed": False,
                 "analysis_result": keywords_analysis,
                 "is_academic_query": True,
                 "need_search_strategy": True,
                 "mode": mode,
                 "messages": [AIMessage(content=response)],
-                "should_search": mode == "auto-search"  # 标记是否应该自动搜索
+                "should_search": False,  # chat&plan模式等待用户决策
+                "cache_hit": False  # 标记非缓存结果
             }
             
         except Exception as e:
@@ -336,6 +438,196 @@ class IntelligentPaperSearchAgent:
                 "error_message": error_msg,
                 "messages": [AIMessage(content="抱歉，文献搜索分析失败，请重新尝试。")]
             }
+            
+    async def _integrated_auto_search(self, state: PaperSearchState) -> Dict[str, Any]:
+        """整合搜索模式 - 用于auto-search模式，一次性完成分析+搜索（支持全程缓存）"""
+        try:
+            user_message = state.get("user_message", "")
+            mode = "auto-search"
+            max_results = state.get("max_results", 10)
+            year_from = state.get("year_from")
+            year_to = state.get("year_to")
+            sources = state.get("sources")
+            
+            print(f"🚀 整合搜索模式：分析+搜索一体化执行")
+            
+            # 🚀 检查完整搜索结果缓存
+            full_cache_key = self._get_cache_key(user_message, mode, max_results)
+            
+            self._clean_expired_cache(self._search_results_cache)
+            
+            if full_cache_key in self._search_results_cache:
+                cached_entry = self._search_results_cache[full_cache_key]
+                if self._is_cache_valid(cached_entry):
+                    print(f"⚡ 命中完整搜索结果缓存，跳过所有LLM和搜索调用")
+                    
+                    from langchain_core.messages import AIMessage
+                    return {
+                        "current_step": "completed",
+                        "is_completed": True,
+                        "analysis_result": cached_entry['analysis_result'],
+                        "search_results": cached_entry['search_results'],
+                        "search_keywords": cached_entry['search_keywords'],
+                        "is_academic_query": True,
+                        "mode": mode,
+                        "messages": [AIMessage(content=cached_entry['response'])],
+                        "should_search": False,
+                        "cache_hit": True,
+                        "cache_type": "full_search"
+                    }
+            
+            # 第一步：关键词扩展分析（先检查部分缓存）
+            keywords_analysis = None
+            analysis_response = None
+            
+            # 检查关键词扩展缓存
+            keyword_cache_key = self._get_cache_key(user_message, mode, 0)
+            
+            if keyword_cache_key in self._keyword_expansion_cache:
+                cached_entry = self._keyword_expansion_cache[keyword_cache_key]
+                if self._is_cache_valid(cached_entry):
+                    print(f"⚡ 命中关键词扩展缓存，跳过LLM分析")
+                    analysis_response = cached_entry['response']
+                    keywords_analysis = cached_entry['analysis']
+            
+            # 如果缓存未命中，执行LLM分析
+            if not keywords_analysis:
+                from prompt_utils import get_literature_search_prompt
+                prompt = get_literature_search_prompt(user_message, mode=mode)
+                
+                print(f"🔍 步骤1：关键词扩展分析（LLM调用）")
+                analysis_response = await self.llm.simple_chat(prompt=prompt, timeout=60.0)
+                
+                # 解析分析结果
+                if analysis_response and len(analysis_response.strip()) > 20:
+                    keywords_analysis = self._extract_json_analysis(analysis_response)
+                    
+                    # 缓存关键词扩展结果
+                    if keywords_analysis:
+                        try:
+                            cache_entry = {
+                                'timestamp': time.time(),
+                                'response': analysis_response,
+                                'analysis': keywords_analysis,
+                                'query': user_message,
+                                'mode': mode
+                            }
+                            self._keyword_expansion_cache[keyword_cache_key] = cache_entry
+                            print(f"💾 已缓存关键词扩展结果")
+                        except Exception as e:
+                            print(f"⚠️ 缓存关键词扩展失败: {e}")
+            else:
+                print(f"⚡ 使用缓存的关键词扩展")
+            
+            # keywords_analysis已在上面处理
+            
+            # 如果分析失败，使用基本回退
+            if not keywords_analysis:
+                print(f"⚠️ 分析失败，使用基本查询: {user_message}")
+                keywords_analysis = {
+                    "original_query": user_message,
+                    "core_concepts": [user_message.strip()],
+                    "domain": "学术研究",
+                    "hierarchical_keywords": {
+                        "exact_terms": {"terms": [user_message.strip()], "weight": 1.0}
+                    }
+                }
+            
+            # 第二步：基于分析结果执行搜索
+            print(f"🔍 步骤2：执行并行搜索")
+            search_query = self._build_search_query(user_message, keywords_analysis)
+            print(f"📋 构建的搜索查询: {search_query}")
+            
+            # 获取搜索引擎并执行搜索
+            search_engine = await self._get_search_engine()
+            
+            papers = []
+            if hasattr(search_engine, 'search_parallel_with_filters'):
+                papers = await search_engine.search_parallel_with_filters(
+                    query=search_query,
+                    max_results=max_results,
+                    year_from=year_from,
+                    year_to=year_to,
+                    sources=sources
+                )
+            elif hasattr(search_engine, 'search_parallel'):
+                papers = await search_engine.search_parallel(search_query, max_results)
+            else:
+                search_result = await search_engine.search_parallel(search_query, max_results)
+                papers = search_result if isinstance(search_result, list) else search_result.get('papers', [])
+                
+            print(f"📚 搜索完成，找到 {len(papers)} 篇论文")
+            
+            # 第三步：格式化结果
+            formatted_results = self._format_search_results(papers)
+            search_keywords = self._extract_keywords_from_analysis(keywords_analysis)
+            
+            # 生成整合的响应消息
+            from langchain_core.messages import AIMessage
+            result_message = self._build_integrated_response(
+                analysis_response, len(papers), search_keywords
+            )
+            
+            # 🚀 缓存完整搜索结果
+            try:
+                full_cache_entry = {
+                    'timestamp': time.time(),
+                    'response': result_message,
+                    'analysis_result': keywords_analysis,
+                    'search_results': formatted_results,
+                    'search_keywords': search_keywords,
+                    'query': user_message,
+                    'mode': mode,
+                    'max_results': max_results
+                }
+                self._search_results_cache[full_cache_key] = full_cache_entry
+                print(f"💾 已缓存完整搜索结果（{len(papers)}篇论文）")
+            except Exception as e:
+                print(f"⚠️ 缓存搜索结果失败: {e}")
+            
+            return {
+                "current_step": "completed",
+                "is_completed": True,  # auto-search模式直接完成
+                "analysis_result": keywords_analysis,
+                "search_results": formatted_results,
+                "search_keywords": search_keywords,
+                "is_academic_query": True,
+                "mode": mode,
+                "messages": [AIMessage(content=result_message)],
+                "should_search": False,  # 已经完成搜索
+                "cache_hit": False  # 标记非缓存结果
+            }
+            
+        except Exception as e:
+            error_msg = f"整合搜索失败: {str(e)}"
+            print(f"❌ {error_msg}")
+            from langchain_core.messages import AIMessage
+            return {
+                "current_step": "failed",
+                "is_completed": False,
+                "error_message": error_msg,
+                "messages": [AIMessage(content=f"抱歉，搜索过程中出现错误：{error_msg}")]
+            }
+    
+    def _build_integrated_response(self, analysis_response: str, paper_count: int, keywords: list) -> str:
+        """构建整合搜索的响应消息"""
+        try:
+            # 提取分析响应中的有用信息，但简化展示
+            response_lines = []
+            
+            # 简洁的搜索完成信息
+            response_lines.append(f"🔍 已完成智能文献搜索，共找到 {paper_count} 篇相关论文。")
+            
+            # 展示关键词（如果有）
+            if keywords:
+                response_lines.append(f"\n📋 使用的搜索关键词: {', '.join(keywords[:5])}")
+            
+            # 简化的分析说明
+            response_lines.append("\n✅ 已为您优化搜索策略并完成文献检索，详细结果请查看下方列表。")
+            
+            return "\n".join(response_lines)
+        except:
+            return f"✅ 搜索完成，找到 {paper_count} 篇相关论文。"
     
     async def academic_discussion_node(self, state: PaperSearchState) -> Dict[str, Any]:
         """学术探讨处理节点"""
@@ -980,19 +1272,28 @@ class IntelligentPaperSearchAgent:
         except:
             return "✅ 已完成学术分析。如需了解更多信息，请提供更详细的查询内容。"
     
-    def should_execute_search_after_analysis(self, state: PaperSearchState) -> str:
-        """文献搜索节点后的路由决策"""
+    def route_after_literature_search(self, state: PaperSearchState) -> str:
+        """文献搜索节点后的路由决策（优化版）"""
         mode = state.get("mode", "auto-search")
+        is_completed = state.get("is_completed", False)
         should_search = state.get("should_search", False)
         
-        print(f"📋 文献搜索后路由: 模式={mode}, 应该搜索={should_search}")
+        print(f"📋 文献搜索后路由: 模式={mode}, 已完成={is_completed}, 应该搜索={should_search}")
         
-        if mode == "auto-search" and should_search:
-            print("🔍 自动搜索模式，执行搜索")
-            return "search"
+        if mode == "auto-search":
+            if is_completed:
+                print("✅ auto-search模式已完成整合搜索，直接结束")
+                return "completed"
+            elif should_search:
+                print("🔍 auto-search模式降级，执行传统搜索")
+                return "search"
+            else:
+                print("⚠️ auto-search模式异常，等待决策")
+                return "wait_decision"
         else:
-            print("💬 展示关键词分析，等待用户决策")
-            return "end"
+            # chat&plan模式
+            print("💬 chat&plan模式，展示分析结果等待用户决策")
+            return "wait_decision"
     
     def should_execute_search_after_discussion(self, state: PaperSearchState) -> str:
         """学术探讨节点后的路由决策"""
@@ -1081,7 +1382,7 @@ class IntelligentPaperSearchAgent:
             }
     
     def _build_search_query(self, original_query: str, analysis: Optional[Dict[str, Any]]) -> str:
-        """根据分析结果构建优化的布尔搜索查询"""
+        """根据分析结果构建简化且有效的搜索查询"""
         if not analysis:
             return original_query
         
@@ -1093,48 +1394,64 @@ class IntelligentPaperSearchAgent:
             related_terms = hierarchical.get("related_terms", {}).get("terms", [])
             context_terms = hierarchical.get("context_terms", {}).get("terms", [])
             
-            # 构建布尔查询组件
-            query_parts = []
+            # 简化策略：构建多层次查询，从严格到宽松
+            all_important_terms = []
             
-            # 1. 核心术语组：exact_terms 用 AND 连接（最高优先级，必须出现）
+            # 1. 优先使用核心术语（exact_terms 和 core_synonyms）
             if exact_terms:
-                # 处理多词术语，用引号包围
-                quoted_exact = [f'"{term}"' if ' ' in term else term for term in exact_terms[:3]]
-                exact_group = " AND ".join(quoted_exact)
-                query_parts.append(f"({exact_group})")
+                # 只取前2个最重要的精确术语
+                quoted_exact = [f'"{term}"' if ' ' in term else term for term in exact_terms[:2]]
+                all_important_terms.extend(quoted_exact)
             
-            # 2. 同义词组：core_synonyms 用 OR 连接（提高召回率）
-            if core_synonyms:
-                quoted_synonyms = [f'"{term}"' if ' ' in term else term for term in core_synonyms[:4]]
-                synonym_group = " OR ".join(quoted_synonyms)
-                query_parts.append(f"({synonym_group})")
+            if core_synonyms and len(all_important_terms) < 3:
+                # 如果核心术语不够，补充同义词
+                quoted_synonyms = [f'"{term}"' if ' ' in term else term for term in core_synonyms[:2]]
+                all_important_terms.extend(quoted_synonyms)
             
-            # 3. 相关词组：related_terms 用 AND 连接（提高精度）
-            if related_terms:
-                quoted_related = [f'"{term}"' if ' ' in term else term for term in related_terms[:3]]
-                related_group = " AND ".join(quoted_related)
-                query_parts.append(f"({related_group})")
+            # 2. 如果仍然没有足够术语，添加相关术语
+            if len(all_important_terms) < 2 and related_terms:
+                quoted_related = [f'"{term}"' if ' ' in term else term for term in related_terms[:1]]
+                all_important_terms.extend(quoted_related)
             
-            # 4. 上下文词组：context_terms 用 OR 连接（增加相关性）
-            if context_terms:
-                quoted_context = [f'"{term}"' if ' ' in term else term for term in context_terms[:2]]
-                context_group = " OR ".join(quoted_context)
-                query_parts.append(f"({context_group})")
+            # 3. 构建简化查询
+            if len(all_important_terms) >= 2:
+                # 使用前2-3个最重要的术语，用AND连接
+                main_query = " AND ".join(all_important_terms[:3])
+                
+                # 如果有额外的同义词，作为可选扩展（用OR）
+                optional_terms = []
+                remaining_synonyms = core_synonyms[2:4] if len(core_synonyms) > 2 else []
+                if remaining_synonyms:
+                    optional_terms.extend([f'"{term}"' if ' ' in term else term for term in remaining_synonyms])
+                
+                if optional_terms:
+                    # 组合主查询和可选术语
+                    optional_group = " OR ".join(optional_terms)
+                    final_query = f"({main_query}) AND ({optional_group})"
+                else:
+                    final_query = main_query
+                    
+            elif len(all_important_terms) == 1:
+                # 如果只有一个术语，尝试添加同义词扩展
+                main_term = all_important_terms[0]
+                if core_synonyms:
+                    # 添加同义词选择
+                    synonyms = [f'"{term}"' if ' ' in term else term for term in core_synonyms[:3]]
+                    all_terms = [main_term] + synonyms
+                    final_query = " OR ".join(all_terms)
+                else:
+                    final_query = main_term
+            else:
+                # 回退到原始查询
+                final_query = original_query
             
-            # 如果没有足够的关键词，回退到原始查询
-            if not query_parts:
-                return original_query
+            print(f"🎯 构建的简化查询: {final_query}")
+            print(f"📊 查询组件: 使用核心术语={len(all_important_terms)}, 总可用关键词={len(exact_terms) + len(core_synonyms) + len(related_terms)}")
             
-            # 组合查询：各组之间用 AND 连接
-            boolean_query = " AND ".join(query_parts)
-            
-            print(f"🎯 构建的布尔查询: {boolean_query}")
-            print(f"📊 查询组件: exact_terms={len(exact_terms)}, synonyms={len(core_synonyms)}, related={len(related_terms)}, context={len(context_terms)}")
-            
-            return boolean_query
+            return final_query
             
         except Exception as e:
-            print(f"⚠️ 布尔查询构建失败，使用原始查询: {e}")
+            print(f"⚠️ 查询构建失败，使用原始查询: {e}")
             return original_query
     
     def _extract_keywords_from_analysis(self, analysis: Optional[Dict[str, Any]]) -> List[str]:
@@ -1419,6 +1736,33 @@ class IntelligentPaperSearchAgent:
         except Exception as e:
             print(f"❌ 构建搜索回复失败: {e}")
             return f"搜索完成，找到 {len(results)} 篇论文，但格式化过程出现问题。"
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """获取缓存统计信息"""
+        try:
+            self._clean_expired_cache(self._keyword_expansion_cache)
+            self._clean_expired_cache(self._search_results_cache)
+            
+            return {
+                "keyword_cache_size": len(self._keyword_expansion_cache),
+                "search_cache_size": len(self._search_results_cache),
+                "cache_ttl_minutes": self._cache_ttl // 60,
+                "max_cache_size": self._max_cache_size,
+                "total_cache_entries": len(self._keyword_expansion_cache) + len(self._search_results_cache)
+            }
+        except:
+            return {"error": "获取缓存统计失败"}
+    
+    def clear_cache(self) -> bool:
+        """清空所有缓存"""
+        try:
+            self._keyword_expansion_cache.clear()
+            self._search_results_cache.clear()
+            print("🗑️ 所有缓存已清空")
+            return True
+        except Exception as e:
+            print(f"⚠️ 清空缓存失败: {e}")
+            return False
     
     async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, mode: str = "auto-search", force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """主要搜索接口"""

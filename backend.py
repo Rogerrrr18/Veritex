@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
 import logging
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 from langchain_workflows.paper_search_workflow import get_intelligent_paper_search_agent
 from llm_interface import get_universal_llm, get_model_config_manager
 from multi_source_engine import Paper
+from performance_monitor import track_chat_performance, get_performance_monitor
+from prompt_utils import get_chat_conversation_prompt
 
 app = FastAPI(
     title="Paper God API - 智能对话版",
@@ -149,6 +152,45 @@ def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
 
 """作者数据格式化方法已移除"""
 
+# === 快速意图预筛选函数 ===
+def quick_intent_filter(message: str) -> Optional[str]:
+    """快速意图预筛选 - 对明显的闲聊直接识别，避免复杂工作流"""
+    message_lower = message.lower().strip()
+    
+    # 明显的问候语和感谢语
+    greeting_patterns = [
+        "你好", "hello", "hi", "嗨", "哈喽",
+        "谢谢", "thank", "感谢",
+        "再见", "bye", "拜拜", "88",
+        "早上好", "下午好", "晚上好", "晚安"
+    ]
+    
+    # 明显的系统使用咨询
+    system_patterns = [
+        "怎么用", "如何使用", "使用方法", "操作指南",
+        "这是什么", "你是谁", "什么功能", "能做什么"
+    ]
+    
+    # 明显的天气/日常闲聊
+    casual_patterns = [
+        "天气", "今天", "明天", "心情", "电影", "音乐",
+        "吃饭", "睡觉", "工作", "周末", "假期"
+    ]
+    
+    # 短消息通常是闲聊
+    if len(message.strip()) <= 10:
+        for pattern in greeting_patterns:
+            if pattern in message_lower:
+                return "闲聊"
+    
+    # 检查各种闲聊模式
+    all_casual_patterns = greeting_patterns + system_patterns + casual_patterns
+    for pattern in all_casual_patterns:
+        if pattern in message_lower:
+            return "闲聊"
+    
+    return None  # 无法快速判断，需要进入完整工作流
+
 # === 工具函数 ===
 def estimate_tokens(text: str) -> int:
     """估算文本的token数量"""
@@ -242,11 +284,103 @@ async def chat_get_info():
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """统一聊天接口 - 智能判断学术搜索还是普通对话"""
+    import time
+    start_time = time.time()
+    
     try:
         # 转换历史记录格式
         history = [{"role": msg.role, "content": msg.content} for msg in request.history]
         
         logger.info(f"收到聊天请求: {request.message}")
+        
+        # 🚀 快速意图预筛选 - 对明显闲聊使用LLM生成自然回复
+        quick_intent = quick_intent_filter(request.message)
+        if quick_intent == "闲聊":
+            logger.info(f"⚡ 快速预筛选命中闲聊，使用LLM生成自然回复")
+            
+            try:
+                # 使用LLM生成自然的闲聊回复
+                llm_client = await get_universal_llm()
+                prompt = get_chat_conversation_prompt(request.message)
+                ai_response = await llm_client.simple_chat(prompt)
+                
+                # 构建完整的对话历史
+                updated_history = history + [
+                    {"role": "user", "content": request.message},
+                    {"role": "assistant", "content": ai_response}
+                ]
+                
+                # 转换回响应格式
+                response_history = [
+                    ChatMessage(role=msg["role"], content=msg["content"])
+                    for msg in updated_history
+                ]
+                
+                # 跟踪快速闲聊性能
+                response_time = time.time() - start_time
+                track_chat_performance(
+                    request_type="fast_chat_llm",
+                    response_time=response_time,
+                    llm_calls=1,
+                    is_fast_path=True,
+                    token_count=estimate_tokens(request.message + ai_response)
+                )
+                
+                logger.info(f"⚡ 快速闲聊完成 (耗时: {response_time:.3f}s, LLM调用: 1次)")
+                
+                return ChatResponse(
+                    response=ai_response,
+                    history=response_history,
+                    is_academic_query=False,
+                    search_results=[],
+                    analysis_result=None,
+                    token_info={
+                        "total_tokens": estimate_tokens(request.message + ai_response),
+                        "fast_path": True,
+                        "response_time": response_time,
+                        "llm_calls": 1
+                    }
+                )
+                
+            except Exception as e:
+                logger.error(f"快速闲聊LLM调用失败: {e}")
+                # 降级到简单预定义回复
+                fallback_response = "你好！我是Paper God学术搜索助手，专门帮助您查找和分析学术文献。有什么学术问题我可以帮您解答吗？"
+                
+                updated_history = history + [
+                    {"role": "user", "content": request.message},
+                    {"role": "assistant", "content": fallback_response}
+                ]
+                
+                response_history = [
+                    ChatMessage(role=msg["role"], content=msg["content"])
+                    for msg in updated_history
+                ]
+                
+                response_time = time.time() - start_time
+                track_chat_performance(
+                    request_type="fast_chat_fallback",
+                    response_time=response_time,
+                    llm_calls=0,
+                    is_fast_path=True,
+                    token_count=estimate_tokens(request.message + fallback_response),
+                    error_occurred=True
+                )
+                
+                return ChatResponse(
+                    response=fallback_response,
+                    history=response_history,
+                    is_academic_query=False,
+                    search_results=[],
+                    analysis_result=None,
+                    token_info={
+                        "total_tokens": estimate_tokens(request.message + fallback_response),
+                        "fast_path": True,
+                        "response_time": response_time,
+                        "llm_calls": 0,
+                        "error": str(e)
+                    }
+                )
         
         # 提取搜索参数
         search_params = request.search_params or {}
@@ -255,52 +389,30 @@ async def chat(request: ChatRequest):
         year_to = search_params.get('year_to')
         sources = search_params.get('sources')
         
-        # 调用新的智能工作流（第一阶段：仅分析，不执行搜索）
+        # 进入完整智能工作流（记录开始时间）
+        logger.info(f"🤖 进入完整智能工作流处理")
+        workflow_start = time.time()
+        
+        # 调用优化后的智能工作流（单次调用完成所有处理）
         mode = (request.mode or "chat-only").lower()
         workflow_mode = "auto-search" if mode != "chat-only" else "chat&plan"
         
         agent = get_intelligent_paper_search_agent()
-        result = await agent.search_papers(
+        final_result = await agent.search_papers(
             query=request.message,
             mode=workflow_mode,
             max_results=max_results,
-            force_search=False,
+            force_search=False,  # auto-search模式会自动决定是否搜索
             year_from=year_from,
             year_to=year_to,
             sources=sources,
-            allow_search=False,  # 第1阶段不自动搜索
+            allow_search=True,  # 允许工作流自主决定搜索执行
             history=history
         )
         
-        # 第一阶段响应
-        ai_response = result.get('response', '')
-        is_academic = result.get('is_academic_query', False)
-        final_result = result
-
-        # 第二阶段：当模式为 auto-search 且判定为学术 且 关键词扩展成功时，执行搜索
-        analysis_ok = bool(result.get('analysis_result'))
-        if mode != 'chat-only' and is_academic and analysis_ok:
-            search_result = await agent.search_papers(
-                query=request.message,
-                mode="auto-search",
-                max_results=max_results,
-                force_search=True,
-                year_from=year_from,
-                year_to=year_to,
-                sources=sources,
-                allow_search=True,
-                history=history
-            )
-            # 合并分析与搜索结果
-            final_result = {
-                **search_result,
-                "analysis_result": search_result.get('analysis_result') or result.get('analysis_result')
-            }
-            ai_response = final_result.get('response', ai_response)
-            is_academic = final_result.get('is_academic_query', is_academic)
-        else:
-            if mode != 'chat-only' and is_academic and not analysis_ok:
-                logger.warning("🔇 关键词扩展失败，已跳过自动搜索阶段")
+        # 获取最终响应
+        ai_response = final_result.get('response', '')
+        is_academic = final_result.get('is_academic_query', False)
 
         # 构建完整的对话历史
         updated_history = history + [
@@ -314,8 +426,34 @@ async def chat(request: ChatRequest):
             for msg in updated_history
         ]
         
-        # 计算token信息
+        # 计算token信息和性能指标
         token_info = calculate_total_tokens(updated_history)
+        total_time = time.time() - start_time
+        workflow_time = time.time() - workflow_start
+        
+        # 添加性能监控信息
+        analysis_result = final_result.get('analysis_result')
+        has_analysis = bool(analysis_result)
+        
+        token_info.update({
+            "fast_path": False,
+            "total_response_time": total_time,
+            "workflow_time": workflow_time,
+            "llm_calls": 2 if mode != 'chat-only' and is_academic and has_analysis else 1
+        })
+        
+        logger.info(f"📊 请求完成 - 总耗时: {total_time:.3f}s, 工作流耗时: {workflow_time:.3f}s, LLM调用: {token_info['llm_calls']}次")
+        
+        # 跟踪工作流性能
+        request_type = "academic_search" if is_academic else "complex_chat"
+        track_chat_performance(
+            request_type=request_type,
+            response_time=total_time,
+            llm_calls=token_info['llm_calls'],
+            is_fast_path=False,
+            workflow_time=workflow_time,
+            token_count=token_info.get('total_tokens', 0)
+        )
         
         return ChatResponse(
             response=ai_response,
@@ -593,6 +731,40 @@ async def root():
             "/models": "模型管理"
         }
     }
+
+@app.get("/performance")
+async def get_performance_stats():
+    """获取性能统计信息"""
+    try:
+        monitor = get_performance_monitor()
+        summary = monitor.get_performance_summary()
+        return {
+            "success": True,
+            "data": summary,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"获取性能统计失败: {str(e)}",
+            "data": {}
+        }
+
+@app.post("/performance/reset")
+async def reset_performance_stats():
+    """重置性能统计"""
+    try:
+        monitor = get_performance_monitor()
+        monitor.reset_stats()
+        return {
+            "success": True,
+            "message": "性能统计已重置"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"重置性能统计失败: {str(e)}"
+        }
 
 @app.get("/models")
 async def get_models():

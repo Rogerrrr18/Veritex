@@ -40,6 +40,13 @@ interface Message {
   analysisResult?: any;
   hierarchicalKeywords?: any;
   isEditing?: boolean;
+  searchResults?: any[];
+  searchMetadata?: {
+    originalQuery: string;
+    expandedKeywords: string[];
+    maxResults: number;
+    analysisResult: any;
+  };
 }
 
 interface ChatInterfaceProps {
@@ -746,6 +753,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       // 如果是学术查询并有搜索结果，保存到Search历史
       if (response.is_academic_query && response.search_results && response.search_results.length > 0) {
         saveSearchResultToHistory(userMessage.text, response);
+        // 将搜索结果数据附加到AI消息中，用于跳转按钮
+        assistantMessage.searchResults = response.search_results;
+        assistantMessage.searchMetadata = {
+          originalQuery: userMessage.text,
+          expandedKeywords: response.analysis_result?.hierarchical_keywords ? 
+            Object.values(response.analysis_result.hierarchical_keywords).flatMap((level: any) => level.terms || []) : [],
+          maxResults: response.search_results.length,
+          analysisResult: response.analysis_result
+        };
       }
 
     } catch (error: any) {
@@ -1813,41 +1829,102 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   </button>
                 )}
 
-                {/* AI消息的Copy按钮 - 右下角 */}
+                {/* AI消息的Copy按钮和View Report按钮 - 右下角 */}
                 {!message.isUser && (
-                  <button
-                    className="hover-button-copy"
-                    onClick={() => copyMessage(message.text)}
-                    style={{
-                      position: 'absolute',
-                      bottom: '-6px',
-                      right: '8px',
-                      padding: '4px 8px',
-                      borderRadius: '8px',
-                      border: 'none',
-                      backgroundColor: theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)',
-                      color: theme === 'dark' ? '#fff' : '#1f2937',
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                      fontWeight: '600',
-                      opacity: 0,
-                      transition: 'all 0.2s ease',
-                      zIndex: 10,
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                      backdropFilter: 'blur(4px)'
-                    }}
-                    title="复制消息"
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.9)' : 'rgba(255,255,255,1)';
-                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)';
-                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-                    }}
-                  >
-                    Copy
-                  </button>
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '-6px',
+                    right: '8px',
+                    display: 'flex',
+                    gap: '4px'
+                  }}>
+                    {/* View Report按钮 - 仅在auto-search模式且有搜索结果时显示 */}
+                    {llmMode === 'auto-search' && message.searchResults && message.searchResults.length > 0 && (
+                      <button
+                        className="hover-button-report"
+                        onClick={() => {
+                          navigate('/report', {
+                            state: {
+                              papers: message.searchResults,
+                              searchHistory: {
+                                id: 'chat_search_' + message.id,
+                                timestamp: message.timestamp,
+                                originalQuery: message.searchMetadata?.originalQuery || '',
+                                expandedKeywords: message.searchMetadata?.expandedKeywords || [],
+                                papers: message.searchResults,
+                                maxResults: message.searchMetadata?.maxResults || message.searchResults.length,
+                                domain: message.searchMetadata?.analysisResult?.domain || 'unknown'
+                              },
+                              expandedKeywords: message.searchMetadata?.expandedKeywords || [],
+                              originalQuery: message.searchMetadata?.originalQuery || '',
+                              maxResults: message.searchMetadata?.maxResults || message.searchResults.length
+                            }
+                          });
+                        }}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          backgroundColor: '#10b981',
+                          color: '#fff',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          opacity: 0,
+                          transition: 'all 0.2s ease',
+                          zIndex: 10,
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                          backdropFilter: 'blur(4px)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '2px'
+                        }}
+                        title={`查看文献报告 (${message.searchResults.length}篇)`}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#059669';
+                          e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = '#10b981';
+                          e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                        }}
+                      >
+                        📋 Report
+                      </button>
+                    )}
+                    
+                    {/* Copy按钮 */}
+                    <button
+                      className="hover-button-copy"
+                      onClick={() => copyMessage(message.text)}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        backgroundColor: theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)',
+                        color: theme === 'dark' ? '#fff' : '#1f2937',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        opacity: 0,
+                        transition: 'all 0.2s ease',
+                        zIndex: 10,
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        backdropFilter: 'blur(4px)'
+                      }}
+                      title="复制消息"
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.9)' : 'rgba(255,255,255,1)';
+                        e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)';
+                        e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                      }}
+                    >
+                      Copy
+                    </button>
+                  </div>
                 )}
                 
                 
@@ -2177,11 +2254,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             opacity: 1 !important;
           }
           
+          .message-container:hover .hover-button-report {
+            opacity: 1 !important;
+          }
+          
           .user-message:hover .hover-button-edit {
             opacity: 1 !important;
           }
           
           .ai-message:hover .hover-button-copy {
+            opacity: 1 !important;
+          }
+          
+          .ai-message:hover .hover-button-report {
             opacity: 1 !important;
           }
           
@@ -2196,7 +2281,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             }
             
             .message-container .hover-button-edit,
-            .message-container .hover-button-copy {
+            .message-container .hover-button-copy,
+            .message-container .hover-button-report {
               opacity: 1 !important; /* 移动端始终显示按钮 */
             }
           }

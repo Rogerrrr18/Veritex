@@ -18,13 +18,17 @@
 同时识别讨论中的关键研究要点，为可能的文献搜索做准备：
 ```json
 {{
-  "discussion_keywords": {{
-    "core_concepts": ["key English concepts from discussion"],
-    "research_areas": ["relevant English research areas"],
-    "methodologies": ["relevant English methodologies"],
-    "applications": ["relevant English applications"]
+  "original_query": "{user_query}",
+  "core_concepts": ["主要概念"],
+  "hierarchical_keywords": {{
+    "exact_terms": {{"terms": ["精确术语"], "weight": 1.0}},
+    "core_synonyms": {{"terms": ["核心同义词"], "weight": 0.9}},
+    "related_concepts": {{"terms": ["相关概念"], "weight": 0.7}},
+    "research_areas": {{"terms": ["研究领域"], "weight": 0.8}}
   }},
-  "search_suggestions": ["specific English search terms if user wants literature"]
+  "domain": "学术领域",
+  "optimized_boolean_query": "布尔查询",
+  "search_suggestions": ["specific search terms if user wants literature"]
 }}
 ```
 
