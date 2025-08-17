@@ -181,17 +181,33 @@ class IntelligentPaperSearchAgent:
             return "chat_conversation"
     
     async def chat_conversation_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """闲聊对话处理节点"""
+        """优化的闲聊对话处理节点 - 减少LLM调用"""
         try:
             user_message = state.get("user_message", "")
             print(f"💬 闲聊对话处理: {user_message}")
             
-            # 使用简化的prompt工具函数
+            # 🚀 优化策略：对常见闲聊使用预定义回复，减少LLM调用
+            quick_response = self._get_quick_chat_response(user_message)
+            if quick_response:
+                print(f"⚡ 使用快速闲聊回复，跳过LLM调用")
+                from langchain_core.messages import AIMessage
+                return {
+                    "current_step": "completed",
+                    "is_completed": True,
+                    "analysis_result": None,
+                    "is_academic_query": False,
+                    "need_search_strategy": False,
+                    "messages": [AIMessage(content=quick_response)],
+                    "fast_chat": True  # 标记为快速聊天
+                }
+            
+            # 对复杂闲聊才使用LLM
+            print(f"🤖 复杂闲聊，使用LLM生成回复")
             from prompt_utils import get_chat_conversation_prompt
             prompt = get_chat_conversation_prompt(user_message)
             
-            # 调用LLM生成对话回复
-            response = await self.llm.simple_chat(prompt=prompt)
+            # 调用LLM生成对话回复（设置较短超时）
+            response = await self.llm.simple_chat(prompt=prompt, timeout=45.0)
             
             # 明确导入AIMessage避免作用域问题
             from langchain_core.messages import AIMessage
@@ -202,7 +218,8 @@ class IntelligentPaperSearchAgent:
                 "analysis_result": None,
                 "is_academic_query": False,
                 "need_search_strategy": False,
-                "messages": [AIMessage(content=response)]
+                "messages": [AIMessage(content=response)],
+                "fast_chat": False  # 标记为LLM聊天
             }
             
         except Exception as e:
@@ -216,6 +233,41 @@ class IntelligentPaperSearchAgent:
                 "messages": [AIMessage(content="抱歉，我现在无法正常对话，请稍后重试。")]
             }
     
+    def _get_quick_chat_response(self, user_message: str) -> Optional[str]:
+        """快速闲聊回复生成器 - 避免LLM调用"""
+        message_lower = user_message.lower().strip()
+        
+        # 预定义的快速回复映射
+        quick_responses = {
+            "你好": "你好！我是Paper God，一个学术文献搜索助手。有什么学术问题可以帮您解答吗？",
+            "hello": "Hello! I'm Paper God, an academic literature search assistant. How can I help you with academic research?",
+            "hi": "Hi there! I'm here to help you find academic papers and research. What are you looking for?",
+            "谢谢": "不客气！如果您需要查找学术文献或有其他问题，随时可以告诉我。",
+            "thank": "You're welcome! Feel free to ask if you need help with academic research.",
+            "感谢": "不用谢！我随时准备为您的学术研究提供帮助。",
+            "再见": "再见！下次有学术问题欢迎随时找我。",
+            "bye": "Goodbye! Feel free to come back anytime for academic research help.",
+            "拜拜": "拜拜！期待下次为您提供学术搜索服务。",
+            "天气": "我是专注于学术文献搜索的AI助手，不太了解天气情况。不过我可以帮您查找相关的学术论文！",
+            "怎么用": "我是学术搜索助手，您可以直接告诉我您要查找的研究主题，我会帮您搜索相关的学术论文。",
+            "你是谁": "我是Paper God，专门帮助研究者查找和分析学术文献的AI助手。您有什么学术问题需要帮助吗？",
+            "什么功能": "我的主要功能是帮您搜索学术论文、扩展关键词、分析研究趋势。您可以直接告诉我研究主题，我来帮您找相关文献！"
+        }
+        
+        # 检查是否匹配预定义回复
+        for keyword, response in quick_responses.items():
+            if keyword in message_lower:
+                return response
+        
+        # 检查是否是简单的肯定/否定回复
+        if message_lower in ["是", "好", "嗯", "ok", "好的", "行", "可以"]:
+            return "好的！有什么学术问题我可以帮您解答吗？"
+        
+        if message_lower in ["不", "没有", "算了", "不用", "no"]:
+            return "好的，如果之后有学术研究需要帮助，随时可以找我！"
+        
+        return None  # 无法快速处理，需要LLM
+    
     async def literature_search_node(self, state: PaperSearchState) -> Dict[str, Any]:
         """文献搜索处理节点"""
         try:
@@ -223,12 +275,39 @@ class IntelligentPaperSearchAgent:
             mode = state.get("mode", "auto-search")
             print(f"📚 文献搜索处理: {user_message} (模式: {mode})")
             
-            # 使用简化的prompt工具函数
+            # 使用完整的文献搜索prompt（支持模式化说明）
             from prompt_utils import get_literature_search_prompt
             prompt = get_literature_search_prompt(user_message, mode=mode)
             
-            # 调用LLM进行关键词扩展和搜索分析
-            response = await self.llm.simple_chat(prompt=prompt)
+            # 调用LLM进行关键词扩展和搜索分析（增加超时时间）
+            response = await self.llm.simple_chat(prompt=prompt, timeout=60.0)
+            
+            # 验证LLM响应
+            if not response or len(response.strip()) < 20:
+                print(f"⚠️ LLM响应过短或为空，长度: {len(response) if response else 0}")
+                print(f"⚠️ 使用回退机制处理查询: {user_message}")
+                
+                # 提供基本的关键词提取作为回退
+                fallback_analysis = {
+                    "original_query": user_message,
+                    "core_concepts": [user_message.strip()],
+                    "domain": "学术研究",
+                    "hierarchical_keywords": {
+                        "exact_terms": {"terms": [user_message.strip()], "weight": 1.0}
+                    }
+                }
+                
+                return {
+                    "current_step": "search_ready",
+                    "is_completed": False,
+                    "analysis_result": fallback_analysis,
+                    "is_academic_query": True,
+                    "need_search_strategy": True,
+                    "mode": mode,
+                    "messages": [AIMessage(content=f"已为您分析查询：{user_message}，正在准备搜索...")],
+                    "should_search": mode == "auto-search",
+                    "is_fallback": True
+                }
             
             # 解析LLM响应中的JSON部分（如果有）
             keywords_analysis = self._extract_json_analysis(response)
@@ -269,8 +348,36 @@ class IntelligentPaperSearchAgent:
             from prompt_utils import get_academic_discussion_prompt
             prompt = get_academic_discussion_prompt(user_message, mode=mode)
             
-            # 调用LLM进行学术讨论
-            response = await self.llm.simple_chat(prompt=prompt)
+            # 调用LLM进行学术讨论（设置适中超时）
+            response = await self.llm.simple_chat(prompt=prompt, timeout=45.0)
+            
+            # 验证LLM响应
+            if not response or len(response.strip()) < 20:
+                print(f"⚠️ 学术讨论LLM响应过短或为空，长度: {len(response) if response else 0}")
+                print(f"⚠️ 使用回退机制提供基本讨论: {user_message}")
+                
+                # 提供基本的学术讨论回退
+                fallback_response = f"""关于"{user_message}"这个学术问题，这是一个值得深入探讨的研究方向。
+
+🎓 **学术观点**：
+这个领域涉及多个理论层面和实践应用，需要综合考虑相关的研究方法和技术发展。
+
+📚 **研究建议**：
+建议从理论基础、方法论和实际应用三个角度进行深入研究。
+
+如果您需要更详细的文献资料，我可以为您搜索相关的学术论文。"""
+                
+                return {
+                    "current_step": "discussion_completed",
+                    "is_completed": True,
+                    "analysis_result": None,
+                    "is_academic_query": True,
+                    "need_search_strategy": False,
+                    "mode": mode,
+                    "messages": [AIMessage(content=fallback_response)],
+                    "search_suggestion": False,
+                    "is_fallback": True
+                }
             
             # 解析可能的关键词信息
             keywords_analysis = self._extract_json_analysis(response)
