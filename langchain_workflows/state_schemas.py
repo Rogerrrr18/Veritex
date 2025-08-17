@@ -36,6 +36,7 @@ class PaperSearchState(TypedDict):
     need_search_strategy: Optional[bool]
     force_search: Optional[bool]  # 强制执行搜索标志
     allow_search: Optional[bool]  # 是否允许在本轮流程中执行搜索
+    should_search: Optional[bool]  # auto-search模式的搜索标记
     
     # 搜索相关
     search_keywords: Optional[List[str]]
@@ -93,6 +94,7 @@ def create_initial_state(
         need_search_strategy=None,
         force_search=force_search,
         allow_search=allow_search,
+        should_search=None,
         search_keywords=None,
         search_results=None,
         error_message=None,

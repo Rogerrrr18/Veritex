@@ -31,6 +31,7 @@ interface ChatHistory {
   lastActivity: number;
 }
 import { UserStorage, DataMigration, USER_DATA_KEYS, GLOBAL_DATA_KEYS } from './utils/userStorage';
+import { calculateTokenUsage, MAX_TOKENS } from './utils/tokenCounter';
 
 interface Message {
   id: string;
@@ -138,6 +139,41 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     
     // 保存完整对话会话到统一历史记录
     saveChatSessionToHistory(messages);
+  };
+
+  // 打开关键词云并加载指定消息的历史关键词
+  const handleShowKeywords = (message: Message) => {
+    const hk = message.hierarchicalKeywords 
+      || message.searchMetadata?.analysisResult?.hierarchical_keywords 
+      || null;
+    if (!hk) {
+      return;
+    }
+    setCurrentAnalysis({ hierarchical_keywords: hk });
+    setIsKeywordPanelCollapsed(false);
+    setKeywordPanelWidth((w) => (w < 300 ? 300 : w));
+  };
+
+  // 超过token阈值时的引导（4000 tokens）
+  const { totalTokens } = calculateTokenUsage(messages);
+  const isContextOverloaded = totalTokens >= MAX_TOKENS;
+
+  const handleStartNewTopic = () => {
+    // 清除当前聊天并开始新的搜索
+    UserStorage.removeUserData(CHAT_STORAGE_KEY);
+    UserStorage.removeUserData(CHAT_ANALYSIS_KEY);
+    const welcomeMessage: Message = {
+      id: 'welcome',
+      text: '👋 您好！我是Veritex智能助手。您可以：\n\n📚 发送学术查询，我会为您分析并扩展关键词\n🔍 直接搜索文献\n💬 与我对话交流学术问题\n\n请输入您的问题或研究主题吧！',
+      isUser: false,
+      timestamp: Date.now()
+    };
+    const resetMessages = [welcomeMessage];
+    setMessages(resetMessages);
+    setCurrentAnalysis(null);
+    saveChatHistory(resetMessages);
+    // 滚动到底部
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 0);
   };
   
   // 会话级别的聊天记录保存（整个对话会话）
@@ -289,8 +325,55 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       console.log('📥 从用户隔离存储加载聊天记录')
       const savedMessages = UserStorage.getUserData(CHAT_STORAGE_KEY);
       const savedAnalysis = UserStorage.getUserData(CHAT_ANALYSIS_KEY);
+      
+      let messages: Message[] = savedMessages ? JSON.parse(savedMessages) : [];
+      
+      // 🔧 数据完整性检查和修复
+      if (messages.length > 0) {
+        console.log('🔍 检查消息数据完整性...')
+        let hasRepairs = false;
+        
+        messages = messages.map((message) => {
+          // 检查搜索结果相关的消息是否完整
+          if (!message.isUser && message.text && message.text.includes('为您找到了') && !message.searchResults) {
+            console.log(`⚠️ 发现消息 ${message.id} 缺少搜索结果数据，尝试从搜索历史恢复...`)
+            
+            // 尝试从搜索历史中恢复数据
+            try {
+              const searchHistory = JSON.parse(UserStorage.getUserData(USER_DATA_KEYS.SEARCH_HISTORY) || '[]');
+              // 根据时间戳匹配最近的搜索记录
+              const matchingSearch = searchHistory.find((search: any) => 
+                Math.abs(search.timestamp - message.timestamp) < 60000 // 1分钟内的搜索
+              );
+              
+              if (matchingSearch) {
+                console.log(`✅ 从搜索历史恢复了消息 ${message.id} 的搜索结果`)
+                message.searchResults = matchingSearch.papers || [];
+                message.searchMetadata = {
+                  originalQuery: matchingSearch.originalQuery || '',
+                  expandedKeywords: matchingSearch.expandedKeywords || [],
+                  maxResults: matchingSearch.maxResults || 0,
+                  analysisResult: matchingSearch.analysisResult || null
+                };
+                hasRepairs = true;
+              }
+            } catch (repairError) {
+              console.warn('搜索结果数据恢复失败:', repairError);
+            }
+          }
+          
+          return message;
+        });
+        
+        // 如果有修复，重新保存消息
+        if (hasRepairs) {
+          console.log('💾 保存修复后的消息数据')
+          UserStorage.setUserData(CHAT_STORAGE_KEY, JSON.stringify(messages));
+        }
+      }
+      
       return {
-        messages: savedMessages ? JSON.parse(savedMessages) : [],
+        messages,
         analysis: savedAnalysis ? JSON.parse(savedAnalysis) : null
       };
     } catch (error) {
@@ -740,11 +823,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         hierarchicalKeywords
       };
 
-      const finalMessages = [...newMessages, assistantMessage];
-      setMessages(finalMessages);
-      saveChatHistory(finalMessages, analysisResult);
-
-      // 如果是学术查询并有搜索结果，保存到Search历史
+      // 如果是学术查询并有搜索结果，将搜索结果数据附加到AI消息中
       if (response.is_academic_query && response.search_results && response.search_results.length > 0) {
         saveSearchResultToHistory(userMessage.text, response);
         // 将搜索结果数据附加到AI消息中，用于跳转按钮
@@ -757,6 +836,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           analysisResult: response.analysis_result
         };
       }
+
+      const finalMessages = [...newMessages, assistantMessage];
+      setMessages(finalMessages);
+      saveChatHistory(finalMessages, analysisResult);
 
     } catch (error: any) {
       console.error('Chat error:', error);
@@ -1811,7 +1894,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   </button>
                 )}
 
-                {/* AI消息的Copy按钮和View Report按钮 - 右下角 */}
+                {/* AI消息的操作按钮 - 右下角 */}
                 {!message.isUser && (
                   <div style={{
                     position: 'absolute',
@@ -1820,8 +1903,57 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                     display: 'flex',
                     gap: '4px'
                   }}>
+                    {/* Keywords 按钮：加载该消息的历史关键词到右侧云图 */}
+                    {(message.hierarchicalKeywords || message.searchMetadata?.analysisResult?.hierarchical_keywords) && (
+                      <button
+                        className="hover-button-keywords"
+                        onClick={() => handleShowKeywords(message)}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          backgroundColor: theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)',
+                          color: theme === 'dark' ? '#fff' : '#1f2937',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          opacity: 0,
+                          transition: 'all 0.2s ease',
+                          zIndex: 10,
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                          backdropFilter: 'blur(4px)'
+                        }}
+                        title="加载该回复的历史关键词"
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.9)' : 'rgba(255,255,255,1)';
+                          e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)';
+                          e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                        }}
+                      >
+                        Keywords
+                      </button>
+                    )}
                     {/* View Report按钮 - 仅在auto-search模式且有搜索结果时显示 */}
-                    {llmMode === 'auto-search' && message.searchResults && message.searchResults.length > 0 && (
+                    {(() => {
+                      const hasSearchResults = message.searchResults && message.searchResults.length > 0;
+                      const shouldShow = llmMode === 'auto-search' && hasSearchResults;
+                      
+                      // 调试信息（仅在开发环境）
+                      if (process.env.NODE_ENV === 'development' && !message.isUser) {
+                        console.log(`View Report按钮显示检查 [${message.id}]:`, {
+                          llmMode,
+                          hasSearchResults,
+                          searchResultsLength: message.searchResults?.length || 0,
+                          shouldShow,
+                          messageText: message.text.substring(0, 50) + '...'
+                        });
+                      }
+                      
+                      return shouldShow;
+                    })() && (
                       <button
                         className="hover-button-report"
                         onClick={() => {
@@ -1861,7 +1993,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                           alignItems: 'center',
                           gap: '2px'
                         }}
-                        title={`查看文献报告 (${message.searchResults.length}篇)`}
+                        title={`查看文献报告 (${message.searchResults?.length || 0}篇)`}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.backgroundColor = '#059669';
                           e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
@@ -1989,6 +2121,43 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
 
           <div ref={messagesEndRef} />
         </div>
+
+        {/* 当上下文超过阈值时的引导提示 */}
+        {isContextOverloaded && (
+          <div style={{
+            margin: '8px 20px 0 20px',
+            padding: '10px 12px',
+            border: '1px solid #ef4444',
+            borderRadius: 8,
+            background: theme === 'dark' ? 'rgba(239,68,68,0.08)' : 'rgba(239,68,68,0.08)',
+            color: theme === 'dark' ? '#fecaca' : '#b91c1c',
+            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12
+          }}>
+            <div>
+              ⚠️ 当前对话已超过 4000 tokens，建议开启新话题以避免上下文压力。<br/>
+              ⚠️ Context exceeds 4k tokens. Consider starting a new topic to reduce context pressure.
+            </div>
+            <button
+              onClick={handleStartNewTopic}
+              style={{
+                padding: '6px 10px',
+                borderRadius: 6,
+                border: '1px solid #ef4444',
+                background: theme === 'dark' ? 'rgba(239,68,68,0.12)' : '#fee2e2',
+                color: theme === 'dark' ? '#fecaca' : '#b91c1c',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600
+              }}
+            >
+              Start new topic
+            </button>
+          </div>
+        )}
 
         {/* 输入区域 */}
         <div style={{

@@ -413,7 +413,7 @@ function HomePage() {
       {/* 主体内容整体左移 */}
       <main className="main" style={{ justifyContent: 'flex-start', paddingLeft: '7vw' }}>
         <section className="hero">
-          <h1 className="hero-title">Smart Academic Literature Search & Management Platform</h1>
+          <h1 className="hero-title">Smart Academic<br/>Literature Search &<br/>Management Platform</h1>
           <p className="hero-desc">
             Veritex 依托大模型与智能算法，支持关键词扩展、批量论文检索、摘要智能提取与报告导出，帮你快速定位当前的研究进展。
           </p>
@@ -665,11 +665,11 @@ function ReportPage() {
       } else if (Array.isArray(authors)) {
         authorArray = authors.filter(a => a && typeof a === 'string' && a.trim().length > 0)
       } else {
-        return 'Unknown Author'
+        return ''
       }
 
       if (authorArray.length === 0) {
-        return 'Unknown Author'
+        return ''
       }
 
       // 格式化作者名称（处理常见的姓名格式）
@@ -717,7 +717,7 @@ function ReportPage() {
       }
     } catch (error) {
       console.warn('Author formatting error:', error)
-      return typeof authors === 'string' ? authors : 'Unknown Author'
+      return typeof authors === 'string' ? authors : ''
     }
   }
 
@@ -908,11 +908,78 @@ function FeaturesPage() {
       <h1 style={{ fontSize: '3rem', fontWeight: 'bold', marginBottom: 0, marginTop: 0, letterSpacing: 1, lineHeight: 1.1, textAlign: 'center' }}>Features</h1>
       <div style={{ maxWidth: 1100, width: '100%', margin: '0 auto', marginTop: 16, textAlign: 'center' }}>
         <h2 style={{ fontWeight: 700, fontSize: '1.5rem', margin: '32px 0 12px 0', color: '#fff' }}>
-          Veritex - 功能特性
+          Veritex - 功能特性 / Product Features
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '1.15rem', margin: '0 auto', maxWidth: 900, lineHeight: 1.7 }}>
-          功能特性页面正在建设中，敬请期待更多强大功能的发布！
+        <p style={{ color: '#a1a1aa', fontSize: '1.05rem', margin: '0 auto', maxWidth: 900, lineHeight: 1.8 }}>
+          面向学术研究的智能文献检索与管理平台，融合关键词扩展、并行检索、学术对话与报告导出能力。<br />
+          An AI-powered platform for academic literature search and management, combining keyword expansion, parallel search, academic discussion, and reporting.
         </p>
+        <div style={{ marginTop: 28 }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: 16,
+            alignItems: 'stretch'
+          }}>
+            {/* 1. 关键词扩展 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>🔍 Intelligent Keyword Expansion</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>Multi-level expansion: exact terms, core synonyms, related and context terms for better recall and precision.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>多层级关键词扩展：精确术语/核心同义/相关概念/上下文术语，兼顾召回与精度。</div>
+            </div>
+
+            {/* 2. 并行检索 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>⚡ Multi-source Parallel Search</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>Parallel engine with filters (year, source, count) improves speed and coverage.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>多源并行检索，支持年份/来源/数量过滤，兼顾速度与覆盖面。</div>
+            </div>
+
+            {/* 3. 学术讨论 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>🎓 Academic Discussion Mode</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>Structured reasoning, concept clarification, and search-cue extraction from dialogue.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>结构化学术讨论，澄清概念与研究脉络，并提炼检索线索。</div>
+            </div>
+
+            {/* 4. 模式切换 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>🧭 Auto-search & Chat-Plan</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>One-click auto-search or plan-then-search; flexible workflow for different needs.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>自动检索一键完成，或先讨论后检索（Chat & Plan），流程灵活可控。</div>
+            </div>
+
+            {/* 5. 缓存与性能 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>🚀 Smart Caching & Performance</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>LLM and search result caching (TTL, size limits) to reduce latency and cost.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>LLM与检索结果智能缓存（TTL/容量控制），降低延迟与成本。</div>
+            </div>
+
+            {/* 6. 报告导出 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>📋 Report Export</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>Export selected results to CSV with authors, year, citations, abstract and links.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>支持导出 CSV（作者/年份/引用/摘要/链接），方便复用与分享。</div>
+            </div>
+
+            {/* 7. 数据隔离与安全 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>🔐 Data Isolation (Supabase RLS)</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>Row Level Security (RLS) ensures strict per-user data isolation and safety.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>基于 Supabase RLS 的行级安全，严格的用户数据隔离与访问控制。</div>
+            </div>
+
+            
+
+            {/* 10. 关键词云交互 */}
+            <div style={{ background: '#111', border: '1px solid #333', borderRadius: 12, padding: 16, textAlign: 'left' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>☁️ Interactive Keyword Cloud</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6 }}>Drag to refine keywords and re-run searches with one click.</div>
+              <div style={{ color: '#a1a1aa', fontSize: 14, lineHeight: 1.6, marginTop: 6 }}>可拖拽的关键词云，交互式微调与一键重搜。</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -921,93 +988,7 @@ function FeaturesPage() {
 // Pricing页面
 function PricingPage() {
   return (
-    <div className="pricing-page" style={{ minHeight: '100vh', background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: 40 }}>
-      <h1 style={{ fontSize: '3rem', fontWeight: 'bold', marginBottom: 0, marginTop: 0, letterSpacing: 1, lineHeight: 1.1, textAlign: 'center' }}>Pricing</h1>
-      <div style={{ maxWidth: 1100, width: '100%', margin: '0 auto', marginTop: 16, textAlign: 'center' }}>
-        <h2 style={{ fontWeight: 700, fontSize: '1.5rem', margin: '32px 0 12px 0', color: '#fff' }}>
-          Veritex - 定价方案
-        </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '1.15rem', margin: '0 auto', maxWidth: 900, lineHeight: 1.7, marginBottom: '40px' }}>
-          在AI平权的时代，我们相信每个人都应该有机会接近真理，建立自己的思考体系。项目初期将全面开放，永久免费。
-        </p>
-        
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 40 }}>
-          {/* 免费方案卡片 */}
-          <div style={{ 
-            background: 'linear-gradient(135deg, rgba(59, 176, 230, 0.1), rgba(16, 185, 129, 0.1))',
-            border: '2px solid rgba(59, 176, 230, 0.3)',
-            borderRadius: '20px',
-            padding: '40px 30px',
-            maxWidth: '500px',
-            width: '100%',
-            position: 'relative',
-            boxShadow: '0 8px 32px rgba(59, 176, 230, 0.2)'
-          }}>
-            <div style={{ 
-              position: 'absolute',
-              top: '-12px',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              background: '#3bb0e6',
-              color: '#fff',
-              padding: '6px 20px',
-              borderRadius: '20px',
-              fontSize: '14px',
-              fontWeight: '600'
-            }}>
-              推荐方案
-            </div>
-            
-            <h3 style={{ fontSize: '2rem', fontWeight: 'bold', margin: '20px 0 10px 0', color: '#fff' }}>免费版</h3>
-            <div style={{ fontSize: '3rem', fontWeight: 'bold', color: '#3bb0e6', margin: '10px 0' }}>
-              ¥0 <span style={{ fontSize: '1rem', color: '#a1a1aa', fontWeight: 'normal' }}>/永久</span>
-            </div>
-            
-            <ul style={{ 
-              listStyle: 'none', 
-              padding: 0, 
-              margin: '30px 0', 
-              textAlign: 'left',
-              color: '#fff',
-              fontSize: '1.1rem',
-              lineHeight: '2'
-            }}>
-              <li style={{ marginBottom: '12px' }}>✅ 无限制关键词扩展</li>
-              <li style={{ marginBottom: '12px' }}>✅ 批量论文检索</li>
-              <li style={{ marginBottom: '12px' }}>✅ 智能摘要提取</li>
-              <li style={{ marginBottom: '12px' }}>✅ 报告导出功能</li>
-              <li style={{ marginBottom: '12px' }}>✅ 多学科支持</li>
-              <li style={{ marginBottom: '12px' }}>✅ 云端数据同步</li>
-            </ul>
-            
-            <button style={{
-              width: '100%',
-              padding: '16px',
-              background: '#3bb0e6',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '12px',
-              fontSize: '18px',
-              fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'all 0.3s ease'
-            }}
-            onMouseEnter={(e) => (e.target as HTMLButtonElement).style.background = '#2da5d9'}
-            onMouseLeave={(e) => (e.target as HTMLButtonElement).style.background = '#3bb0e6'}>
-              立即开始使用
-            </button>
-          </div>
-          
-          {/* 未来计划 */}
-          <div style={{ textAlign: 'center', marginTop: '20px' }}>
-            <p style={{ color: '#a1a1aa', fontSize: '1rem', lineHeight: 1.8 }}>
-              我们承诺在项目发展过程中始终保持核心功能免费。<br/>
-              未来可能推出的高级功能将以可选付费形式提供，但基础研究功能永远免费。
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
+    <div className="pricing-page" style={{ minHeight: '100vh', background: '#000', color: '#fff' }} />
   )
 }
 

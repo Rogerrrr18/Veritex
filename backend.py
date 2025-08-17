@@ -132,23 +132,9 @@ def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
         return formatted_paper
         
     except Exception as e:
-        logger.error(f"论文格式化失败: {e}")
-        # 返回最小化的安全格式
-        return {
-            "title": str(paper) if hasattr(paper, '__str__') else "格式化失败的论文",
-            "authors": [],
-            "abstract": "",
-            "year": None,
-            "journal": "",
-            "url": "",
-            "doi": None,
-            "citations": 0,
-            "source": "unknown",
-            "relevance_score": 0.0,
-            "pmid": None,
-            "keywords": None,
-            "_formatting_error": str(e)
-        }
+        logger.error(f"论文格式化失败，跳过该论文: {e}")
+        # 格式化失败的论文直接跳过，不返回虚假数据
+        return None
 
 """作者数据格式化方法已移除"""
 
@@ -539,21 +525,23 @@ async def search_papers_api(req: SearchRequest):
                 
                 logger.info(f"📚 搜索完成，获得 {len(papers)} 篇论文")
                 
-                # 格式化结果
+                # 格式化结果 - 过滤缺少关键信息的论文
                 formatted_papers = []
                 for paper in papers:
-                    formatted_papers.append({
-                        "title": paper.title,
-                        "authors": paper.authors,
-                        "abstract": paper.abstract,
-                        "year": paper.year,
-                        "journal": paper.journal, 
-                        "url": paper.url,
-                        "doi": paper.doi,
-                        "citations": paper.citations,
-                        "source": paper.source,
-                        "relevance_score": paper.relevance_score
-                    })
+                    # 只有标题不为空的论文才被包含
+                    if paper.title and paper.title.strip():
+                        formatted_papers.append({
+                            "title": paper.title,
+                            "authors": paper.authors,
+                            "abstract": paper.abstract,
+                            "year": paper.year,
+                            "journal": paper.journal, 
+                            "url": paper.url,
+                            "doi": paper.doi,
+                            "citations": paper.citations,
+                            "source": paper.source,
+                            "relevance_score": paper.relevance_score
+                        })
                 
                 await search_engine.close()
                 
@@ -703,7 +691,7 @@ async def health_check():
                 "available_models": model_info.get("available_models", []),
                 "model_name": model_info.get("model_name")
             },
-            "data_sources": ["arxiv", "google_scholar", "crossref", "pubmed"]
+            "data_sources": ["arxiv", "scholarly", "semantic_scholar"]
         }
     except Exception as e:
         return {

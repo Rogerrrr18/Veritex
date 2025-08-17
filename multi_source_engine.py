@@ -23,13 +23,18 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 获取配置
+# 获取配置 - 只启用指定的三个数据源
 SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "true").lower() == "true"
-# 临时禁用Google Scholar以避免CAPTCHA问题
-GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "false").lower() == "true"  
-CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "true").lower() == "true"
+# 启用ScholarPy（基于scholar.py的Google Scholar访问）
+SCHOLAR_PY_ENABLED = os.getenv("SCHOLAR_PY_ENABLED", "true").lower() == "true"  
+# 暂时禁用其他数据源
+CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "false").lower() == "true"
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
-PUBMED_ENABLED = PUBMED_API_KEY and PUBMED_API_KEY.lower() != "disabled"
+PUBMED_ENABLED = False  # 暂时禁用
+
+# 兼容性支持：SCHOLARLY_ENABLED 映射到 SCHOLAR_PY_ENABLED
+if os.getenv("SCHOLARLY_ENABLED"):
+    SCHOLAR_PY_ENABLED = os.getenv("SCHOLARLY_ENABLED", "true").lower() == "true"
 
 @dataclass
 class Paper:
@@ -107,9 +112,7 @@ class SemanticScholarAPI:
             try:
                 authors = []
                 if paper_data.get('authors'):
-                    authors = [author.get('name', '未知作者') for author in paper_data['authors']]
-                if not authors:
-                    authors = ['未知作者']
+                    authors = [author.get('name', '') for author in paper_data['authors'] if author.get('name')]
                 
                 # 提取DOI
                 doi = None
@@ -119,14 +122,16 @@ class SemanticScholarAPI:
                 
                 # 期刊信息
                 journal_info = paper_data.get('journal', {})
-                journal = journal_info.get('name', 'Semantic Scholar') if journal_info else 'Semantic Scholar'
+                journal = journal_info.get('name', '') if journal_info else ''
                 
-                # 安全获取标题和摘要
-                title = paper_data.get('title') or '无标题'
-                title = title.strip() if isinstance(title, str) else '无标题'
+                # 安全获取标题
+                title = paper_data.get('title', '').strip() if paper_data.get('title') else ''
                 
-                abstract = paper_data.get('abstract') or '暂无摘要'
-                abstract = abstract.strip() if isinstance(abstract, str) else '暂无摘要'
+                # 跳过没有标题的论文
+                if not title:
+                    continue
+                
+                abstract = paper_data.get('abstract', '').strip() if paper_data.get('abstract') else ''
                 
                 paper = Paper(
                     title=title,
@@ -250,8 +255,308 @@ class ArxivAPI:
         if self.session and not self.session.closed:
             await self.session.close()
 
-class GoogleScholarAPI:
-    """Google Scholar API客户端 - 使用scholarly库，带反CAPTCHA机制"""
+class ScholarPyAPI:
+    """基于scholar.py的Google Scholar API客户端 - 简化且稳定的实现"""
+    
+    def __init__(self):
+        import urllib.request
+        import urllib.parse
+        from http.cookiejar import MozillaCookieJar
+        
+        self.base_url = "https://scholar.google.com/scholar"
+        # 使用scholar.py的User-Agent策略
+        self.user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:27.0) Gecko/20100101 Firefox/27.0'
+        
+        # Cookie管理 - 关键的反CAPTCHA机制
+        self.cookie_file = os.path.join(os.path.dirname(__file__), '.scholar_cookies.txt')
+        self.cjar = MozillaCookieJar()
+        
+        # 加载已存在的cookies
+        if os.path.exists(self.cookie_file):
+            try:
+                self.cjar.load(self.cookie_file, ignore_discard=True)
+                logger.info("✅ 已加载Google Scholar cookies")
+            except Exception as e:
+                logger.warning(f"⚠️ 无法加载cookies: {e}")
+                self.cjar = MozillaCookieJar()
+        
+        # 创建opener
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cjar))
+        
+        # 延迟控制 - 极保守的策略
+        self.last_request_time = 0
+        self.min_delay = 20.0  # 极保守的延迟策略，20秒间隔
+        self.request_count = 0
+        self.session_start = time.time()
+        
+        # 错误控制
+        self.consecutive_failures = 0
+        self.max_failures = 1  # 降低失败阈值，更快触发禁用
+        self.is_temporarily_disabled = False
+        self.disable_until = 0
+        
+    async def search(self, query: str, limit: int = 20) -> List[Paper]:
+        """使用scholar.py机制搜索Google Scholar，带重试机制"""
+        # 检查是否临时禁用
+        if self._check_if_disabled():
+            logger.info("⏸️ ScholarPy当前临时禁用中，跳过搜索")
+            return []
+        
+        max_retries = 2  # 最大重试次数
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                # 延迟控制
+                await self._apply_delay()
+                
+                # 构建查询URL
+                url = self._build_query_url(query, limit)
+                if retry_count == 0:
+                    logger.info(f"🔍 ScholarPy搜索: {query}")
+                else:
+                    logger.info(f"🔄 ScholarPy重试搜索: {query} (第{retry_count}次重试)")
+                
+                # 发送请求
+                html_content = self._get_http_response(url)
+                if html_content is None:
+                    # 如果是429错误，增加重试延迟
+                    if retry_count < max_retries:
+                        retry_delay = 30 + (retry_count * 20)  # 30s, 50s递增延迟
+                        logger.warning(f"⏳ ScholarPy请求失败，{retry_delay}秒后重试")
+                        await asyncio.sleep(retry_delay)
+                        retry_count += 1
+                        continue
+                    else:
+                        self._handle_failure()
+                        return []
+                
+                # 保存cookies
+                self._save_cookies()
+                
+                # 解析结果
+                papers = self._parse_results(html_content)
+                
+                # 重置失败计数
+                self.consecutive_failures = 0
+                
+                logger.info(f"✅ ScholarPy返回 {len(papers)} 篇论文")
+                return papers
+                
+            except Exception as e:
+                logger.error(f"ScholarPy搜索错误: {e}")
+                if retry_count < max_retries:
+                    retry_delay = 20 + (retry_count * 15)
+                    logger.warning(f"⏳ 搜索异常，{retry_delay}秒后重试")
+                    await asyncio.sleep(retry_delay)
+                    retry_count += 1
+                    continue
+                else:
+                    self._handle_failure()
+                    return []
+        
+        return []
+    
+    def _build_query_url(self, query: str, limit: int) -> str:
+        """构建Google Scholar查询URL"""
+        import urllib.parse
+        
+        params = {
+            'q': query,
+            'hl': 'en',
+            'as_sdt': '0,5',  # 包括专利和引用
+            'num': min(limit, 20)  # Google Scholar限制
+        }
+        
+        url = f"{self.base_url}?{urllib.parse.urlencode(params)}"
+        return url
+    
+    def _get_http_response(self, url: str) -> str:
+        """发送HTTP请求获取响应，专门处理429错误"""
+        import urllib.request
+        import urllib.error
+        
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': self.user_agent})
+            response = self.opener.open(req, timeout=15)
+            
+            if response.getcode() == 200:
+                return response.read().decode('utf-8')
+            elif response.getcode() == 429:
+                logger.error(f"ScholarPy HTTP错误 429: Too Many Requests - Google Scholar访问频率限制")
+                return None
+            else:
+                logger.warning(f"ScholarPy HTTP错误: {response.getcode()}")
+                return None
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                logger.error(f"ScholarPy HTTP请求失败: HTTP Error 429: Too Many Requests")
+            else:
+                logger.error(f"ScholarPy HTTP请求失败: HTTP Error {e.code}: {e.reason}")
+            return None
+        except Exception as e:
+            logger.error(f"ScholarPy HTTP请求失败: {e}")
+            return None
+    
+    def _parse_results(self, html_content: str) -> List[Paper]:
+        """解析Google Scholar搜索结果"""
+        papers = []
+        
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # 查找结果条目
+            results = soup.find_all('div', class_='gs_ri')
+            
+            for result in results:
+                try:
+                    paper = self._parse_single_result(result)
+                    if paper:
+                        papers.append(paper)
+                except Exception as e:
+                    logger.debug(f"解析单个结果失败: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"解析Scholar结果失败: {e}")
+            
+        return papers
+    
+    def _parse_single_result(self, result_div) -> Optional[Paper]:
+        """解析单个搜索结果"""
+        try:
+            # 标题
+            title_element = result_div.find('h3', class_='gs_rt')
+            if not title_element:
+                return None
+                
+            title_link = title_element.find('a')
+            title = title_link.get_text(strip=True) if title_link else title_element.get_text(strip=True)
+            url = title_link.get('href', '') if title_link else ''
+            
+            # 作者和期刊信息
+            authors = []
+            journal = ''
+            year = None
+            
+            author_element = result_div.find('div', class_='gs_a')
+            if author_element:
+                author_text = author_element.get_text()
+                # 简单解析: 通常格式为 "作者 - 期刊, 年份"
+                if ' - ' in author_text:
+                    author_part = author_text.split(' - ')[0]
+                    authors = [author.strip() for author in author_part.split(',')]
+                    
+                    # 提取年份
+                    import re
+                    year_match = re.search(r'\b(19|20)\d{2}\b', author_text)
+                    if year_match:
+                        year = int(year_match.group())
+            
+            # 摘要/片段
+            abstract = ''
+            snippet_element = result_div.find('div', class_='gs_rs')
+            if snippet_element:
+                abstract = snippet_element.get_text(strip=True)
+            
+            # 引用数
+            citations = 0
+            citation_element = result_div.find('a', string=lambda text: text and 'Cited by' in text)
+            if citation_element:
+                import re
+                citation_match = re.search(r'Cited by (\d+)', citation_element.get_text())
+                if citation_match:
+                    citations = int(citation_match.group(1))
+            
+            return Paper(
+                title=title,
+                authors=authors,
+                abstract=abstract,
+                year=year,
+                journal=journal,
+                url=url,
+                doi=None,  # Scholar通常不直接提供DOI
+                citations=citations,
+                source='scholar_py',
+                relevance_score=1.0
+            )
+            
+        except Exception as e:
+            logger.debug(f"解析结果详情失败: {e}")
+            return None
+    
+    async def _apply_delay(self):
+        """应用智能延迟策略"""
+        import time
+        import random
+        
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        session_duration = current_time - self.session_start
+        
+        # 计算动态延迟
+        base_delay = self.min_delay
+        
+        # 如果是会话开始或长时间间隔，使用更长延迟
+        if self.last_request_time == 0 or time_since_last > 300:  # 5分钟
+            base_delay = random.uniform(15.0, 25.0)  # 首次/长间隔延迟更保守
+            logger.info(f"🕒 ScholarPy首次/长间隔延迟: {base_delay:.2f}秒")
+        elif self.request_count > 2:  # 连续请求增加延迟，降低触发阈值
+            base_delay = self.min_delay + (self.request_count - 2) * 3.0  # 增加更多延迟
+            logger.debug(f"🕒 ScholarPy递增延迟: {base_delay:.2f}秒 (第{self.request_count}次请求)")
+        
+        # 应用随机化
+        if time_since_last < base_delay:
+            delay = base_delay - time_since_last + random.uniform(3.0, 8.0)  # 增加随机延迟
+            logger.debug(f"🕒 ScholarPy延迟: {delay:.2f}秒")
+            await asyncio.sleep(delay)
+        
+        self.last_request_time = time.time()
+        self.request_count += 1
+    
+    def _save_cookies(self):
+        """保存cookies到文件"""
+        try:
+            self.cjar.save(self.cookie_file, ignore_discard=True)
+            logger.debug("💾 已保存Scholar cookies")
+        except Exception as e:
+            logger.debug(f"保存cookies失败: {e}")
+    
+    def _check_if_disabled(self) -> bool:
+        """检查是否因连续失败而临时禁用"""
+        current_time = time.time()
+        if self.is_temporarily_disabled and current_time < self.disable_until:
+            return True
+        elif self.is_temporarily_disabled and current_time >= self.disable_until:
+            # 禁用期已过，重新启用
+            self.is_temporarily_disabled = False
+            self.consecutive_failures = 0
+            logger.info("🔓 ScholarPy临时禁用期已过，重新启用")
+            return False
+        return False
+    
+    def _handle_failure(self):
+        """处理请求失败"""
+        self.consecutive_failures += 1
+        logger.warning(f"⚠️ ScholarPy失败计数: {self.consecutive_failures}/{self.max_failures}")
+        
+        if self.consecutive_failures >= self.max_failures:
+            # 临时禁用60分钟，大幅增加禁用时长
+            self.is_temporarily_disabled = True
+            self.disable_until = time.time() + (60 * 60)  # 60分钟
+            logger.warning("🚫 ScholarPy因连续失败已临时禁用60分钟，建议主要使用其他数据源")
+            
+        # 重置请求计数，避免累积效应
+        self.request_count = 0
+    
+    async def close(self):
+        """清理资源"""
+        pass
+
+class ScholarlyAPI:
+    """Scholarly库客户端 - 直接访问学术文献数据库，带反CAPTCHA机制"""
     
     def __init__(self):
         self.session = None
@@ -290,7 +595,7 @@ class GoogleScholarAPI:
                 pass
                 
             self.is_configured = True
-            logger.info("✅ scholarly库配置完成，启用反CAPTCHA机制")
+            logger.info("✅ scholarly库配置完成，启用智能访问机制")
             
         except Exception as e:
             logger.warning(f"scholarly库配置失败: {e}")
@@ -303,11 +608,18 @@ class GoogleScholarAPI:
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         
-        if time_since_last < self.min_delay:
-            delay = self.min_delay - time_since_last + random.uniform(0.5, 1.5)
+        # 如果是首次请求或距离上次请求很久，使用更长的延迟
+        if self.last_request_time == 0 or time_since_last > 300:  # 5分钟
+            delay = random.uniform(3.0, 6.0)  # 首次请求延迟3-6秒
+            logger.info(f"🕒 首次/长时间间隔延迟: {delay:.2f}秒")
+        elif time_since_last < self.min_delay:
+            delay = self.min_delay - time_since_last + random.uniform(1.0, 3.0)  # 增加随机延迟
             logger.debug(f"🕒 智能延迟: {delay:.2f}秒")
-            await asyncio.sleep(delay)
-        
+        else:
+            delay = random.uniform(0.5, 1.5)  # 基础随机延迟
+            logger.debug(f"🕒 基础延迟: {delay:.2f}秒")
+            
+        await asyncio.sleep(delay)
         self.last_request_time = time.time()
         
     def _is_temporarily_disabled(self) -> bool:
@@ -327,19 +639,19 @@ class GoogleScholarAPI:
         """处理CAPTCHA失败"""
         import time
         self.captcha_failures += 1
-        logger.warning(f"⚠️ Google Scholar CAPTCHA失败计数: {self.captcha_failures}/{self.max_captcha_failures}")
+        logger.warning(f"⚠️ scholarly库访问限制计数: {self.captcha_failures}/{self.max_captcha_failures}")
         
         if self.captcha_failures >= self.max_captcha_failures:
             # 临时禁用30分钟
             self.temporary_disabled = True
             self.disable_until = time.time() + (30 * 60)  # 30分钟
-            logger.warning(f"🚫 Google Scholar因连续CAPTCHA失败已临时禁用30分钟")
+            logger.warning(f"🚫 scholarly库因连续访问限制已临时禁用30分钟")
     
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """搜索Google Scholar文献，带反CAPTCHA保护"""
+        """使用scholarly库搜索学术文献，带智能访问保护"""
         # 检查是否临时禁用
         if self._is_temporarily_disabled():
-            logger.info("⏸️ Google Scholar当前临时禁用中，跳过搜索")
+            logger.info("⏸️ scholarly库当前临时禁用中，跳过搜索")
             return []
             
         try:
@@ -361,7 +673,7 @@ class GoogleScholarAPI:
                     # 智能延迟
                     await self._rate_limit_delay()
                     
-                    logger.info(f"🔍 开始Google Scholar搜索: {query} (重试次数: {retry_count})")
+                    logger.info(f"🔍 开始scholarly库搜索: {query} (重试次数: {retry_count})")
                     search_generator = scholarly.search_pubs(query)
                     count = 0
                     
@@ -377,6 +689,7 @@ class GoogleScholarAPI:
                             bib = pub.get('bib', {})
                             title = bib.get('title', '').strip()
                             
+                            # 跳过没有标题或标题过短的论文
                             if not title or len(title) < 5:
                                 continue
                             
@@ -387,8 +700,7 @@ class GoogleScholarAPI:
                             else:
                                 authors = [str(authors_raw).strip()] if authors_raw else []
                             
-                            if not authors:
-                                authors = ['未知作者']
+                            # 作者信息缺失时保持空列表
                             
                             # 获取年份
                             year = bib.get('pub_year')
@@ -400,13 +712,11 @@ class GoogleScholarAPI:
                             
                             # 获取摘要
                             abstract = bib.get('abstract', '').strip()
-                            if not abstract:
-                                abstract = '暂无摘要'
-                            elif len(abstract) > 500:
+                            if len(abstract) > 500:
                                 abstract = abstract[:500] + "..."
                             
                             # 获取其他信息
-                            journal = bib.get('venue', '') or bib.get('journal', '') or 'Google Scholar'
+                            journal = bib.get('venue', '') or bib.get('journal', '')
                             url = pub.get('pub_url', '') or pub.get('eprint_url', '') or ''
                             citations = pub.get('num_citations', 0)
                             try:
@@ -423,7 +733,7 @@ class GoogleScholarAPI:
                                 url=url,
                                 doi=None,
                                 citations=citations,
-                                source="google_scholar",
+                                source="scholarly",
                                 relevance_score=1.0 - (count * 0.01)
                             )
                             
@@ -436,36 +746,44 @@ class GoogleScholarAPI:
                     
                     # 如果成功获取到结果，退出重试循环
                     if papers:
-                        logger.info(f"✅ Google Scholar搜索成功，获得 {len(papers)} 篇论文")
+                        logger.info(f"✅ scholarly库搜索成功，获得 {len(papers)} 篇论文")
                         break
                         
                 except Exception as e:
                     error_str = str(e).lower()
-                    if 'captcha' in error_str or 'blocked' in error_str or 'attribute' in error_str:
-                        # 处理CAPTCHA失败
+                    # 扩展CAPTCHA和限流检测
+                    is_rate_limited = any(keyword in error_str for keyword in [
+                        'captcha', 'blocked', 'rate limit', '429', 'too many requests',
+                        'cannot fetch', 'forbidden', 'attribute', 'scholar'
+                    ])
+                    
+                    if is_rate_limited:
+                        # 处理限流/CAPTCHA失败
                         self._handle_captcha_failure()
                         
                         # 如果已经被临时禁用，直接跳出
                         if self.temporary_disabled:
-                            logger.warning("🚫 Google Scholar已被临时禁用，停止重试")
+                            logger.warning("🚫 scholarly库已被临时禁用，停止重试")
                             break
                             
                         retry_count += 1
-                        wait_time = min(60, (retry_count * 20) + random.uniform(5, 15))  # 限制最大等待时间
-                        logger.warning(f"⚠️ 遇到CAPTCHA，等待 {wait_time:.1f}秒后重试 (第{retry_count}次)")
+                        # 增加等待时间，使用指数退避
+                        base_wait = min(120, (retry_count * 30))  # 最大等待2分钟
+                        wait_time = base_wait + random.uniform(10, 30)
+                        logger.warning(f"⚠️ 遇到访问限制，等待 {wait_time:.1f}秒后重试 (第{retry_count}次)")
                         await asyncio.sleep(wait_time)
                         
                         # 重新配置scholarly
                         self.is_configured = False
                         self._configure_scholarly()
                     else:
-                        logger.error(f"Google Scholar搜索失败: {e}")
+                        logger.error(f"scholarly库搜索失败: {e}")
                         break
             
             return papers
             
         except Exception as e:
-            logger.error(f"Google Scholar搜索错误: {e}")
+            logger.error(f"scholarly库搜索错误: {e}")
             return []
     
     async def close(self):
@@ -502,7 +820,7 @@ class CrossrefAPI:
             params = {
                 'query': query,
                 'rows': limit,
-                'select': 'DOI,title,author,published,abstract,URL,is-referenced-by-count,publisher'
+                'select': 'DOI,title,author,published,abstract,URL,is-referenced-by-count,publisher,container-title,subtitle'
             }
             
             self._last_request = time.time()
@@ -527,8 +845,10 @@ class CrossrefAPI:
                 # 标题
                 title_list = item.get('title', [])
                 title = (title_list[0] if title_list else "").strip()
+                
+                # 跳过没有标题的论文
                 if not title:
-                    title = "无标题"
+                    continue
                 
                 # 作者
                 authors = []
@@ -539,8 +859,7 @@ class CrossrefAPI:
                     elif 'family' in author:
                         authors.append(author['family'])
                 
-                if not authors:
-                    authors = ['未知作者']
+                # 作者信息缺失时保持空列表
                 
                 # 年份
                 year = None
@@ -553,20 +872,28 @@ class CrossrefAPI:
                         except:
                             pass
                 
-                # 其他信息
-                abstract = item.get('abstract', '').strip() or '暂无摘要'
+                # 摘要处理 - 只使用真实数据
+                abstract = item.get('abstract', '').strip() if item.get('abstract') else ''
+                
+                # DOI和URL
                 doi = item.get('DOI', '').strip()
                 url = item.get('URL', '').strip()
                 if not url and doi:
                     url = f"https://doi.org/{doi}"
                 
+                # 引用数
                 citations = item.get('is-referenced-by-count', 0)
                 try:
                     citations = int(citations)
                 except:
                     citations = 0
                 
-                journal = item.get('publisher', '').strip() or 'Crossref'
+                # 期刊信息 - 只使用真实数据
+                journal = ''
+                if item.get('container-title') and len(item['container-title']) > 0:
+                    journal = item['container-title'][0].strip()
+                elif item.get('publisher'):
+                    journal = item['publisher'].strip()
                 
                 paper = Paper(
                     title=title,
@@ -730,7 +1057,8 @@ class MultiSourceEngine:
     def __init__(self):
         # 初始化数据源
         self.arxiv = ArxivAPI()
-        self.google_scholar = GoogleScholarAPI() if GOOGLE_SCHOLAR_ENABLED else None
+        # 使用基于scholar.py的稳定实现
+        self.scholarly = ScholarPyAPI() if SCHOLAR_PY_ENABLED else None
         self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
@@ -739,8 +1067,8 @@ class MultiSourceEngine:
         enabled_sources = []
         if self.arxiv:
             enabled_sources.append("Arxiv")
-        if self.google_scholar:
-            enabled_sources.append("Google Scholar")
+        if self.scholarly:
+            enabled_sources.append("Scholar.py")
         if self.semantic_scholar:
             enabled_sources.append("Semantic Scholar") 
         if self.crossref:
@@ -750,8 +1078,10 @@ class MultiSourceEngine:
             
         logger.info(f"多源搜索引擎初始化完成，启用数据源: {', '.join(enabled_sources)}")
         
-        if not GOOGLE_SCHOLAR_ENABLED:
-            logger.warning("⚠️ Google Scholar已禁用以避免CAPTCHA问题，将使用其他数据源")
+        if not CROSSREF_ENABLED:
+            logger.info("📍 Crossref数据源已暂时禁用")
+        if not PUBMED_ENABLED:
+            logger.info("📍 PubMed数据源已暂时禁用")
     
     async def search_parallel(self, query: str, max_results: int = 50) -> List[Paper]:
         """并行搜索多个数据源"""
@@ -771,7 +1101,7 @@ class MultiSourceEngine:
         # 动态计算每个源的搜索数量，根据启用的源数量调整
         active_sources = sum(1 for _, api in [
             ('arxiv', self.arxiv),
-            ('google_scholar', self.google_scholar),
+            ('scholar_py', self.scholarly),
             ('semantic_scholar', self.semantic_scholar),
             ('crossref', self.crossref),
             ('pubmed', self.pubmed)
@@ -784,20 +1114,20 @@ class MultiSourceEngine:
         source_names = []
         timeout = 30.0
         
-        # 创建搜索任务
+        # 创建搜索任务，给ScholarPy更长的超时时间
         sources_to_search = [
-            ('arxiv', self.arxiv),
-            ('google_scholar', self.google_scholar),
-            ('semantic_scholar', self.semantic_scholar),
-            ('crossref', self.crossref),
-            ('pubmed', self.pubmed)
+            ('arxiv', self.arxiv, 30.0),
+            ('scholar_py', self.scholarly, 120.0),  # ScholarPy需要更长超时时间
+            ('semantic_scholar', self.semantic_scholar, 30.0),
+            ('crossref', self.crossref, 30.0),
+            ('pubmed', self.pubmed, 30.0)
         ]
         
-        for source_name, source_api in sources_to_search:
+        for source_name, source_api, source_timeout in sources_to_search:
             if source_api is not None:
                 source_names.append(source_name)
                 task = asyncio.create_task(
-                    asyncio.wait_for(source_api.search(query, per_source_limit), timeout=timeout)
+                    asyncio.wait_for(source_api.search(query, per_source_limit), timeout=source_timeout)
                 )
                 tasks.append(task)
         
@@ -858,6 +1188,10 @@ class MultiSourceEngine:
         ), reverse=True)
         
         for paper in papers_sorted:
+            # 数据质量过滤：只保留有效标题的论文
+            if not paper.title or not paper.title.strip():
+                continue
+            
             # DOI去重
             if paper.doi and paper.doi.strip():
                 if paper.doi in seen_dois:
@@ -938,8 +1272,8 @@ class MultiSourceEngine:
     async def close(self):
         """关闭所有连接"""
         coros = [self.arxiv.close()]
-        if self.google_scholar:
-            coros.append(self.google_scholar.close())
+        if self.scholarly:
+            coros.append(self.scholarly.close())
         if self.semantic_scholar:
             coros.append(self.semantic_scholar.close())
         if self.crossref:

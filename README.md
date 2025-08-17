@@ -4,7 +4,7 @@
 
 ## 🚀 核心特性
 
-- **智能关键词扩展**: 基于Groq LLM的学科自适应关键词扩展
+- **智能关键词扩展**: 基于LLM的学科自适应关键词扩展
 - **多源并行搜索**: 整合arXiv、Google Scholar、Crossref、PubMed等数据源
 - **作者网络分析**: 深度作者关系和合作网络分析
 - **响应式前端**: React + TypeScript构建的现代化界面
@@ -22,9 +22,6 @@
 
 在项目根目录创建 `.env` 文件：
 ```env
-# Groq API Key (必需)
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=gemma2-9b-it
 
 # 可选API密钥
 PUBMED_API_KEY=disabled

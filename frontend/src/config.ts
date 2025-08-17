@@ -105,14 +105,15 @@ export const api = {
   expandKeywords: (query: string) =>
     apiCall(API_CONFIG.ENDPOINTS.EXPAND_KEYWORDS, { query }),
     
-  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true, yearFrom?: string, yearTo?: string, expandedKeywords?: any) =>
+  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true, yearFrom?: string, yearTo?: string, expandedKeywords?: any, sources?: string[]) =>
     apiCall(API_CONFIG.ENDPOINTS.SEARCH_PAPERS, { 
       query, 
       max_results: maxResults, 
       enable_expansion: enableExpansion,
       year_from: yearFrom ? parseInt(yearFrom) : undefined,
       year_to: yearTo ? parseInt(yearTo) : undefined,
-      expanded_keywords: expandedKeywords
+      expanded_keywords: expandedKeywords,
+      sources: sources && sources.length > 0 ? sources : undefined
     }),
     
   multiSourceSearch: (query: string, maxResults: number = 50, sources?: string[]) =>

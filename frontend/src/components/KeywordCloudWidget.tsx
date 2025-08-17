@@ -33,6 +33,7 @@ interface SearchSettings {
   maxResults: number;
   yearFrom: string;
   yearTo: string;
+  sources: string[];
 }
 
 interface KeywordItem {
@@ -54,7 +55,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   const [searchSettings, setSearchSettings] = useState<SearchSettings>({
     maxResults: 20,
     yearFrom: '',
-    yearTo: ''
+    yearTo: '',
+    sources: ['arxiv', 'semantic_scholar', 'scholarly'] // 默认启用指定的三个数据源
   });
 
   // 颜色配置：不同层级使用不同颜色
@@ -167,7 +169,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         false, // enable_expansion
         searchSettings.yearFrom, 
         searchSettings.yearTo,
-        preExpandedKeywords  // 🔑 传递预扩展关键词
+        preExpandedKeywords,  // 🔑 传递预扩展关键词
+        searchSettings.sources // 🔑 传递数据源选择
       );
       
       // 处理搜索结果
@@ -360,6 +363,66 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 />
               </div>
             </div>
+            
+            {/* 数据源选择 - 暂时注释掉 */}
+            {/*
+            <div>
+              <label style={{ 
+                display: 'block', 
+                fontSize: '12px', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+                marginBottom: '6px' 
+              }}>
+                Data Sources
+              </label>
+              <div style={{ 
+                display: 'flex', 
+                flexWrap: 'wrap', 
+                gap: '8px' 
+              }}>
+                {[
+                  { id: 'arxiv', name: 'arXiv', color: '#b91c1c' },
+                  { id: 'semantic_scholar', name: 'Semantic Scholar', color: '#1d4ed8' },
+                  { id: 'crossref', name: 'Crossref', color: '#059669' },
+                  { id: 'scholarly', name: 'Scholarly', color: '#dc2626' },
+                  { id: 'pubmed', name: 'PubMed', color: '#7c3aed' }
+                ].map(source => (
+                  <label 
+                    key={source.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '12px',
+                      color: theme === 'dark' ? '#d1d5db' : '#374151',
+                      cursor: 'pointer',
+                      userSelect: 'none'
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={searchSettings.sources.includes(source.id)}
+                      onChange={(e) => {
+                        const isChecked = e.target.checked;
+                        setSearchSettings(prev => ({
+                          ...prev,
+                          sources: isChecked 
+                            ? [...prev.sources, source.id]
+                            : prev.sources.filter(s => s !== source.id)
+                        }));
+                      }}
+                      style={{
+                        width: '14px',
+                        height: '14px',
+                        accentColor: source.color
+                      }}
+                    />
+                    <span style={{ color: source.color }}>{source.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            */}
           </div>
         </div>
 
