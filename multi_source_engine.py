@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 # 获取配置 - 只启用指定的三个数据源
 SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "true").lower() == "true"
-# 启用ScholarPy（基于scholar.py的Google Scholar访问）
-SCHOLAR_PY_ENABLED = os.getenv("SCHOLAR_PY_ENABLED", "true").lower() == "true"  
+# 启用ScholarPy（自定义的Google Scholar访问实现）
+SCHOLAR_PY_ENABLED = os.getenv("SCHOLAR_PY_ENABLED", "false").lower() == "true"  
 # 暂时禁用其他数据源
 CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "false").lower() == "true"
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
@@ -256,7 +256,7 @@ class ArxivAPI:
             await self.session.close()
 
 class ScholarPyAPI:
-    """基于scholar.py的Google Scholar API客户端 - 简化且稳定的实现"""
+    """自定义的Google Scholar API客户端 - 简化且稳定的实现"""
     
     def __init__(self):
         import urllib.request
@@ -264,8 +264,14 @@ class ScholarPyAPI:
         from http.cookiejar import MozillaCookieJar
         
         self.base_url = "https://scholar.google.com/scholar"
-        # 使用scholar.py的User-Agent策略
-        self.user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:27.0) Gecko/20100101 Firefox/27.0'
+        # 使用多个真实浏览器User-Agent，随机选择
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
+        ]
         
         # Cookie管理 - 关键的反CAPTCHA机制
         self.cookie_file = os.path.join(os.path.dirname(__file__), '.scholar_cookies.txt')
@@ -296,7 +302,7 @@ class ScholarPyAPI:
         self.disable_until = 0
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """使用scholar.py机制搜索Google Scholar，带重试机制"""
+        """使用自定义机制搜索Google Scholar，带重试机制"""
         # 检查是否临时禁用
         if self._check_if_disabled():
             logger.info("⏸️ ScholarPy当前临时禁用中，跳过搜索")
@@ -375,25 +381,28 @@ class ScholarPyAPI:
         """发送HTTP请求获取响应，专门处理429错误"""
         import urllib.request
         import urllib.error
+        import random
         
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': self.user_agent})
+            # 随机选择User-Agent
+            user_agent = random.choice(self.user_agents)
+            req = urllib.request.Request(url, headers={'User-Agent': user_agent})
             response = self.opener.open(req, timeout=15)
             
             if response.getcode() == 200:
                 return response.read().decode('utf-8')
             elif response.getcode() == 429:
-                logger.error(f"ScholarPy HTTP错误 429: Too Many Requests - Google Scholar访问频率限制")
+                logger.warning(f"⚠️ Google Scholar访问频率限制 (HTTP 429) - 将启用智能重试机制")
                 return None
             else:
-                logger.warning(f"ScholarPy HTTP错误: {response.getcode()}")
+                logger.warning(f"ScholarPy HTTP响应码: {response.getcode()}")
                 return None
                 
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                logger.error(f"ScholarPy HTTP请求失败: HTTP Error 429: Too Many Requests")
+                logger.warning(f"⚠️ Google Scholar访问频率限制 (HTTP 429) - 系统将自动切换到其他数据源")
             else:
-                logger.error(f"ScholarPy HTTP请求失败: HTTP Error {e.code}: {e.reason}")
+                logger.warning(f"ScholarPy网络错误: HTTP {e.code}")
             return None
         except Exception as e:
             logger.error(f"ScholarPy HTTP请求失败: {e}")
@@ -501,15 +510,16 @@ class ScholarPyAPI:
         
         # 如果是会话开始或长时间间隔，使用更长延迟
         if self.last_request_time == 0 or time_since_last > 300:  # 5分钟
-            base_delay = random.uniform(15.0, 25.0)  # 首次/长间隔延迟更保守
+            base_delay = random.uniform(20.0, 35.0)  # 首次/长间隔延迟更保守，增加变化范围
             logger.info(f"🕒 ScholarPy首次/长间隔延迟: {base_delay:.2f}秒")
         elif self.request_count > 2:  # 连续请求增加延迟，降低触发阈值
-            base_delay = self.min_delay + (self.request_count - 2) * 3.0  # 增加更多延迟
+            base_delay = self.min_delay + (self.request_count - 2) * random.uniform(2.0, 5.0)  # 随机化递增延迟
             logger.debug(f"🕒 ScholarPy递增延迟: {base_delay:.2f}秒 (第{self.request_count}次请求)")
         
-        # 应用随机化
+        # 应用随机化，模拟人类访问模式
         if time_since_last < base_delay:
-            delay = base_delay - time_since_last + random.uniform(3.0, 8.0)  # 增加随机延迟
+            jitter = random.uniform(5.0, 12.0)  # 更大的随机抖动
+            delay = base_delay - time_since_last + jitter
             logger.debug(f"🕒 ScholarPy延迟: {delay:.2f}秒")
             await asyncio.sleep(delay)
         
@@ -546,7 +556,7 @@ class ScholarPyAPI:
             # 临时禁用60分钟，大幅增加禁用时长
             self.is_temporarily_disabled = True
             self.disable_until = time.time() + (60 * 60)  # 60分钟
-            logger.warning("🚫 ScholarPy因连续失败已临时禁用60分钟，建议主要使用其他数据源")
+            logger.info("📍 Google Scholar已暂时限制访问，系统将依靠Semantic Scholar和arXiv提供搜索结果（60分钟后自动重试）")
             
         # 重置请求计数，避免累积效应
         self.request_count = 0
@@ -1057,8 +1067,8 @@ class MultiSourceEngine:
     def __init__(self):
         # 初始化数据源
         self.arxiv = ArxivAPI()
-        # 使用基于scholar.py的稳定实现
-        self.scholarly = ScholarPyAPI() if SCHOLAR_PY_ENABLED else None
+        # 优先使用scholarly库，ScholarPyAPI作为备选
+        self.scholarly = ScholarlyAPI() if not SCHOLAR_PY_ENABLED else ScholarPyAPI()
         self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
@@ -1068,7 +1078,10 @@ class MultiSourceEngine:
         if self.arxiv:
             enabled_sources.append("Arxiv")
         if self.scholarly:
-            enabled_sources.append("Scholar.py")
+            if SCHOLAR_PY_ENABLED:
+                enabled_sources.append("Scholar.py (自定义)")
+            else:
+                enabled_sources.append("Scholarly库")
         if self.semantic_scholar:
             enabled_sources.append("Semantic Scholar") 
         if self.crossref:
