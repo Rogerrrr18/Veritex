@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "true").lower() == "true"
 # 启用ScholarPy（自定义的Google Scholar访问实现）
 SCHOLAR_PY_ENABLED = os.getenv("SCHOLAR_PY_ENABLED", "false").lower() == "true"  
+# 新增：控制是否启用Google Scholar（默认启用作为主力搜索源）
+GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "true").lower() == "true"
 # 暂时禁用其他数据源
 CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "false").lower() == "true"
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
@@ -566,20 +568,14 @@ class ScholarPyAPI:
         pass
 
 class ScholarlyAPI:
-    """Scholarly库客户端 - 直接访问学术文献数据库，带反CAPTCHA机制"""
+    """Scholarly库客户端 - 参考Paper-god-beta2的简单成功实现"""
     
     def __init__(self):
-        self.session = None
-        self.is_configured = False
-        self.last_request_time = 0
-        self.min_delay = 2.0  # 最小延迟时间
-        self.captcha_failures = 0  # CAPTCHA失败计数
-        self.max_captcha_failures = 3  # 最大允许CAPTCHA失败次数
-        self.temporary_disabled = False  # 临时禁用标志
-        self.disable_until = 0  # 禁用到什么时候
+        # 参考Paper-god-beta2: 最小化配置，只保留必要的
+        self.request_delay_range = (1, 3)  # 1-3秒随机延迟，与Paper-god-beta2一致
         
     def _configure_scholarly(self):
-        """配置scholarly库，设置代理和反CAPTCHA机制"""
+        """配置scholarly库，设置更保守的反CAPTCHA机制"""
         if self.is_configured:
             return
             
@@ -587,50 +583,63 @@ class ScholarlyAPI:
             from scholarly import scholarly
             import random
             
-            # 配置更保守的请求参数
-            scholarly.set_timeout(10)
+            # 更保守的请求参数
+            scholarly.set_timeout(30)  # 增加超时时间到30秒
             
-            # 使用随机用户代理
+            # 使用更多真实的用户代理
             user_agents = [
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
             ]
             
-            # 尝试配置用户代理（如果scholarly支持）
+            # 配置scholarly库的保守策略
             try:
-                scholarly.set_retries(3)
-                scholarly.set_timeout(15)
+                scholarly.set_retries(2)  # 允许2次重试，提高成功率
+                scholarly.set_timeout(30)  # 增加单次请求超时到30秒
             except:
                 pass
                 
             self.is_configured = True
-            logger.info("✅ scholarly库配置完成，启用智能访问机制")
+            logger.info("✅ scholarly库配置完成，启用保守访问策略")
             
         except Exception as e:
             logger.warning(f"scholarly库配置失败: {e}")
         
     async def _rate_limit_delay(self):
-        """智能延迟，避免触发CAPTCHA"""
+        """保守延迟策略，基于Paper-god-beta2经验优化"""
         import time
         import random
         
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
+        session_duration = current_time - self.session_start
         
-        # 如果是首次请求或距离上次请求很久，使用更长的延迟
-        if self.last_request_time == 0 or time_since_last > 300:  # 5分钟
-            delay = random.uniform(3.0, 6.0)  # 首次请求延迟3-6秒
-            logger.info(f"🕒 首次/长时间间隔延迟: {delay:.2f}秒")
+        # 更保守的延迟策略，参考Paper-god-beta2经验
+        if self.last_request_time == 0 or time_since_last > 300:  # 5分钟重置
+            delay = random.uniform(6.0, 12.0)  # 首次请求：6-12秒
+            logger.info(f"🕒 首次/长间隔延迟: {delay:.2f}秒")
+        elif self.consecutive_requests >= 3:  # 3次后才增加延迟
+            base_delay = self.min_delay + (self.consecutive_requests - 2) * random.uniform(1.0, 2.0)
+            delay = min(base_delay, 15.0)  # 最大不超过15秒
+            logger.debug(f"🕒 连续访问适度延迟: {delay:.2f}秒 (第{self.consecutive_requests}次)")
         elif time_since_last < self.min_delay:
-            delay = self.min_delay - time_since_last + random.uniform(1.0, 3.0)  # 增加随机延迟
-            logger.debug(f"🕒 智能延迟: {delay:.2f}秒")
-        else:
-            delay = random.uniform(0.5, 1.5)  # 基础随机延迟
+            delay = self.min_delay - time_since_last + random.uniform(1.0, 3.0)  # 基础延迟
             logger.debug(f"🕒 基础延迟: {delay:.2f}秒")
+        else:
+            delay = random.uniform(3.0, 6.0)  # 最小3-6秒随机延迟
+            logger.debug(f"🕒 正常随机延迟: {delay:.2f}秒")
             
         await asyncio.sleep(delay)
         self.last_request_time = time.time()
+        self.consecutive_requests += 1
+        
+        # 长时间无访问重置计数器
+        if time_since_last > 180:  # 3分钟就重置
+            self.consecutive_requests = 0
+            self.captcha_failures = max(0, self.captcha_failures - 1)  # 逐渐恢复失败计数
         
     def _is_temporarily_disabled(self) -> bool:
         """检查是否因CAPTCHA而临时禁用"""
@@ -646,155 +655,123 @@ class ScholarlyAPI:
         return False
     
     def _handle_captcha_failure(self):
-        """处理CAPTCHA失败"""
+        """处理CAPTCHA失败 - 快速切换策略"""
         import time
         self.captcha_failures += 1
         logger.warning(f"⚠️ scholarly库访问限制计数: {self.captcha_failures}/{self.max_captcha_failures}")
         
         if self.captcha_failures >= self.max_captcha_failures:
-            # 临时禁用30分钟
+            # 临时禁用5分钟，快速恢复
             self.temporary_disabled = True
-            self.disable_until = time.time() + (30 * 60)  # 30分钟
-            logger.warning(f"🚫 scholarly库因连续访问限制已临时禁用30分钟")
+            self.disable_until = time.time() + (5 * 60)  # 缩短到5分钟
+            logger.warning(f"🚫 scholarly库因访问限制已临时禁用5分钟，系统将使用其他数据源")
+            # 重置连续请求计数
+            self.consecutive_requests = 0
     
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """使用scholarly库搜索学术文献，带智能访问保护"""
-        # 检查是否临时禁用
-        if self._is_temporarily_disabled():
-            logger.info("⏸️ scholarly库当前临时禁用中，跳过搜索")
-            return []
-            
+        """使用scholarly库搜索学术文献 - 参考Paper-god-beta2的简单直接做法"""
+        papers = []
+        
         try:
-            try:
-                from scholarly import scholarly
-            except ImportError:
-                logger.error("scholarly库未安装，请运行: pip install scholarly")
-                return []
+            from scholarly import scholarly
+            import random
             
-            # 配置scholarly
-            self._configure_scholarly()
+            logger.info(f"🔍 开始scholarly库搜索: {query}")
             
-            papers = []
-            retry_count = 0
-            max_retries = 2  # 减少重试次数
+            # 参考Paper-god-beta2: 直接调用，不做复杂的配置
+            search_generator = scholarly.search_pubs(query)
+            count = 0
+            retrieved_count = 0
             
-            while retry_count < max_retries:
+            # 参考Paper-god-beta2: 使用for循环和next()的方式
+            for i in range(limit * 2):  # 尝试获取更多结果，以防过滤
                 try:
-                    # 智能延迟
-                    await self._rate_limit_delay()
+                    pub = next(search_generator)
+                    retrieved_count += 1
                     
-                    logger.info(f"🔍 开始scholarly库搜索: {query} (重试次数: {retry_count})")
-                    search_generator = scholarly.search_pubs(query)
-                    count = 0
-                    
-                    for pub in search_generator:
-                        try:
-                            if count >= limit:
-                                break
-                                
-                            # 每个结果之间也要延迟
-                            if count > 0:
-                                await asyncio.sleep(random.uniform(1.0, 2.0))
-                                
-                            bib = pub.get('bib', {})
-                            title = bib.get('title', '').strip()
-                            
-                            # 跳过没有标题或标题过短的论文
-                            if not title or len(title) < 5:
-                                continue
-                            
-                            # 获取作者
-                            authors_raw = bib.get('author', [])
-                            if isinstance(authors_raw, list):
-                                authors = [str(author).strip() for author in authors_raw if str(author).strip()]
-                            else:
-                                authors = [str(authors_raw).strip()] if authors_raw else []
-                            
-                            # 作者信息缺失时保持空列表
-                            
-                            # 获取年份
-                            year = bib.get('pub_year')
-                            if year:
-                                try:
-                                    year = int(year)
-                                except:
-                                    year = None
-                            
-                            # 获取摘要
-                            abstract = bib.get('abstract', '').strip()
-                            if len(abstract) > 500:
-                                abstract = abstract[:500] + "..."
-                            
-                            # 获取其他信息
-                            journal = bib.get('venue', '') or bib.get('journal', '')
-                            url = pub.get('pub_url', '') or pub.get('eprint_url', '') or ''
-                            citations = pub.get('num_citations', 0)
-                            try:
-                                citations = int(citations) if citations else 0
-                            except:
-                                citations = 0
-                            
-                            paper = Paper(
-                                title=title,
-                                authors=authors,
-                                abstract=abstract,
-                                year=year,
-                                journal=journal,
-                                url=url,
-                                doi=None,
-                                citations=citations,
-                                source="scholarly",
-                                relevance_score=1.0 - (count * 0.01)
-                            )
-                            
-                            papers.append(paper)
-                            count += 1
-                            
-                        except Exception as e:
-                            logger.debug(f"处理单个结果失败: {e}")
-                            continue
-                    
-                    # 如果成功获取到结果，退出重试循环
-                    if papers:
-                        logger.info(f"✅ scholarly库搜索成功，获得 {len(papers)} 篇论文")
-                        break
+                    if not pub:
+                        continue
                         
-                except Exception as e:
-                    error_str = str(e).lower()
-                    # 扩展CAPTCHA和限流检测
-                    is_rate_limited = any(keyword in error_str for keyword in [
-                        'captcha', 'blocked', 'rate limit', '429', 'too many requests',
-                        'cannot fetch', 'forbidden', 'attribute', 'scholar'
-                    ])
+                    bib = pub.get('bib', {})
+                    title = bib.get('title', '').strip()
                     
-                    if is_rate_limited:
-                        # 处理限流/CAPTCHA失败
-                        self._handle_captcha_failure()
+                    # 跳过没有标题的论文
+                    if not title:
+                        continue
                         
-                        # 如果已经被临时禁用，直接跳出
-                        if self.temporary_disabled:
-                            logger.warning("🚫 scholarly库已被临时禁用，停止重试")
-                            break
-                            
-                        retry_count += 1
-                        # 增加等待时间，使用指数退避
-                        base_wait = min(120, (retry_count * 30))  # 最大等待2分钟
-                        wait_time = base_wait + random.uniform(10, 30)
-                        logger.warning(f"⚠️ 遇到访问限制，等待 {wait_time:.1f}秒后重试 (第{retry_count}次)")
-                        await asyncio.sleep(wait_time)
-                        
-                        # 重新配置scholarly
-                        self.is_configured = False
-                        self._configure_scholarly()
+                    # 获取作者
+                    authors_raw = bib.get('author', [])
+                    if isinstance(authors_raw, list):
+                        authors = [str(author).strip() for author in authors_raw if str(author).strip()]
                     else:
-                        logger.error(f"scholarly库搜索失败: {e}")
+                        authors = [str(authors_raw).strip()] if authors_raw else []
+                    
+                    # 获取年份
+                    year = None
+                    pub_year = bib.get('pub_year')
+                    if pub_year:
+                        try:
+                            year = int(pub_year)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # 获取摘要
+                    abstract = bib.get('abstract', '')
+                    if abstract and len(abstract) > 300:
+                        abstract = abstract[:300] + "..."
+                    
+                    # 获取URL
+                    url = pub.get('pub_url', '') or pub.get('eprint_url', '')
+                    
+                    # 获取引用数
+                    citations = 0
+                    if 'num_citations' in pub:
+                        try:
+                            citations = int(pub['num_citations'])
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    paper = Paper(
+                        title=title,
+                        authors=authors,
+                        abstract=abstract,
+                        year=year,
+                        journal=bib.get('venue', ''),
+                        url=url,
+                        doi=None,
+                        citations=citations,
+                        source='scholarly',
+                        relevance_score=1.0 - (count * 0.1)
+                    )
+                    
+                    papers.append(paper)
+                    count += 1
+                    
+                    if count >= limit:
                         break
+                        
+                    # 参考Paper-god-beta2: 简单的结果间延迟
+                    await self._simple_delay()
+                    
+                except StopIteration:
+                    logger.info("scholarly搜索已无更多结果")
+                    break
+                except Exception as e:
+                    logger.debug(f"处理单个结果时出错: {e}")
+                    continue
             
-            return papers
+            logger.info(f"✅ scholarly库搜索完成，获得 {len(papers)} 篇论文")
             
         except Exception as e:
-            logger.error(f"scholarly库搜索错误: {e}")
-            return []
+            # 参考Paper-god-beta2: 简单处理错误，不过度分类
+            logger.warning(f"⚠️ scholarly搜索错误: {str(e)[:100]}...")
+            
+            # 只在明确的429错误时才返回空结果
+            if '429' in str(e) or 'Cannot Fetch from Google Scholar' in str(e):
+                logger.info("📍 检测到Google Scholar访问限制")
+                return []
+        
+        return papers
     
     async def close(self):
         pass
@@ -1067,8 +1044,12 @@ class MultiSourceEngine:
     def __init__(self):
         # 初始化数据源
         self.arxiv = ArxivAPI()
-        # 优先使用scholarly库，ScholarPyAPI作为备选
-        self.scholarly = ScholarlyAPI() if not SCHOLAR_PY_ENABLED else ScholarPyAPI()
+        # 根据配置决定是否启用Google Scholar
+        if GOOGLE_SCHOLAR_ENABLED:
+            self.scholarly = ScholarlyAPI() if not SCHOLAR_PY_ENABLED else ScholarPyAPI()
+        else:
+            self.scholarly = None
+            logger.info("🚫 Google Scholar已禁用，使用稳定数据源")
         self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
@@ -1082,6 +1063,10 @@ class MultiSourceEngine:
                 enabled_sources.append("Scholar.py (自定义)")
             else:
                 enabled_sources.append("Scholarly库")
+        elif GOOGLE_SCHOLAR_ENABLED:
+            enabled_sources.append("Google Scholar (配置错误-未正确初始化)")
+        else:
+            enabled_sources.append("Google Scholar (主动禁用)")
         if self.semantic_scholar:
             enabled_sources.append("Semantic Scholar") 
         if self.crossref:
@@ -1091,6 +1076,10 @@ class MultiSourceEngine:
             
         logger.info(f"多源搜索引擎初始化完成，启用数据源: {', '.join(enabled_sources)}")
         
+        if not GOOGLE_SCHOLAR_ENABLED:
+            logger.info("📍 Google Scholar已禁用，将使用其他数据源")
+        else:
+            logger.info("🎯 Google Scholar已启用作为主力搜索源")
         if not CROSSREF_ENABLED:
             logger.info("📍 Crossref数据源已暂时禁用")
         if not PUBMED_ENABLED:
@@ -1111,38 +1100,66 @@ class MultiSourceEngine:
         """并行搜索多个数据源（带筛选参数）"""
         logger.info(f"开始多源并行搜索: {query}")
         
-        # 动态计算每个源的搜索数量，根据启用的源数量调整
-        active_sources = sum(1 for _, api in [
-            ('arxiv', self.arxiv),
-            ('scholar_py', self.scholarly),
+        # 优先级排序：稳定数据源优先，Google Scholar作为补充
+        stable_sources = [
             ('semantic_scholar', self.semantic_scholar),
+            ('arxiv', self.arxiv),
             ('crossref', self.crossref),
             ('pubmed', self.pubmed)
-        ] if api is not None)
+        ]
+        active_stable_sources = sum(1 for _, api in stable_sources if api is not None)
         
-        per_source_limit = max(15, max_results // max(1, active_sources))
-        logger.info(f"启用 {active_sources} 个数据源，每源搜索 {per_source_limit} 篇论文")
+        # Google Scholar作为补充数据源
+        has_scholar = self.scholarly is not None
+        active_sources = active_stable_sources + (1 if has_scholar else 0)
+        
+        # 修复搜索篇数分配逻辑：scholarly作为主力搜索源应获得更大配额
+        if has_scholar and active_stable_sources > 0:
+            # scholarly获得70%配额，其他数据源分享30%
+            scholar_limit = max(10, int(max_results * 0.7))  # scholarly主力搜索70%
+            remaining_quota = max_results - scholar_limit
+            stable_per_source = max(5, int(remaining_quota // active_stable_sources)) if active_stable_sources > 0 else 0
+        elif has_scholar and active_stable_sources == 0:
+            # 只有scholarly时，获取全部结果
+            stable_per_source = 0
+            scholar_limit = max_results
+        elif not has_scholar and active_stable_sources > 0:
+            # 只有稳定数据源时
+            stable_per_source = max(10, int(max_results // active_stable_sources))
+            scholar_limit = 0
+        else:
+            stable_per_source = 0
+            scholar_limit = 0
+            
+        logger.info(f"启用 {active_sources} 个数据源：scholarly主力搜索{scholar_limit}篇，其他源({active_stable_sources})每源{stable_per_source}篇")
         
         tasks = []
         source_names = []
         timeout = 30.0
         
-        # 创建搜索任务，给ScholarPy更长的超时时间
-        sources_to_search = [
-            ('arxiv', self.arxiv, 30.0),
-            ('scholar_py', self.scholarly, 120.0),  # ScholarPy需要更长超时时间
-            ('semantic_scholar', self.semantic_scholar, 30.0),
-            ('crossref', self.crossref, 30.0),
-            ('pubmed', self.pubmed, 30.0)
-        ]
+        # 优先启动稳定数据源，后启动Google Scholar
+        sources_to_search = []
         
-        for source_name, source_api, source_timeout in sources_to_search:
-            if source_api is not None:
-                source_names.append(source_name)
-                task = asyncio.create_task(
-                    asyncio.wait_for(source_api.search(query, per_source_limit), timeout=source_timeout)
-                )
-                tasks.append(task)
+        # 稳定数据源（优先级高）
+        if self.semantic_scholar:
+            sources_to_search.append(('semantic_scholar', self.semantic_scholar, 30.0, stable_per_source))
+        if self.arxiv:
+            sources_to_search.append(('arxiv', self.arxiv, 30.0, stable_per_source))
+        if self.crossref:
+            sources_to_search.append(('crossref', self.crossref, 30.0, stable_per_source))
+        if self.pubmed:
+            sources_to_search.append(('pubmed', self.pubmed, 30.0, stable_per_source))
+            
+        # Google Scholar（主力搜索源，优先级高）
+        if self.scholarly:
+            sources_to_search.insert(0, ('scholarly', self.scholarly, 150.0, scholar_limit))  # 增加超时到150秒
+        
+        for source_name, source_api, source_timeout, source_limit in sources_to_search:
+            source_names.append(source_name)
+            task = asyncio.create_task(
+                asyncio.wait_for(source_api.search(query, source_limit), timeout=source_timeout)
+            )
+            tasks.append(task)
         
         # 执行搜索
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1156,20 +1173,51 @@ class MultiSourceEngine:
             
             if isinstance(result, Exception):
                 error_str = str(result).lower()
-                if 'captcha' in error_str or 'blocked' in error_str:
+                # 精准的错误检测，只针对真正的访问限制
+                is_access_limited = any(keyword in error_str for keyword in [
+                    'captcha', 'blocked', 'rate limit', '429', 'too many requests', 'unusual traffic'
+                ])
+                # 排除正常的网络错误
+                is_network_error = any(keyword in error_str for keyword in [
+                    'timeout', 'connection', 'ssl', 'handshake'
+                ])
+                is_access_limited = is_access_limited and not is_network_error
+                
+                if is_access_limited:
                     captcha_errors.append(source_name)
-                    logger.warning(f"⚠️ 搜索源 {source_name} 遇到CAPTCHA限制: {result}")
+                    if source_name == 'scholarly':
+                        logger.warning(f"⚠️ 主力搜索源 Google Scholar 访问受限，切换到辅助数据源: {result}")
+                    else:
+                        logger.warning(f"⚠️ 搜索源 {source_name} 访问受限: {result}")
                 else:
                     logger.error(f"❌ 搜索源 {source_name} 出错: {result}")
                 continue
             elif isinstance(result, list):
                 all_papers.extend(result)
-                logger.info(f"✅ {source_name} 返回 {len(result)} 篇论文")
+                # 标记数据源的成功
+                if source_name == 'scholarly':
+                    logger.info(f"✅ 主力搜索源 {source_name} 返回 {len(result)} 篇论文")
+                elif source_name in ['semantic_scholar', 'arxiv', 'crossref', 'pubmed']:
+                    logger.info(f"✅ 辅助数据源 {source_name} 返回 {len(result)} 篇论文")
+                else:
+                    logger.info(f"✅ {source_name} 返回 {len(result)} 篇论文")
         
-        # 如果遇到CAPTCHA错误，记录并提供提示
+        # 统计数据源成功情况
+        stable_success = len([name for name in source_names[:active_stable_sources] 
+                            if name not in captcha_errors])
+        scholar_success = 'scholarly' not in captcha_errors if has_scholar else False
+        
         if captcha_errors:
-            logger.warning(f"🚫 以下搜索源遇到访问限制: {', '.join(captcha_errors)}")
-            logger.info("💡 建议: 稍后重试或使用其他关键词进行搜索")
+            if 'scholarly' in captcha_errors and stable_success > 0:
+                logger.warning(f"⚠️ 主力搜索源 scholarly 访问受限，使用辅助数据源({stable_success}个)")
+            elif 'scholarly' in captcha_errors and stable_success == 0:
+                logger.warning(f"🚫 主力搜索源和辅助源均访问受限: {', '.join(captcha_errors)}")
+                logger.info("💡 建议: 稍后重试或使用不同关键词")
+            elif stable_success == 0:
+                logger.warning(f"🚫 所有数据源访问受限: {', '.join(captcha_errors)}")
+                logger.info("💡 建议: 稍后重试或使用不同关键词")
+            else:
+                logger.info(f"⚠️ 部分数据源受限: {', '.join(captcha_errors)}，但系统正常运行")
         
         # 去重和排序
         deduplicated_papers = self._deduplicate_papers(all_papers)
@@ -1193,11 +1241,12 @@ class MultiSourceEngine:
         seen_dois = set()
         unique_papers = []
         
-        # 按引用数和来源质量排序
+        # 优化排序：稳定数据源优先，引用数次之
         papers_sorted = sorted(papers, key=lambda p: (
             -(p.citations or 0),
             p.doi is not None,
-            p.source == 'semantic_scholar'
+            p.source == 'scholarly',  # scholarly主力优先
+            p.source in ['semantic_scholar', 'arxiv', 'crossref', 'pubmed'],  # 辅助数据源次之
         ), reverse=True)
         
         for paper in papers_sorted:

@@ -1,4 +1,5 @@
 # Paper God 3.0 - 智能对话式学术文献搜索系统依赖
+# 最后更新: 2025-01-18
 
 # 核心框架
 fastapi>=0.110.0
@@ -14,14 +15,19 @@ langchain-core>=0.3.0
 langchain-community>=0.3.0
 
 # LLM客户端库
-openai>=1.0.0
-anthropic>=0.18.0
+openai>=1.50.0
+anthropic>=0.25.0
+groq>=0.9.0
 
 # 学术搜索和文本处理
 scholarly>=1.7.0
-feedparser>=6.0.10
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
+feedparser>=6.0.11
+beautifulsoup4>=4.12.3
+lxml>=5.1.0
+
+# 数据处理和表格
+pandas>=2.2.0
+openpyxl>=3.1.0
 
 # 配置和环境管理
 python-dotenv>=1.0.1
@@ -29,16 +35,23 @@ pydantic>=2.6.0
 
 # 工具库
 tenacity>=8.2.0
-python-dateutil>=2.8.0
+python-dateutil>=2.8.2
 xmltodict>=0.13.0
 
 # JSON处理和数据验证
-jsonschema>=4.17.0
+jsonschema>=4.21.0
+
+# 数据库连接（可选）
+supabase>=2.3.0
+
+# 性能监控
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
 
 # 开发和测试工具
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
 
 # 可选依赖（用于增强功能）
-# numpy>=1.24.0  # 用于向量计算
-# scikit-learn>=1.3.0  # 用于文本相似度计算
+# numpy>=1.26.0  # 用于向量计算
+# scikit-learn>=1.4.0  # 用于文本相似度计算

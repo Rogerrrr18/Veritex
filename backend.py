@@ -488,28 +488,31 @@ async def search_papers_api(req: SearchRequest):
                 from multi_source_engine import MultiSourceEngine
                 search_engine = MultiSourceEngine()
                 
-                # 智能构建搜索查询
+                # 参考Paper-god-beta2: 简化查询构建 - 只用OR连接关键词
                 hierarchical = req.expanded_keywords['hierarchical_keywords']
+                
+                # 收集所有术语
+                all_terms = []
                 exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
                 core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
                 related_terms = hierarchical.get("related_terms", {}).get("terms", [])
-                context_terms = hierarchical.get("context_terms", {}).get("terms", [])
                 
-                # 构建最优搜索查询
-                if exact_terms:
-                    # 使用精确术语，最多3个
-                    search_query = " ".join(exact_terms[:3])
-                elif core_synonyms:
-                    # 使用核心同义词，最多3个  
-                    search_query = " ".join(core_synonyms[:3])
-                elif related_terms:
-                    # 使用相关术语，最多2个
-                    search_query = " ".join(related_terms[:2])
-                elif context_terms:
-                    # 使用上下文术语，最多2个
-                    search_query = " ".join(context_terms[:2])
+                # 优先级：精确术语 > 核心同义词 > 相关术语
+                all_terms.extend(exact_terms[:2])  # 最多2个精确术语
+                all_terms.extend(core_synonyms[:2])  # 最多2个核心同义词
+                all_terms.extend(related_terms[:1])  # 最多1个相关术语
+                
+                # 去重并限制总数
+                unique_terms = list(dict.fromkeys(all_terms))[:4]  # 最多4个术语
+                
+                # 参考Paper-god-beta2: 对包含空格的术语加引号，用OR连接
+                if unique_terms:
+                    quoted_terms = [
+                        f'"{term}"' if ' ' in term else term
+                        for term in unique_terms
+                    ]
+                    search_query = " OR ".join(quoted_terms)
                 else:
-                    # 回退到原始查询
                     search_query = req.query
                 
                 logger.info(f"🎯 构建优化查询: {search_query}")
