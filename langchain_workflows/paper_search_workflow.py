@@ -750,7 +750,7 @@ class IntelligentPaperSearchAgent:
             cleaned = re.sub(r'```[\s\S]*?```', '', text)
             cleaned = re.sub(r'^\s*[#*\-\s]*普通对话模式[:：]?\s*', '', cleaned, flags=re.MULTILINE)
             
-            # 🔧 移除模板相关的元描述语句（扩展版）
+            # 🔧 移除模板相关的元描述语句（增强版）
             template_patterns = [
                 # 文献搜索相关的模板语句
                 r'关键词扩展结果的JSON格式[（(][^）)]*[）)]?',
@@ -761,29 +761,47 @@ class IntelligentPaperSearchAgent:
                 r'输出内容结构[:：]\s*',
                 r'\d+\.\s*\*\*[^*]*\*\*[（(][^）)]*[）)]?\s*',
                 r'JSON关键词数据[（(][^）)]*[）)]?\s*',
-                # 学术讨论相关的模板语句
-                r'关键词识别[（(][^）)]*[）)]?.*?(?=\n|$)',
-                r'后续建议\s*.*?(?=\n|$)',
+                
+                # 🎯 针对泄漏问题的精准清理
+                r'## 后续建议\s*[\r\n]*',  # 整个"后续建议"标题块
+                r'后续建议\s*[\r\n]*.*?(?=\n\n|\n##|\n\*\*|$)',  # 后续建议内容块
+                r'关键词识别[（(]*内部参考[）)]*\s*.*?(?=\n|$)',  # 关键词识别（内部参考）
+                r'关键词识别\s*.*?(?=\n|$)',  # 普通关键词识别
                 r'内部参考.*?(?=\n|$)',
                 r'不输出到回答框.*?(?=\n|$)',
+                
+                # 星号清理（仅删除多余星号，不删除内容）
+                r'(?<=：)\s*\*(?=\s*$)',             # 冒号后行尾星号
+                r'(?<=。)\s*\*(?=\s*$)',             # 句号后行尾星号
+                r'(?<=\w)\*+(?=\s*$)',               # 词汇后的行尾星号
+                
+                # 特殊的模板语句
                 r'基于以上讨论，我发现了几个值得深入研究的要点。我可以为您搜索相关的最新文献来补充和深化这个讨论吗？',
-                # 清理多余的星号和格式标记
-                r'\*+\s*(?=\n|$)',  # 行尾多余的星号
-                r'(?<=\w)\*+(?=[:：])',  # 标题后多余的星号  
-                r'• \*',  # 修复 "• *" 组合为 "•"
+                
                 # 清理空的标题行
                 r'\n\s*\*\*\s*\*\*\s*\n',
                 r'\n\s*###?\s*\n',
             ]
             
-            # 首先处理特殊替换（非删除）
-            cleaned = re.sub(r'• \*', '•', cleaned)  # 将 "• *" 替换为 "•"
-            # 处理其他形式的星号问题
+            # 🎯 第一步：格式修复（在删除前先修复格式）
+            
+            # 修复标题格式：分步处理避免冲突
+            # Step 1: 处理列表项中的带冒号标题
+            cleaned = re.sub(r'• ([^*\n]+)\*(?=[:：])', r'• **\1**', cleaned)  # "• 挑战与前景*：" -> "• **挑战与前景**："
+            
+            # Step 2: 处理编号列表的标题
+            cleaned = re.sub(r'• (\d+\.\s*)([^*\n]+)\*(?=\s*$)', r'• \1**\2**', cleaned)  # "• 1. 标题*" -> "• 1. **标题**"
+            
+            # Step 3: 处理独立行标题
+            cleaned = re.sub(r'(?<=\n)([^*\n•\s]+)\*(?=[:：])', r'**\1**', cleaned)  # "标题*：" -> "**标题**："
+            
+            # Step 4: 修复列表项开头星号格式问题
+            cleaned = re.sub(r'• \*([^*\n]+)', r'• **\1**', cleaned)  # "• *标题" -> "• **标题**"
             cleaned = re.sub(r'(?<=:)\s*\*(?!\*)', ' ', cleaned)  # 冒号后的单个星号
             
-            # 然后处理需要删除的模板语句
-            for pattern in template_patterns[:-1]:  # 排除最后一个"• *"模式
-                cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+            # 🎯 第二步：删除模板语句
+            for pattern in template_patterns:
+                cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.MULTILINE)
             
             # 优化段落分隔
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
@@ -791,8 +809,16 @@ class IntelligentPaperSearchAgent:
             # 确保emoji后有适当间距
             cleaned = re.sub(r'([🎓📊🔍💡🚀📚⚡✨])(\S)', r'\1 \2', cleaned)
             
-            # 优化列表格式
+            # 优化列表格式和智能换行
             cleaned = re.sub(r'\n\s*[-*]\s*', '\n• ', cleaned)
+            
+            # 🎯 智能换行处理：确保每个要点适当分行
+            # 在句号后添加换行（如果后面不是列表项或空行）
+            cleaned = re.sub(r'([。！？])\s*([^•\n\s])', r'\1\n\n\2', cleaned)
+            
+            # 确保每个主要要点前有适当间距
+            cleaned = re.sub(r'([。])• \*\*', r'\1\n\n• **', cleaned)  # 句号后紧接着的要点前加空行
+            cleaned = re.sub(r'(?<!\n\n)• \*\*', '\n\n• **', cleaned)  # 确保每个主要标题前有空行
             
             # 清理多余空行和空白字符
             cleaned = re.sub(r'^\s*\n', '', cleaned, flags=re.MULTILINE)
@@ -815,6 +841,25 @@ class IntelligentPaperSearchAgent:
             if len(fallback) > len(processed_text):
                 return fallback
         
+        # 🎯 泄漏检测和二次清洗
+        template_leakage = [
+            '后续建议', '关键词识别', '内部参考', 
+            '不输出到回答框', 'JSON关键词数据',
+            '基于以上讨论，我发现了几个值得深入研究的要点'
+        ]
+        
+        if any(leak in processed_text for leak in template_leakage):
+            print("🔍 检测到模板内容泄漏，启动二次清洗")
+            processed_text = self._deep_template_cleanup(processed_text)
+            print("🧹 二次清洗完成")
+        
+        # 检查星号泄漏
+        import re
+        if re.search(r'\*\s*$', processed_text, re.MULTILINE):
+            print("🔍 检测到星号泄漏，进行修复")
+            processed_text = re.sub(r'\*\s*$', '', processed_text, flags=re.MULTILINE)
+            print("⭐ 星号清理完成")
+        
         # 检查是否包含基本的学术讨论要素
         if len(processed_text) > 50 and any(indicator in processed_text for indicator in ['🎓', '📊', '🔍', '💡']):
             print("学术讨论内容质量良好")
@@ -828,6 +873,49 @@ class IntelligentPaperSearchAgent:
         else:
             print("内容质量需要增强")
             return self._generate_enhanced_discussion(processed_text, original_response)
+    
+    def _deep_template_cleanup(self, text: str) -> str:
+        """深度清理模板内容的顽固泄漏"""
+        try:
+            print("🔧 开始深度模板清理")
+            cleaned = text
+            
+            # 🎯 超级严格的模板清理规则
+            deep_patterns = [
+                # 各种形式的"后续建议"
+                r'(?:##\s*)?后续建议[\s\S]*?(?=\n\n|\n##|\n\*\*|$)',
+                r'后续建议.*?(?:\n|$)',
+                
+                # 各种形式的"关键词识别"
+                r'关键词识别[（(]*内部参考[）)]*[\s\S]*?(?=\n\n|\n##|\n\*\*|$)',
+                r'关键词识别.*?(?:\n|$)',
+                r'内部参考.*?(?:\n|$)',
+                
+                # 完整的问题段落
+                r'基于以上讨论.*?我可以为您搜索相关的最新文献.*?(?:\n|$)',
+                
+                # 任何包含"你可以看到"的反思段落
+                r'你可以看到.*?(?:\n\n|\n##|\n\*\*|$)',
+                
+                # 清理各种形式的星号泄漏
+                r'(?<=\w)\*+(?=\s*$)',  # 词汇后的行尾星号
+                r'(?<=[:：])\s*\*+(?=\s*$)',  # 冒号后的行尾星号
+                r'^\s*\*+\s*$',  # 单独一行的星号
+            ]
+            
+            for pattern in deep_patterns:
+                cleaned = re.sub(pattern, '', cleaned, flags=re.MULTILINE | re.IGNORECASE)
+            
+            # 特殊处理：移除空的段落分隔符
+            cleaned = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned)
+            cleaned = cleaned.strip()
+            
+            print("🔧 深度清理完成")
+            return cleaned
+            
+        except Exception as e:
+            print(f"深度清理失败: {e}")
+            return text
     
     def _safe_fallback_cleaning(self, response: str) -> str:
         """安全降级清理方案"""
