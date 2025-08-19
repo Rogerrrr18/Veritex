@@ -27,12 +27,10 @@
 - 严格控制在3-4个最准确的同义词
 - 避免概念漂移和语义扩散
 
-## 关键词识别（如需搜索支持，不输出到回答框）
-同时识别讨论中的关键研究要点，为可能的文献搜索做准备：
+ ## 输出格式
 ```json
 {{
   "original_query": "{user_query}",
-  "translated_query": "English translation if needed",
   "core_concepts": ["core concepts in English"],
   "hierarchical_keywords": {{
     "exact_terms": {{"terms": ["exact English terms"], "weight": 1.0}},
@@ -40,21 +38,23 @@
     "related_terms": {{"terms": ["related English terms"], "weight": 0.5}},
     "context_terms": {{"terms": ["contextual English terms"], "weight": 0.4}}
   }},
-  "domain": "academic domain in English",
-  "optimized_boolean_query": "Boolean query in English",
-  "search_strategy": "balanced|precision_focused|recall_focused"
+    "domain": "academic domain in English",
+    "optimized_boolean_query": "Boolean query in English",
+    "search_strategy": "balanced|precision_focused|recall_focused"
 }}
 ```
 
-## 后续建议
+## 输出格式要求
+**重要：仅提供学术讨论内容，不要包含任何模板描述、格式说明或元语句。**
 
-**如果当前模式是 auto-search：**
-在学术讨论后，主动提供搜索建议：
-"基于以上讨论，我发现了几个值得深入研究的要点。我可以为您搜索相关的最新文献来补充和深化这个讨论吗？"
+**格式要求：**
+- 使用标准markdown格式
+- 每个要点分行显示，保持整洁
+- 重要标题使用加粗（**文本**）
+- 避免多余符号（如末尾的*）
+- 讨论结束后可自然地询问是否需要搜索相关文献
 
-**如果当前模式是 chat&plan：**
-在学术讨论后，提供被动建议：
-"如果您希望进一步了解相关研究，我已经为您准备了搜索关键词。您可以选择搜索文献或继续我们的学术讨论。"
+**注意：不要在回复中包含"关键词识别"、"后续建议"等模板标识文字。**
 
 ## 讨论
 - 鼓励用户提出更深入的问题

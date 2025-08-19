@@ -648,23 +648,41 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                               borderRadius: '12px',
                               fontSize: '12px',
                               color: keyword.color,
-                              cursor: 'pointer',
                               transition: 'all 0.2s',
                               userSelect: 'none'
                             }}
-                            onClick={() => removeKeyword(globalIndex)}
-                            title={`Click to remove`}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.backgroundColor = keyword.color + '25';
-                              e.currentTarget.style.borderColor = keyword.color + '50';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = keyword.color + '15';
-                              e.currentTarget.style.borderColor = keyword.color + '30';
-                            }}
                           >
-                            <span>{keyword.term}</span>
-                            <span style={{ fontSize: '10px', opacity: 0.7 }}>×</span>
+                            <span style={{ cursor: 'default' }}>{keyword.term}</span>
+                            <span 
+                              style={{ 
+                                fontSize: '10px', 
+                                opacity: 0.7,
+                                cursor: 'pointer',
+                                padding: '2px',
+                                borderRadius: '50%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '16px',
+                                height: '16px',
+                                transition: 'all 0.2s'
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeKeyword(globalIndex);
+                              }}
+                              title="点击删除"
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = keyword.color + '30';
+                                e.currentTarget.style.opacity = '1';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                                e.currentTarget.style.opacity = '0.7';
+                              }}
+                            >
+                              ×
+                            </span>
                           </div>
                         );
                       })}
@@ -754,23 +772,41 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                               borderRadius: '12px',
                               fontSize: '12px',
                               color: '#6366f1',
-                              cursor: 'pointer',
                               transition: 'all 0.2s',
                               userSelect: 'none'
                             }}
-                            onClick={() => removeKeyword(globalIndex)}
-                            title="Click to remove"
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.backgroundColor = '#6366f125';
-                              e.currentTarget.style.borderColor = '#6366f150';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = '#6366f115';
-                              e.currentTarget.style.borderColor = '#6366f130';
-                            }}
                           >
-                            <span>{keyword.term}</span>
-                            <span style={{ fontSize: '10px', opacity: 0.7 }}>×</span>
+                            <span style={{ cursor: 'default' }}>{keyword.term}</span>
+                            <span 
+                              style={{ 
+                                fontSize: '10px', 
+                                opacity: 0.7,
+                                cursor: 'pointer',
+                                padding: '2px',
+                                borderRadius: '50%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '16px',
+                                height: '16px',
+                                transition: 'all 0.2s'
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeKeyword(globalIndex);
+                              }}
+                              title="点击删除"
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = '#6366f130';
+                                e.currentTarget.style.opacity = '1';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                                e.currentTarget.style.opacity = '0.7';
+                              }}
+                            >
+                              ×
+                            </span>
                           </div>
                         );
                       })}

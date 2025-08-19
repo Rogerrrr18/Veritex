@@ -44,7 +44,7 @@ class IntelligentPaperSearchAgent:
         
         # 使用优化的LLM意图分类器
         self.intent_classifier = get_intent_classifier()
-        print("✅ 使用优化的LLM意图分类器（已移除embedding步骤）")
+        print("使用优化的LLM意图分类器")
         
         self.checkpointer = MemorySaver() if enable_memory else None
         self.graph = self._build_graph()
@@ -52,7 +52,7 @@ class IntelligentPaperSearchAgent:
         # 延迟加载搜索引擎（避免循环依赖）
         self._search_engine = None
         
-        print("✅ 智能缓存系统已启用 - 30分钟TTL，最大100条目")
+        print("智能缓存系统已启用")
     
     async def _get_search_engine(self):
         """获取搜索引擎实例（延迟加载）- 避免循环依赖"""
@@ -61,9 +61,9 @@ class IntelligentPaperSearchAgent:
                 # 使用真实的MultiSourceEngine，删除模拟引擎依赖
                 from multi_source_engine import MultiSourceEngine
                 self._search_engine = MultiSourceEngine()
-                print("✅ 多源搜索引擎实例化成功")
+                print("多源搜索引擎实例化成功")
             except Exception as e:
-                print(f"❌ 搜索引擎实例化失败: {e}")
+                print(f"搜索引擎实例化失败: {e}")
                 raise Exception(f"无法初始化搜索引擎: {e}，请检查依赖包安装")
         return self._search_engine
     
@@ -132,11 +132,11 @@ class IntelligentPaperSearchAgent:
             query = state.get("query", "")
             user_message = state.get("messages", [])[-1].content if state.get("messages") else query
             
-            print(f"🤖 开始智能分析用户请求: {user_message}")
+            print(f"开始分析用户请求: {user_message}")
             
             # 使用Embedding + LLM精排分类器
             intent_result = await self.intent_classifier.classify_intent(user_message)
-            print(f"🔧 意图分类结果: {intent_result.intent} (置信度: {intent_result.confidence:.3f})")
+            print(f"意图分类结果: {intent_result.intent} (置信度: {intent_result.confidence:.3f})")
             
             # 将意图结果保存到state中供后续节点使用
             return {
@@ -155,10 +155,7 @@ class IntelligentPaperSearchAgent:
                 
         except Exception as e:
             error_msg = f"意图分析失败: {str(e)}"
-            print(f"❌ {error_msg}")
-            print(f"🔧 异常详情: {type(e).__name__}: {str(e)}")
-            import traceback
-            print(f"🔧 堆栈跟踪: {traceback.format_exc()}")
+            print(f"错误: {error_msg}")
             # 局部导入AIMessage
             from langchain_core.messages import AIMessage
             return {
@@ -173,11 +170,11 @@ class IntelligentPaperSearchAgent:
         intent_result = state.get("intent_result")
         
         if not intent_result:
-            print("⚠️ 未找到意图分析结果，默认进入对话模式")
+            print("未找到意图分析结果，默认进入对话模式")
             return "chat_conversation"
         
         intent = intent_result.get("intent", "闲聊")
-        print(f"🎯 路由决策：意图 '{intent}' → 对应处理节点")
+        print(f"路由决策：意图 '{intent}' → 对应处理节点")
         
         if intent == "闲聊":
             return "chat_conversation"
@@ -186,19 +183,19 @@ class IntelligentPaperSearchAgent:
         elif intent == "学术探讨":
             return "academic_discussion"
         else:
-            print(f"⚠️ 未知意图 '{intent}'，默认进入对话模式")
+            print(f"未知意图 '{intent}'，默认进入对话模式")
             return "chat_conversation"
     
     async def chat_conversation_node(self, state: PaperSearchState) -> Dict[str, Any]:
         """优化的闲聊对话处理节点 - 减少LLM调用"""
         try:
             user_message = state.get("user_message", "")
-            print(f"💬 闲聊对话处理: {user_message}")
+            print(f"闲聊对话处理: {user_message}")
             
             # 🚀 优化策略：对常见闲聊使用预定义回复，减少LLM调用
             quick_response = self._get_quick_chat_response(user_message)
             if quick_response:
-                print(f"⚡ 使用快速闲聊回复，跳过LLM调用")
+                print("使用快速回复")
                 from langchain_core.messages import AIMessage
                 return {
                     "current_step": "completed",
@@ -211,7 +208,7 @@ class IntelligentPaperSearchAgent:
                 }
             
             # 对复杂闲聊才使用LLM
-            print(f"🤖 复杂闲聊，使用LLM生成回复")
+            print("使用LLM生成回复")
             from prompt_utils import get_chat_conversation_prompt
             prompt = get_chat_conversation_prompt(user_message)
             
@@ -220,7 +217,7 @@ class IntelligentPaperSearchAgent:
             
             # 🧹 应用统一的消息清洗处理
             cleaned_response = self._final_clean_response(response)
-            print(f"📝 闲聊消息清洗完成，清洗前: {len(response)} 字符，清洗后: {len(cleaned_response)} 字符")
+            print("消息清洗完成")
             
             # 明确导入AIMessage避免作用域问题
             from langchain_core.messages import AIMessage
@@ -237,7 +234,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"对话处理失败: {str(e)}"
-            print(f"❌ {error_msg}")
+            print(f"错误: {error_msg}")
             from langchain_core.messages import AIMessage
             return {
                 "current_step": "failed",
@@ -318,13 +315,13 @@ class IntelligentPaperSearchAgent:
                     cache_dict.pop(sorted_items[i][0], None)
                     
         except Exception as e:
-            print(f"⚠️ 缓存清理失败: {e}")
+            print(f"缓存清理失败: {e}")
     
     async def literature_search_node(self, state: PaperSearchState) -> Dict[str, Any]:
         """文献搜索处理节点 - 统一使用关键词扩展流程（支持缓存）"""
         mode = state.get("mode", "auto-search")
         user_message = state.get("user_message", "")
-        print(f"📚 文献搜索处理: {user_message} (模式: {mode})")
+        print(f"文献搜索处理: {user_message} (模式: {mode})")
         
         # 所有模式都使用相同的关键词扩展逻辑
         result = await self._analysis_only_search(state)
@@ -340,11 +337,11 @@ class IntelligentPaperSearchAgent:
             auto_search_message = "我已经为您扩展了搜索关键词，正在自动搜索相关文献..."
             result["messages"] = [AIMessage(content=auto_search_message)]
             
-            print(f"🚀 auto-search模式：已设置自动搜索标记 should_search={result['should_search']}")
+            print("auto-search模式：设置自动搜索")
         else:
             # chat&plan模式保持原有逻辑，等待用户决策
             result["should_search"] = False
-            print(f"💬 chat&plan模式：等待用户决策")
+            print("chat&plan模式：等待用户决策")
         
         return result
             
@@ -362,7 +359,7 @@ class IntelligentPaperSearchAgent:
             if cache_key in self._keyword_expansion_cache:
                 cached_entry = self._keyword_expansion_cache[cache_key]
                 if self._is_cache_valid(cached_entry):
-                    print(f"⚡ 命中关键词扩展缓存，跳过LLM分析")
+                    print("命中关键词扩展缓存")
                     
                     from langchain_core.messages import AIMessage
                     cached_response = cached_entry['response']
@@ -370,7 +367,7 @@ class IntelligentPaperSearchAgent:
                     
                     # 🧹 对缓存的响应也进行清洗，移除JSON内容
                     cleaned_cached_response = self._final_clean_response(cached_response)
-                    print(f"📝 缓存响应清洗完成，清洗前: {len(cached_response)} 字符，清洗后: {len(cleaned_cached_response)} 字符")
+                    print("缓存响应清洗完成")
                     
                     return {
                         "current_step": "search_ready",
@@ -393,8 +390,7 @@ class IntelligentPaperSearchAgent:
             
             # 验证LLM响应
             if not response or len(response.strip()) < 20:
-                print(f"⚠️ LLM响应过短或为空，长度: {len(response) if response else 0}")
-                print(f"⚠️ 使用回退机制处理查询: {user_message}")
+                print("LLM响应异常，使用回退机制")
                 
                 # 提供基本的关键词提取作为回退
                 fallback_analysis = {
@@ -424,7 +420,7 @@ class IntelligentPaperSearchAgent:
             
             # 🧹 清洗响应，移除JSON内容，只保留用户友好的中文内容
             cleaned_response = self._final_clean_response(response)
-            print(f"📝 文献搜索响应清洗完成，清洗前: {len(response)} 字符，清洗后: {len(cleaned_response)} 字符")
+            print("响应清洗完成")
             
             # 🚀 缓存关键词扩展结果
             if keywords_analysis:
@@ -437,9 +433,9 @@ class IntelligentPaperSearchAgent:
                         'mode': mode
                     }
                     self._keyword_expansion_cache[cache_key] = cache_entry
-                    print(f"💾 已缓存关键词扩展结果")
+                    print("已缓存关键词扩展结果")
                 except Exception as e:
-                    print(f"⚠️ 缓存关键词扩展失败: {e}")
+                    print(f"缓存失败: {e}")
             
             from langchain_core.messages import AIMessage
             return {
@@ -456,7 +452,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"文献搜索分析失败: {str(e)}"
-            print(f"❌ {error_msg}")
+            print(f"错误: {error_msg}")
             from langchain_core.messages import AIMessage
             return {
                 "current_step": "failed",
@@ -470,30 +466,30 @@ class IntelligentPaperSearchAgent:
         try:
             user_message = state.get("user_message", "")
             mode = state.get("mode", "auto-search")
-            print(f"🎓 学术探讨处理: {user_message} (模式: {mode})")
+            print(f"学术探讨处理: {user_message} (模式: {mode})")
             
             # 使用简化的prompt工具函数
             from prompt_utils import get_academic_discussion_prompt
             prompt = get_academic_discussion_prompt(user_message, mode=mode)
             
             # 调用LLM进行学术讨论（增加超时时间）
-            print(f"🤖 开始LLM学术讨论分析...")
+            print("开始LLM学术讨论分析")
             import time
             start_time = time.time()
             
             response = await self.llm.simple_chat(prompt=prompt, timeout=60.0)  # 增加到60秒
             end_time = time.time()
-            print(f"✅ LLM调用完成，耗时: {end_time - start_time:.2f}秒，响应长度: {len(response) if response else 0}字符")
+            print(f"LLM调用完成，耗时: {end_time - start_time:.2f}秒")
             
             # 验证LLM响应 - 如果失败直接抛出异常
             if not response or len(response.strip()) < 20:
                 error_msg = f"学术讨论LLM响应无效: 长度={len(response) if response else 0}, 内容='{response}'"
-                print(f"❌ {error_msg}")
+                print(f"错误: {error_msg}")
                 raise Exception(error_msg)
             
             # 🧹 应用统一的消息清洗处理
             cleaned_response = self._final_clean_response(response)
-            print(f"📝 学术探讨消息清洗完成，清洗前: {len(response)} 字符，清洗后: {len(cleaned_response)} 字符")
+            print("学术探讨消息清洗完成")
             
             # 解析可能的关键词信息（恢复原始逻辑）
             keywords_analysis = self._extract_json_analysis(response)
@@ -520,7 +516,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"学术讨论失败: {str(e)}"
-            print(f"❌ {error_msg}")
+            print(f"错误: {error_msg}")
             from langchain_core.messages import AIMessage
             return {
                 "current_step": "failed",
@@ -537,21 +533,78 @@ class IntelligentPaperSearchAgent:
     
     # 已移除：旧版响应处理与备用分析逻辑（现有节点已覆盖同等回退）
     
+    def _clean_json_string(self, json_str: str) -> str:
+        """
+        清洗JSON字符串，修复常见的LLM生成格式问题
+        - 移除尾随逗号
+        - 修复引号问题
+        - 处理换行和空格
+        """
+        try:
+            print(f"🧹 开始JSON清洗，原始长度: {len(json_str)}")
+            
+            # 保存原始JSON用于调试
+            original = json_str
+            
+            # 1. 基础清理：移除多余空白但保持结构
+            cleaned = re.sub(r'\n\s*\n', '\n', json_str)
+            cleaned = re.sub(r'^\s+', '', cleaned, flags=re.MULTILINE)
+            
+            # 2. 修复最常见问题：尾随逗号
+            # 对象中的尾随逗号: },} -> }}
+            cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+            
+            # 数组中的尾随逗号: ,] -> ]
+            cleaned = re.sub(r',(\s*\])', r'\1', cleaned)
+            
+            # 对象属性后的尾随逗号: ,"key" -> "key" 或 ,} -> }
+            cleaned = re.sub(r',(\s*})', r'\1', cleaned)
+            
+            # 3. 修复引号问题（中文引号转换）
+            cleaned = re.sub(r'["""]', '"', cleaned)
+            cleaned = re.sub(r"['']", '"', cleaned)
+            
+            # 4. 确保属性名都有引号
+            cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
+            
+            # 5. 修复多重逗号问题
+            cleaned = re.sub(r',\s*,', ',', cleaned)
+            
+            # 6. 处理数组中的逗号问题
+            # 修复 ["item1", "item2",] 这种情况
+            cleaned = re.sub(r',(\s*\])', r'\1', cleaned)
+            
+            # 7. 最后检查：移除对象结尾的多余逗号
+            # {..., } -> {...}
+            cleaned = re.sub(r',(\s*})(?!\s*[,\]\}])', r'\1', cleaned)
+            
+            if cleaned != original:
+                print(f"🛠️ JSON已清洗，修复了格式问题")
+                # 省略详细预览
+            else:
+                print("JSON格式良好")
+            
+            return cleaned
+            
+        except Exception as e:
+            print(f"JSON清洗失败: {e}")
+            return json_str
+    
     def _extract_json_analysis(self, response: str) -> Optional[Dict[str, Any]]:
         """从LLM响应中提取JSON分析结果"""
         try:
-            print(f"🔧 JSON提取开始，响应总长度: {len(response)}")
+            print("JSON提取开始")
             
             # 检查是否包含JSON标识符
             has_query_analysis = '"query_analysis"' in response
             has_core_concepts = '"core_concepts"' in response
-            print(f"🔧 JSON标识符检查: query_analysis={has_query_analysis}, core_concepts={has_core_concepts}")
+            print(f"JSON标识符检查: {has_query_analysis or has_core_concepts}")
             
             # 使用更智能的JSON提取方法
             if has_query_analysis or has_core_concepts:
                 # 查找完整的JSON块（从第一个{到最后一个}）
                 json_start = response.find('{')
-                print(f"🔧 JSON开始位置: {json_start}")
+                print(f"JSON开始位置: {json_start}")
                 
                 if json_start != -1:
                     brace_count = 0
@@ -566,53 +619,54 @@ class IntelligentPaperSearchAgent:
                                 json_end = i + 1
                                 break
                     
-                    print(f"🔧 JSON结束位置: {json_end}, 括号匹配状态: {'完整' if brace_count == 0 else '不完整'}")
+                    print(f"JSON结束位置: {json_end}")
                     
                     if brace_count == 0:  # 找到完整的JSON
                         json_str = response[json_start:json_end]
-                        print(f"📝 提取到完整JSON，长度: {len(json_str)}")
-                        print(f"🔧 JSON内容预览: {json_str[:150]}...")
+                        print(f"提取到完整JSON，长度: {len(json_str)}")
                         
-                        analysis = json.loads(json_str)
-                        print(f"✅ 成功解析JSON分析结果，包含 {len(analysis)} 个顶级字段")
-                        print(f"🔧 JSON字段: {list(analysis.keys())}")
+                        # 🛠️ JSON清洗 - 修复常见格式问题
+                        cleaned_json = self._clean_json_string(json_str)
+                        
+                        analysis = json.loads(cleaned_json)
+                        print(f"成功解析JSON结果: {len(analysis)}个字段")
                         return analysis
                     else:
-                        print(f"⚠️ JSON结构不完整，括号不匹配，brace_count={brace_count}")
-                        print(f"🔧 尝试备选解析方法...")
+                        print("JSON结构不完整，尝试备选方法")
                         # 尝试找到最大的有效JSON块
                         for end_pos in range(len(response) - 1, json_start, -1):
                             if response[end_pos] == '}':
                                 try_json = response[json_start:end_pos + 1]
                                 try:
                                     analysis = json.loads(try_json)
-                                    print(f"✅ 备选方法成功解析JSON，长度: {len(try_json)}")
+                                    print("备选方法成功解析JSON")
                                     return analysis
                                 except:
                                     continue
-                        print(f"⚠️ 备选方法也失败")
+                        print("备选方法也失败")
                         return None
             
             # 原有的JSON查找逻辑作为备选
-            print(f"🔧 使用正则表达式备选方法...")
+            print("使用正则表达式备选方法")
             json_match = re.search(r'\{[\s\S]*?\}', response)
             if json_match:
                 json_str = json_match.group()
-                print(f"🔧 正则表达式找到JSON，长度: {len(json_str)}")
-                analysis = json.loads(json_str)
-                print(f"✅ 备选方法成功提取JSON分析结果")
+                print(f"正则表达式找到JSON")
+                
+                # 🛠️ JSON清洗 - 修复常见格式问题
+                cleaned_json = self._clean_json_string(json_str)
+                
+                analysis = json.loads(cleaned_json)
+                print("备选方法成功提取JSON结果")
                 return analysis
             else:
-                print("ℹ️ 响应中未包含JSON分析（可能是普通对话）")
+                print("响应中未包含JSON分析")
                 return None
         except json.JSONDecodeError as je:
-            print(f"⚠️ JSON解析错误: {je}")
-            print(f"⚠️ 错误位置: 行{je.lineno}, 列{je.colno}")
-            print(f"⚠️ 问题JSON内容: {response[max(0, je.pos-50):je.pos+50]}")
+            print(f"JSON解析错误: {je}")
             return None
         except Exception as e:
-            print(f"⚠️ JSON提取失败: {type(e).__name__}: {e}")
-            print(f"⚠️ 响应内容前200字符: {response[:200]}")
+            print(f"JSON提取失败: {type(e).__name__}: {e}")
             return None
     
     # 已移除：_extract_user_friendly_response（不再需要单独提取）
@@ -631,11 +685,11 @@ class IntelligentPaperSearchAgent:
             # 第三步：验证和质量保证
             final_response = self._ensure_response_quality(user_friendly_response, response)
             
-            print(f"✅ 消息清洗完成，最终长度: {len(final_response)}")
+            print("消息清洗完成")
             return final_response
                     
         except Exception as e:
-            print(f"⚠️ 消息清洗失败: {e}")
+            print(f"消息清洗失败: {e}")
             # 安全降级：返回基础清理版本
             return self._safe_fallback_cleaning(response)
     
@@ -647,7 +701,7 @@ class IntelligentPaperSearchAgent:
             has_json = any(indicator in response for indicator in json_indicators)
             
             if not has_json:
-                print("📝 未检测到JSON内容，直接处理")
+                print("未检测到JSON内容")
                 return response
             
             # 查找JSON边界
@@ -677,13 +731,13 @@ class IntelligentPaperSearchAgent:
                 
                 # 组合前后内容
                 combined = (before_json + "\n\n" + after_json).strip()
-                print(f"🔍 JSON剥离完成，提取内容长度: {len(combined)}")
+                print(f"JSON剥离完成")
                 return combined if combined else after_json
             
             return response
             
         except Exception as e:
-            print(f"⚠️ JSON剥离失败: {e}")
+            print(f"JSON剥离失败: {e}")
             return response
     
     def _enhance_chinese_readability(self, text: str) -> str:
@@ -696,6 +750,41 @@ class IntelligentPaperSearchAgent:
             cleaned = re.sub(r'```[\s\S]*?```', '', text)
             cleaned = re.sub(r'^\s*[#*\-\s]*普通对话模式[:：]?\s*', '', cleaned, flags=re.MULTILINE)
             
+            # 🔧 移除模板相关的元描述语句（扩展版）
+            template_patterns = [
+                # 文献搜索相关的模板语句
+                r'关键词扩展结果的JSON格式[（(][^）)]*[）)]?',
+                r'对用户查询的直接分析回复\s*',
+                r'个性化研究建议[（(][^）)]*[）)]?',
+                r'按以下格式组织\s*',
+                r'如上所示\s*',
+                r'输出内容结构[:：]\s*',
+                r'\d+\.\s*\*\*[^*]*\*\*[（(][^）)]*[）)]?\s*',
+                r'JSON关键词数据[（(][^）)]*[）)]?\s*',
+                # 学术讨论相关的模板语句
+                r'关键词识别[（(][^）)]*[）)]?.*?(?=\n|$)',
+                r'后续建议\s*.*?(?=\n|$)',
+                r'内部参考.*?(?=\n|$)',
+                r'不输出到回答框.*?(?=\n|$)',
+                r'基于以上讨论，我发现了几个值得深入研究的要点。我可以为您搜索相关的最新文献来补充和深化这个讨论吗？',
+                # 清理多余的星号和格式标记
+                r'\*+\s*(?=\n|$)',  # 行尾多余的星号
+                r'(?<=\w)\*+(?=[:：])',  # 标题后多余的星号  
+                r'• \*',  # 修复 "• *" 组合为 "•"
+                # 清理空的标题行
+                r'\n\s*\*\*\s*\*\*\s*\n',
+                r'\n\s*###?\s*\n',
+            ]
+            
+            # 首先处理特殊替换（非删除）
+            cleaned = re.sub(r'• \*', '•', cleaned)  # 将 "• *" 替换为 "•"
+            # 处理其他形式的星号问题
+            cleaned = re.sub(r'(?<=:)\s*\*(?!\*)', ' ', cleaned)  # 冒号后的单个星号
+            
+            # 然后处理需要删除的模板语句
+            for pattern in template_patterns[:-1]:  # 排除最后一个"• *"模式
+                cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+            
             # 优化段落分隔
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
             
@@ -705,17 +794,21 @@ class IntelligentPaperSearchAgent:
             # 优化列表格式
             cleaned = re.sub(r'\n\s*[-*]\s*', '\n• ', cleaned)
             
-            print(f"📝 中文可读性优化完成")
+            # 清理多余空行和空白字符
+            cleaned = re.sub(r'^\s*\n', '', cleaned, flags=re.MULTILINE)
+            cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)
+            
+            print("中文可读性优化完成（包含模板语句清理）")
             return cleaned.strip()
             
         except Exception as e:
-            print(f"⚠️ 中文优化失败: {e}")
+            print(f"中文优化失败: {e}")
             return text
     
     def _ensure_response_quality(self, processed_text: str, original_response: str) -> str:
         """确保响应质量，必要时进行补充"""
         if not processed_text or len(processed_text) < 20:
-            print(f"⚠️ 处理后内容过少，尝试从原始响应恢复")
+            print("处理后内容过少，尝试恢复")
             
             # 尝试从原始响应中提取有用内容
             fallback = self._extract_meaningful_content(original_response)
@@ -724,16 +817,16 @@ class IntelligentPaperSearchAgent:
         
         # 检查是否包含基本的学术讨论要素
         if len(processed_text) > 50 and any(indicator in processed_text for indicator in ['🎓', '📊', '🔍', '💡']):
-            print(f"✅ 学术讨论内容质量良好")
+            print("学术讨论内容质量良好")
             return processed_text
         elif len(processed_text) > 100:  # 提高阈值，避免过度增强
-            print(f"✅ 基础讨论内容质量可接受")
+            print("基础讨论内容质量可接受")
             return processed_text
         elif len(processed_text) > 30:  # 中等长度内容，检查是否需要增强
-            print(f"📝 内容长度适中，保持原样")
+            print("内容长度适中")
             return processed_text
         else:
-            print(f"⚠️ 内容质量需要增强")
+            print("内容质量需要增强")
             return self._generate_enhanced_discussion(processed_text, original_response)
     
     def _safe_fallback_cleaning(self, response: str) -> str:
@@ -789,7 +882,7 @@ class IntelligentPaperSearchAgent:
             return enhanced
             
         except Exception as e:
-            print(f"⚠️ 增强讨论生成失败: {e}")
+            print(f"增强讨论生成失败: {e}")
             return base_content or "感谢您的学术问题，这是一个很有价值的研究方向。"
     
     # 已移除：不再使用的解释增强与关键词提取辅助函数
@@ -804,18 +897,17 @@ class IntelligentPaperSearchAgent:
         should_search = state.get("should_search", False)
         
         # 添加详细调试信息
-        print(f"📋 文献搜索后路由: 模式={mode}, 应该搜索={should_search}")
-        print(f"🔍 状态调试: 所有状态键={list(state.keys())}")
+        print(f"文献搜索后路由: 模式={mode}, 应该搜索={should_search}")
         
         if mode == "auto-search" and should_search:
-            print("🚀 auto-search模式：自动进入搜索流程")
+            print("auto-search模式：自动进入搜索流程")
             return "search"
         elif mode == "auto-search":
-            print("⚠️ auto-search模式异常：缺少搜索标记，等待决策")
+            print("auto-search模式异常：缺少搜索标记")
             return "wait_decision"
         else:
             # chat&plan模式
-            print("💬 chat&plan模式：展示分析结果等待用户决策")
+            print("chat&plan模式：展示分析结果")
             return "wait_decision"
     
     def should_execute_search_after_discussion(self, state: PaperSearchState) -> str:
@@ -823,7 +915,7 @@ class IntelligentPaperSearchAgent:
         mode = state.get("mode", "auto-search") 
         search_suggestion = state.get("search_suggestion", False)
         
-        print(f"🎓 学术探讨后路由: 模式={mode}, 搜索建议={search_suggestion}")
+        print(f"学术探讨后路由: 模式={mode}, 搜索建议={search_suggestion}")
         
         # 学术探讨通常不自动搜索，只在特殊情况下建议
         # 这里暂时都返回 "end"，未来可以根据需要添加更复杂的逻辑
@@ -841,11 +933,11 @@ class IntelligentPaperSearchAgent:
             year_to = state.get("year_to")
             sources = state.get("sources")
             
-            print(f"🔍 开始执行搜索: query={query}, max_results={max_results}")
+            print(f"开始执行搜索: query={query}, max_results={max_results}")
             
             # 构建搜索查询
             search_query = self._build_search_query(query, analysis)
-            print(f"📋 构建的搜索查询: {search_query}")
+            print(f"构建的搜索查询: {search_query}")
             
             # 获取搜索引擎并执行搜索
             search_engine = await self._get_search_engine()
@@ -866,7 +958,7 @@ class IntelligentPaperSearchAgent:
                 # 兜底：使用基础搜索接口
                 search_result = await search_engine.search_parallel(search_query, max_results)
                 papers = search_result if isinstance(search_result, list) else search_result.get('papers', [])
-            print(f"📚 搜索完成，找到 {len(papers)} 篇论文")
+            print(f"搜索完成，找到 {len(papers)} 篇论文")
             
             # 转换为标准格式
             formatted_results = self._format_search_results(papers)
@@ -879,7 +971,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"搜索执行失败: {str(e)}"
-            print(f"❌ {error_msg}")
+            print(f"错误: {error_msg}")
             return {
                 "error_message": error_msg,
                 "current_step": "failed",
@@ -961,13 +1053,12 @@ class IntelligentPaperSearchAgent:
                 # 回退到原始查询
                 final_query = original_query
             
-            print(f"🎯 构建的简化查询: {final_query}")
-            print(f"📊 查询组件: 使用核心术语={len(all_important_terms)}, 总可用关键词={len(exact_terms) + len(core_synonyms) + len(related_terms)}")
+            print(f"构建的简化查询: {final_query}")
             
             return final_query
             
         except Exception as e:
-            print(f"⚠️ 查询构建失败，使用原始查询: {e}")
+            print(f"查询构建失败，使用原始查询: {e}")
             return original_query
     
     def _extract_keywords_from_analysis(self, analysis: Optional[Dict[str, Any]]) -> List[str]:
@@ -983,7 +1074,7 @@ class IntelligentPaperSearchAgent:
                 keywords.extend(terms)
             return keywords[:10]  # 限制关键词数量
         except Exception as e:
-            print(f"⚠️ 关键词提取失败: {e}")
+            print(f"关键词提取失败: {e}")
             return []
     
     def _format_search_results(self, papers: List) -> List[Dict[str, Any]]:
@@ -1027,7 +1118,7 @@ class IntelligentPaperSearchAgent:
                         "keywords": paper.get('keywords', None)
                     }
                 else:
-                    print(f"⚠️ 未知格式的论文对象 (索引 {i}): {type(paper)}")
+                    print(f"未知格式的论文对象 (索引 {i}): {type(paper)}")
                     continue
                 
                 # 数据完整性验证和清理
@@ -1036,7 +1127,7 @@ class IntelligentPaperSearchAgent:
                 formatted_results.append(paper_dict)
                 
             except Exception as e:
-                print(f"❌ 论文格式化失败 (索引 {i}): {e}")
+                print(f"错误: 论文格式化失败 (索引 {i}): {e}")
                 # 尝试生成一个最小化的有效条目，避免完全丢失数据
                 try:
                     fallback_dict = {
@@ -1055,12 +1146,12 @@ class IntelligentPaperSearchAgent:
                         "_processing_error": str(e)  # 记录错误信息
                     }
                     formatted_results.append(fallback_dict)
-                    print(f"⚠️ 使用备用格式保存论文 {i+1}")
+                    print(f"使用备用格式保存论文 {i+1}")
                 except:
-                    print(f"❌ 完全无法处理论文 {i+1}，跳过")
+                    print(f"无法处理论文 {i+1}，跳过")
                     continue
         
-        print(f"✅ 论文格式化完成: {len(formatted_results)}/{len(papers)} 篇成功处理")
+        print(f"论文格式化完成: {len(formatted_results)}/{len(papers)} 篇成功处理")
         return formatted_results
     
     def _safe_get_attr(self, obj, attr_name: str, default_value):
@@ -1074,7 +1165,7 @@ class IntelligentPaperSearchAgent:
                 return default_value if default_value != "" else ""
             return value
         except Exception as e:
-            print(f"⚠️ 获取属性 {attr_name} 失败: {e}")
+            print(f"获取属性 {attr_name} 失败: {e}")
             return default_value
     
     def _validate_and_clean_paper_data(self, paper_dict: Dict[str, Any], index: int) -> Dict[str, Any]:
@@ -1133,7 +1224,7 @@ class IntelligentPaperSearchAgent:
             return paper_dict
             
         except Exception as e:
-            print(f"⚠️ 论文数据验证失败 (索引 {index}): {e}")
+            print(f"论文数据验证失败 (索引 {index}): {e}")
             return paper_dict
     
     async def result_formatting_node(self, state: PaperSearchState) -> Dict[str, Any]:
@@ -1143,13 +1234,13 @@ class IntelligentPaperSearchAgent:
             analysis = state.get("analysis_result", {})
             keywords = state.get("search_keywords", [])
             
-            print(f"📋 保持原有学术分析内容，搜索到 {len(search_results)} 个结果")
+            print(f"保持原有学术分析内容，搜索到 {len(search_results)} 个结果")
             
             # 🔑 重要修改：不覆盖intent_analysis_node生成的详细学术指导
             # 保持原有的详细分析内容，让用户看到完整的专业解读
             existing_messages = state.get("messages", [])
             if existing_messages:
-                print(f"✅ 保持现有的详细学术分析内容")
+                print("保持现有的详细学术分析内容")
                 return {
                     "current_step": "completed",
                     "is_completed": True
@@ -1158,7 +1249,7 @@ class IntelligentPaperSearchAgent:
             else:
                 # 备用响应（正常情况下不会到这里）
                 fallback_response = "✅ 已完成学术分析和关键词扩展。请查看右侧关键词云进行进一步的文献搜索。"
-                print(f"⚠️ 使用备用响应")
+                print("使用备用响应")
                 # 局部导入AIMessage
                 from langchain_core.messages import AIMessage
                 return {
@@ -1169,7 +1260,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"结果格式化失败: {str(e)}"
-            print(f"❌ {error_msg}")
+            print(f"错误: {error_msg}")
             # 局部导入AIMessage
             from langchain_core.messages import AIMessage
             return {
@@ -1199,10 +1290,10 @@ class IntelligentPaperSearchAgent:
         """清空所有缓存"""
         try:
             self._keyword_expansion_cache.clear()
-            print("🗑️ 所有缓存已清空")
+            print("所有缓存已清空")
             return True
         except Exception as e:
-            print(f"⚠️ 清空缓存失败: {e}")
+            print(f"清空缓存失败: {e}")
             return False
     
     def _extract_technical_terms_from_chinese(self, query: str) -> List[str]:
@@ -1252,11 +1343,11 @@ class IntelligentPaperSearchAgent:
         unique_terms = list(dict.fromkeys(extracted_terms))  # 保持顺序去重
         
         if unique_terms:
-            print(f"🔤 中文术语转换: {query} → {unique_terms}")
+            print(f"中文术语转换: {query} → {unique_terms}")
         else:
             # 最后的回退：使用原始查询的英文描述
             unique_terms = ["research", "study"]
-            print(f"⚠️ 无法识别专业术语，使用通用学术词汇: {unique_terms}")
+            print(f"无法识别专业术语，使用通用学术词汇: {unique_terms}")
         
         return unique_terms
     
@@ -1296,9 +1387,9 @@ class IntelligentPaperSearchAgent:
                 if converted_messages:
                     initial_state['messages'] = converted_messages
         except Exception as e:
-            print(f"⚠️ 注入历史失败: {e}")
+            print(f"注入历史失败: {e}")
         
-        print(f"🚀 启动智能学术搜索工作流 - 查询: {query}")
+        print(f"启动智能学术搜索工作流 - 查询: {query}")
         
         config = {"configurable": {"thread_id": thread_id}} if self.enable_memory else {}
         
@@ -1330,7 +1421,7 @@ class IntelligentPaperSearchAgent:
                 "need_search_strategy": final_state.get("need_search_strategy", False)
             }
             
-            print(f"✅ 工作流完成: {'成功' if result['success'] else '失败'}")
+            print(f"工作流完成: {'成功' if result['success'] else '失败'}")
             return result
             
         except Exception as e:
@@ -1340,12 +1431,12 @@ class IntelligentPaperSearchAgent:
             # 检查是否是CAPTCHA相关错误
             if 'captcha' in error_str or 'blocked' in error_str:
                 user_friendly_msg = "搜索服务暂时受限，请稍等片刻后重试，或尝试使用其他关键词。"
-                print(f"⚠️ CAPTCHA限制: {error_msg}")
+                print(f"CAPTCHA限制: {error_msg}")
             else:
                 user_friendly_msg = "处理您的请求时出现错误，请稍后再试。"
-                print(f"❌ {error_msg}")
+                print(f"错误: {error_msg}")
                 import traceback
-                print(f"🔧 详细错误堆栈: {traceback.format_exc()}")
+                print(f"详细错误堆栈: {traceback.format_exc()}")
             
             return {
                 "success": False,
@@ -1398,7 +1489,7 @@ async def test_intelligent_agent():
     print(f"是否为学术查询: {result2['is_academic_query']}")
     print(f"回答预览: {result2['response'][:200]}...")
     
-    print("✅ 智能搜索工作流测试完成")
+    print("智能搜索工作流测试完成")
 
 
 if __name__ == "__main__":

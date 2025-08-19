@@ -35,7 +35,7 @@ class LLMIntentClassifier:
         # LLM接口
         self.llm = None
         
-        print("✅ 使用优化的LLM意图分类器（已移除embedding步骤）")
+        print("使用优化的LLM意图分类器")
         
     async def _llm_classify(self, query: str) -> IntentResult:
         """LLM智能分类"""
@@ -51,7 +51,7 @@ class LLMIntentClassifier:
             return self._parse_llm_response(response, query)
             
         except Exception as e:
-            print(f"❌ LLM分类失败: {e}")
+            print(f"LLM分类失败: {e}")
             # 降级到规则分类
             return self._rule_classify(query)
     
@@ -118,11 +118,11 @@ class LLMIntentClassifier:
                     response=response if result_data.get("intent") == "闲聊" else None
                 )
             else:
-                print("⚠️ LLM响应格式解析失败，使用规则降级方案")
+                print("LLM响应格式解析失败，使用规则降级方案")
                 return self._rule_classify(query)
                 
         except Exception as e:
-            print(f"❌ LLM响应解析失败: {e}")
+            print(f"LLM响应解析失败: {e}")
             return self._rule_classify(query)
     
     def _rule_classify(self, query: str) -> IntentResult:
@@ -319,13 +319,13 @@ class LLMIntentClassifier:
     
     async def classify_intent(self, query: str) -> IntentResult:
         """优化的分类接口：规则优先 + LLM降级，大幅减少LLM调用"""
-        print(f"🔍 开始意图分析: {query}")
+        print(f"开始意图分析: {query}")
         
         # 检查结果缓存
         cache_key = hashlib.md5(query.encode()).hexdigest()
         if cache_key in self.result_cache:
             cached_result = self.result_cache[cache_key]
-            print(f"✅ 命中缓存: {cached_result.intent} ({cached_result.confidence:.3f})")
+            print(f"命中缓存: {cached_result.intent} ({cached_result.confidence:.3f})")
             return cached_result
         
         # 🚀 优化策略：规则分类优先，仅模糊情况使用LLM
@@ -333,7 +333,7 @@ class LLMIntentClassifier:
         
         # 如果规则分类置信度高（>=0.8），直接返回，避免LLM调用
         if rule_result.confidence >= 0.8:
-            print(f"⚡ 规则分类高置信度命中: {rule_result.intent} ({rule_result.confidence:.3f}) - 跳过LLM")
+            print(f"规则分类高置信度命中: {rule_result.intent} ({rule_result.confidence:.3f})")
             
             # 缓存规则结果
             if len(self.result_cache) >= self.cache_size:
@@ -345,7 +345,7 @@ class LLMIntentClassifier:
             return rule_result
         
         # 仅对低置信度情况使用LLM进行精确分类
-        print(f"🤖 规则分类置信度较低({rule_result.confidence:.3f})，使用LLM精确分类...")
+        print(f"规则分类置信度较低({rule_result.confidence:.3f})，使用LLM精确分类")
         llm_result = await self._llm_classify(query)
         
         # 选择更可信的结果
@@ -353,7 +353,7 @@ class LLMIntentClassifier:
             final_result = llm_result
         else:
             final_result = rule_result
-            print(f"🔄 LLM分类置信度不高，保持规则分类结果")
+            print("LLM分类置信度不高，保持规则分类结果")
         
         # 缓存最终结果
         if len(self.result_cache) >= self.cache_size:
@@ -363,7 +363,7 @@ class LLMIntentClassifier:
         
         self.result_cache[cache_key] = final_result
         
-        print(f"✅ 最终分类结果: {final_result.intent} (置信度: {final_result.confidence:.3f}, 方法: {final_result.method})")
+        print(f"最终分类结果: {final_result.intent} (置信度: {final_result.confidence:.3f}, 方法: {final_result.method})")
         return final_result
     
     def get_stats(self) -> Dict[str, Any]:
@@ -389,7 +389,7 @@ def get_intent_classifier() -> LLMIntentClassifier:
 # 测试功能
 async def test_intent_classifier():
     """测试优化的意图分类器"""
-    print("🔍 测试优化的LLM意图分类器...")
+    print("测试优化的LLM意图分类器")
     
     classifier = get_intent_classifier()
     
@@ -407,16 +407,16 @@ async def test_intent_classifier():
     
     for query in test_queries:
         result = await classifier.classify_intent(query)
-        print(f"📝 查询: {query}")
+        print(f"查询: {query}")
         print(f"   分类: {result.intent} (置信度: {result.confidence:.3f})")
         print(f"   方法: {result.method}, 原因: {result.reasoning}")
         print()
     
     # 打印统计信息
     stats = classifier.get_stats()
-    print("📊 分类器统计:", json.dumps(stats, indent=2, ensure_ascii=False))
+    print("分类器统计:", json.dumps(stats, indent=2, ensure_ascii=False))
     
-    print("✅ 测试完成")
+    print("测试完成")
 
 if __name__ == "__main__":
     asyncio.run(test_intent_classifier())

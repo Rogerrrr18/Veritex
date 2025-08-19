@@ -750,8 +750,9 @@ class ScholarlyAPI:
                     if count >= limit:
                         break
                         
-                    # 参考Paper-god-beta2: 简单的结果间延迟
-                    await self._simple_delay()
+                    # 增强的结果间延迟策略，避免429错误
+                    delay = random.uniform(2.0, 5.0)  # 2-5秒随机延迟，更保守
+                    await asyncio.sleep(delay)
                     
                 except StopIteration:
                     logger.info("scholarly搜索已无更多结果")
@@ -763,13 +764,60 @@ class ScholarlyAPI:
             logger.info(f"✅ scholarly库搜索完成，获得 {len(papers)} 篇论文")
             
         except Exception as e:
-            # 参考Paper-god-beta2: 简单处理错误，不过度分类
-            logger.warning(f"⚠️ scholarly搜索错误: {str(e)[:100]}...")
+            error_str = str(e).lower()
+            # 增强429错误检测和重试机制
+            is_rate_limit_error = any(keyword in error_str for keyword in [
+                '429', 'too many requests', 'rate limit', 'blocked', 
+                'cannot fetch from google scholar', 'unusual traffic',
+                'captcha', 'temporarily blocked', 'retry-after'
+            ])
             
-            # 只在明确的429错误时才返回空结果
-            if '429' in str(e) or 'Cannot Fetch from Google Scholar' in str(e):
-                logger.info("📍 检测到Google Scholar访问限制")
-                return []
+            if is_rate_limit_error:
+                logger.warning(f"⚠️ scholarly遇到访问限制: {str(e)[:100]}...")
+                logger.info("📍 检测到Google Scholar访问限制，建议稍后重试")
+                
+                # 短暂等待后尝试一次补救
+                if len(papers) == 0:
+                    logger.info("🔄 尝试短延迟后的补救搜索...")
+                    await asyncio.sleep(random.uniform(15.0, 30.0))
+                    
+                    try:
+                        # 简单的补救尝试
+                        search_generator = scholarly.search_pubs(query)
+                        for i in range(min(5, limit)):  # 只尝试获取少量结果
+                            try:
+                                pub = next(search_generator)
+                                if pub and pub.get('bib', {}).get('title'):
+                                    bib = pub.get('bib', {})
+                                    paper = Paper(
+                                        title=bib.get('title', '').strip(),
+                                        authors=[str(author).strip() for author in bib.get('author', [])],
+                                        abstract=bib.get('abstract', '')[:300] + "..." if bib.get('abstract') else '',
+                                        year=int(bib.get('pub_year')) if bib.get('pub_year') else None,
+                                        journal=bib.get('venue', ''),
+                                        url=pub.get('pub_url', '') or pub.get('eprint_url', ''),
+                                        citations=int(pub.get('num_citations', 0)) if pub.get('num_citations') else 0,
+                                        source='scholarly',
+                                        relevance_score=1.0 - (i * 0.1)
+                                    )
+                                    papers.append(paper)
+                                    await asyncio.sleep(random.uniform(8.0, 15.0))  # 更保守的延迟
+                                    
+                            except (StopIteration, Exception):
+                                break
+                                
+                        if papers:
+                            logger.info(f"✅ 补救搜索成功，获得 {len(papers)} 篇论文")
+                        else:
+                            logger.info("📍 补救搜索仍然失败，切换到其他数据源")
+                            
+                    except Exception as retry_e:
+                        logger.debug(f"补救搜索也失败: {retry_e}")
+                
+                return papers  # 返回已获取的结果
+            else:
+                logger.warning(f"⚠️ scholarly搜索错误: {str(e)[:100]}...")
+                return papers  # 返回已获取的结果
         
         return papers
     
@@ -1202,18 +1250,80 @@ class MultiSourceEngine:
                 else:
                     logger.info(f"✅ {source_name} 返回 {len(result)} 篇论文")
         
-        # 统计数据源成功情况
-        stable_success = len([name for name in source_names[:active_stable_sources] 
-                            if name not in captcha_errors])
+        # 统计数据源成功情况和实际获取的论文数量
+        stable_success_count = len([name for name in source_names 
+                                  if name != 'scholarly' and name not in captcha_errors])
         scholar_success = 'scholarly' not in captcha_errors if has_scholar else False
         
+        # 检查主力源是否失败且获得的论文数量不足
+        scholarly_papers = sum(len(result) for i, result in enumerate(results) 
+                            if isinstance(result, list) and i < len(source_names) 
+                            and source_names[i] == 'scholarly')
+        
+        need_compensation = False
+        if 'scholarly' in captcha_errors or (scholar_success and scholarly_papers < scholar_limit * 0.3):
+            # 主力源失败或获得的论文数量严重不足（少于预期的30%）
+            need_compensation = True
+            missing_quota = scholar_limit - scholarly_papers
+            
+            logger.warning(f"🔄 主力搜索源未达预期：获得{scholarly_papers}篇，预期{scholar_limit}篇，缺口{missing_quota}篇")
+            
+            if stable_success_count > 0 and missing_quota > 0:
+                # 启动补偿搜索：将缺失的配额分配给可用的辅助源
+                logger.info(f"🚀 启动补偿搜索：将{missing_quota}篇配额分配给{stable_success_count}个可用数据源")
+                
+                compensation_per_source = max(5, missing_quota // stable_success_count)
+                compensation_tasks = []
+                compensation_source_names = []
+                
+                # 为成功的辅助数据源分配额外配额
+                for source_name, source_api, source_timeout, original_limit in sources_to_search:
+                    if source_name != 'scholarly' and source_name not in captcha_errors:
+                        # 检查该源是否已经达到或接近其原始配额
+                        source_papers = sum(len(result) for i, result in enumerate(results) 
+                                          if isinstance(result, list) and i < len(source_names) 
+                                          and source_names[i] == source_name)
+                        
+                        if source_papers < original_limit * 1.5:  # 如果没有明显超额，则进行补偿搜索
+                            compensation_source_names.append(source_name)
+                            task = asyncio.create_task(
+                                asyncio.wait_for(
+                                    source_api.search(query, compensation_per_source), 
+                                    timeout=source_timeout
+                                )
+                            )
+                            compensation_tasks.append(task)
+                            logger.debug(f"📈 {source_name}补偿搜索：额外{compensation_per_source}篇")
+                
+                # 执行补偿搜索
+                if compensation_tasks:
+                    try:
+                        compensation_results = await asyncio.gather(*compensation_tasks, return_exceptions=True)
+                        
+                        compensation_papers = 0
+                        for i, comp_result in enumerate(compensation_results):
+                            if isinstance(comp_result, list) and comp_result:
+                                all_papers.extend(comp_result)
+                                compensation_papers += len(comp_result)
+                                source_name = compensation_source_names[i] if i < len(compensation_source_names) else f"补偿源{i}"
+                                logger.info(f"✅ 补偿搜索-{source_name}：额外获得{len(comp_result)}篇论文")
+                        
+                        if compensation_papers > 0:
+                            logger.info(f"🎯 补偿搜索成功：总计获得{compensation_papers}篇额外论文")
+                        else:
+                            logger.info("📍 补偿搜索未获得额外论文，可能是配额已饱和")
+                            
+                    except Exception as e:
+                        logger.warning(f"⚠️ 补偿搜索失败: {e}")
+        
         if captcha_errors:
-            if 'scholarly' in captcha_errors and stable_success > 0:
-                logger.warning(f"⚠️ 主力搜索源 scholarly 访问受限，使用辅助数据源({stable_success}个)")
-            elif 'scholarly' in captcha_errors and stable_success == 0:
+            if 'scholarly' in captcha_errors and stable_success_count > 0:
+                status = "已启动补偿搜索" if need_compensation else "使用辅助数据源"
+                logger.warning(f"⚠️ 主力搜索源 scholarly 访问受限，{status}({stable_success_count}个)")
+            elif 'scholarly' in captcha_errors and stable_success_count == 0:
                 logger.warning(f"🚫 主力搜索源和辅助源均访问受限: {', '.join(captcha_errors)}")
                 logger.info("💡 建议: 稍后重试或使用不同关键词")
-            elif stable_success == 0:
+            elif stable_success_count == 0:
                 logger.warning(f"🚫 所有数据源访问受限: {', '.join(captcha_errors)}")
                 logger.info("💡 建议: 稍后重试或使用不同关键词")
             else:
