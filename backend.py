@@ -7,6 +7,7 @@ import os
 import logging
 import json
 import asyncio
+import re
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -272,6 +273,69 @@ async def chat_get_info():
         }
     }
 
+def smart_chunk_text(text: str, max_chunk_size: int = 50) -> List[str]:
+    """
+    智能分割文本，避免破坏markdown格式
+    优先在句子边界、段落边界分割，避免在markdown标记中间断开
+    """
+    if not text:
+        return []
+    
+    chunks = []
+    current_chunk = ""
+    
+    # 按段落分割（双换行）
+    paragraphs = text.split('\n\n')
+    
+    for paragraph in paragraphs:
+        # 如果段落为空，跳过
+        if not paragraph.strip():
+            continue
+            
+        # 如果当前段落很短，直接加入当前chunk
+        if len(paragraph) <= max_chunk_size:
+            if current_chunk and len(current_chunk + paragraph) > max_chunk_size:
+                # 当前chunk已满，开始新chunk
+                chunks.append(current_chunk)
+                current_chunk = paragraph + '\n\n'
+            else:
+                current_chunk += paragraph + '\n\n'
+        else:
+            # 段落太长，需要进一步分割
+            # 先保存当前chunk
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = ""
+            
+            # 按句子分割长段落
+            sentences = re.split(r'([。！？\.\!\?]\s*)', paragraph)
+            temp_chunk = ""
+            
+            for i in range(0, len(sentences), 2):
+                if i + 1 < len(sentences):
+                    sentence = sentences[i] + sentences[i + 1]
+                else:
+                    sentence = sentences[i]
+                
+                if not sentence.strip():
+                    continue
+                    
+                if len(temp_chunk + sentence) <= max_chunk_size:
+                    temp_chunk += sentence
+                else:
+                    if temp_chunk:
+                        chunks.append(temp_chunk)
+                    temp_chunk = sentence
+            
+            if temp_chunk:
+                current_chunk = temp_chunk + '\n\n'
+    
+    # 添加最后的chunk
+    if current_chunk:
+        chunks.append(current_chunk)
+    
+    return [chunk for chunk in chunks if chunk.strip()]
+
 async def generate_stream_response(
     message: str,
     history: List[Dict[str, str]],
@@ -345,18 +409,12 @@ async def generate_stream_response(
             
             # 分段发送响应内容
             if ai_response:
-                # 将响应分成多个片段来模拟流式输出
-                words = ai_response.split()
-                chunk_size = 3  # 每次发送3个词
+                # 智能分割，避免破坏markdown格式
+                chunks = smart_chunk_text(ai_response)
                 
-                for i in range(0, len(words), chunk_size):
-                    chunk_words = words[i:i+chunk_size]
-                    chunk_text = ' '.join(chunk_words)
-                    if i + chunk_size < len(words):
-                        chunk_text += ' '
-                    
-                    yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk_text}})}\n\n"
-                    await asyncio.sleep(0.1)  # 模拟打字效果
+                for chunk in chunks:
+                    yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
+                    await asyncio.sleep(0.05)  # 减少延迟，提升用户体验
             
             # 发送完成事件和其他数据
             yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': is_academic, 'search_results': final_result.get('search_results', []), 'analysis_result': final_result.get('analysis_result')}})}\n\n"

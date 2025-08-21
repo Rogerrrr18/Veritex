@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { apiCall, API_CONFIG } from './config';
@@ -54,6 +54,38 @@ interface ChatInterfaceProps {
   className?: string;
 }
 
+// 防抖函数
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+// Markdown完整性检查
+const isMarkdownComplete = (text: string): boolean => {
+  // 检查配对的markdown标记
+  const boldMarks = (text.match(/\*\*/g) || []).length;
+  const italicMarks = (text.match(/(?<!\*)\*(?!\*)/g) || []).length;
+  const codeBlocks = (text.match(/```/g) || []).length;
+  const inlineCode = (text.match(/(?<!`)`(?!`)/g) || []).length;
+  
+  // 检查是否配对
+  return boldMarks % 2 === 0 && 
+         italicMarks % 2 === 0 && 
+         codeBlocks % 2 === 0 && 
+         inlineCode % 2 === 0;
+};
+
 // 使用用户隔离存储键名
 const CHAT_STORAGE_KEY = USER_DATA_KEYS.CHAT_HISTORY;
 const CHAT_ANALYSIS_KEY = USER_DATA_KEYS.CURRENT_ANALYSIS;
@@ -69,6 +101,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [currentAnalysis, setCurrentAnalysis] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // 流式传输相关状态
+  const [streamingText, setStreamingText] = useState('');
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const debouncedStreamingText = useDebounce(streamingText, 100); // 100ms 防抖
   
   // 关键词云面板状态
   const [isKeywordPanelCollapsed, setIsKeywordPanelCollapsed] = useState(false);
@@ -86,6 +123,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       setIsKeywordPanelCollapsed(false);
     }
   }, [keywordPanelWidth, isKeywordPanelCollapsed]);
+
+  // 处理防抖后的流式文本更新
+  useEffect(() => {
+    if (streamingMessageId && debouncedStreamingText) {
+      // 检查markdown完整性，如果不完整则显示为纯文本
+      const textToDisplay = isMarkdownComplete(debouncedStreamingText) 
+        ? debouncedStreamingText 
+        : debouncedStreamingText.replace(/\*\*/g, ''); // 移除不完整的粗体标记
+      
+      setMessages(prev => prev.map(msg => 
+        msg.id === streamingMessageId 
+          ? { ...msg, text: textToDisplay }
+          : msg
+      ));
+    }
+  }, [debouncedStreamingText, streamingMessageId]);
   
   // My面板状态
   const [isMyPanelCollapsed, setIsMyPanelCollapsed] = useState(false);
@@ -742,6 +795,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
 
   // 处理流式响应
   const handleStreamingResponse = async (userMessage: Message, newMessages: Message[]) => {
+    // 重置流式传输状态
+    setStreamingText('');
+    
     const mappedHistory = newMessages.map(m => ({
       role: m.isUser ? 'user' : 'assistant',
       content: m.text
@@ -761,6 +817,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       isUser: false,
       timestamp: Date.now() + 1
     };
+
+    // 设置当前流式消息ID
+    setStreamingMessageId(assistantMessage.id);
 
     const messagesWithAssistant = [...newMessages, assistantMessage];
     setMessages(messagesWithAssistant);
@@ -813,12 +872,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 // 内容片段
                 accumulatedText += data.data.content;
                 
-                // 实时更新消息
-                setMessages(prev => prev.map(msg => 
-                  msg.id === assistantMessage.id 
-                    ? { ...msg, text: accumulatedText }
-                    : msg
-                ));
+                // 使用防抖更新，减少重渲染
+                setStreamingText(accumulatedText);
                 
                 // 自动滚动到底部
                 setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 0);
@@ -847,6 +902,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         hierarchicalKeywords = analysisResult.hierarchical_keywords;
         setCurrentAnalysis(analysisResult);
       }
+
+      // 清理流式传输状态
+      setStreamingMessageId(null);
+      setStreamingText('');
 
       const finalAssistantMessage: Message = {
         ...assistantMessage,
