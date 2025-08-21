@@ -1770,14 +1770,16 @@ body[data-theme='dark'] {
 /* 打字指示器动画 */
 .typing-indicator {
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
 }
 
 .typing-indicator span {
-  width: 8px;
-  height: 8px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
-  background-color: #6c757d;
+  background-color: #fff;
   animation: typing 1.4s infinite ease-in-out both;
 }
 

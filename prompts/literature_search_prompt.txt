@@ -12,13 +12,13 @@
 - 采用4层分级扩展策略
 
 ### 4层扩展架构：
-1. **exact_terms**（权重1.0）：必须精确匹配的核心术语（最好是分词形式）
+1. **exact_terms**（权重1.0）：必须精确匹配的核心术语（分词形式）
 2. **core_synonyms**（权重0.9）：高度同义的学术表达（3-4个精准同义词）
 3. **related_terms**（权重0.5）：相关技术术语和方法（5-6个）
 4. **context_terms**（权重0.4）：基于上下文意图的扩展词（3-4个）
 
 ### 核心同义词扩展原则：
-- 必须是真正的高度同义术语（最好是分词形式）
+- 必须是真正的高度同义术语（分词形式）
 - 仅限学术表达方式的不同，概念内核完全相同
 - 严格控制在3-4个最准确的同义词
 - 避免概念漂移和语义扩散
@@ -34,14 +34,14 @@
     "related_terms": {{"terms": ["related English terms"], "weight": 0.5}},
     "context_terms": {{"terms": ["contextual English terms"], "weight": 0.4}}
   }},
-  "domain": "academic domain in English"
-
+    "domain": "academic domain in English"
+    "optimized_boolean_query": "Boolean query in English",
+    "search_strategy": "balanced|precision_focused|recall_focused"
 }}
 ```
 
 ## 输出格式要求
 **重要：每点分行排列，保持格式整洁！**
-
 **注意：不要在回复中包含任何格式说明、模板描述或元语句，直接提供实际内容。**
 
 ### 输出内容结构：

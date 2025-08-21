@@ -813,7 +813,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     // 创建初始的助手消息
     const assistantMessage: Message = {
       id: (Date.now() + 1).toString(),
-      text: '',
+      text: 'Thinking...',
       isUser: false,
       timestamp: Date.now() + 1
     };
@@ -2214,8 +2214,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             gap: 12
           }}>
             <div>
-              ⚠️ 当前对话已超过 4000 tokens，建议开启新话题以避免上下文压力。<br/>
-              ⚠️ Context exceeds 4k tokens. Consider starting a new topic to reduce context pressure.
+              ⚠️ 当前对话已超过 8000 tokens，建议开启新话题以避免上下文压力。<br/>
+              ⚠️ Context exceeds 8k tokens. Consider starting a new topic to reduce context pressure.
             </div>
             <button
               onClick={handleStartNewTopic}
@@ -2237,7 +2237,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
 
         {/* 输入区域 */}
         <div style={{
-          padding: '16px 20px',
+          padding: '10px 20px',
           borderTop: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`,
           backgroundColor: theme === 'dark' ? '#0a0a0a' : '#fefcf3'
         }}>
@@ -2255,17 +2255,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 disabled={isStreaming}
                 style={{
                   width: '100%',
-                  padding: '12px 60px 12px 16px',
+                  padding: '8px 60px 8px 16px',
                   borderRadius: '12px',
                   border: `1px solid ${theme === 'dark' ? '#333' : '#d1d5db'}`,
                   backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
                   color: theme === 'dark' ? '#fff' : '#1f2937',
-                  fontSize: '14px',
+                  fontSize: '15px',
                   fontStyle: 'italic',
-                  lineHeight: '1.5',
+                  lineHeight: '1.4',
                   resize: 'none',
-                  minHeight: '44px',
-                  maxHeight: '120px',
+                  minHeight: '34px',
+                  maxHeight: '64px',
                   outline: 'none',
                   fontFamily: 'inherit'
                 }}
@@ -2273,23 +2273,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 onInput={(e) => {
                   const target = e.target as HTMLTextAreaElement;
                   target.style.height = 'auto';
-                  target.style.height = Math.min(target.scrollHeight, 120) + 'px';
+                  target.style.height = Math.min(target.scrollHeight, 64) + 'px';
                 }}
               />
               
-              {/* 发送按钮放在输入框内部 */}
+              {/* 发送按钮放在输入框内部，保持间距并垂直居中 */}
               <button
                 onClick={handleSendMessage}
                 disabled={isStreaming || !inputMessage.trim()}
                 style={{
                   position: 'absolute',
                   right: '8px',
-                  top: '50%',
+                  top: '43%',
                   transform: 'translateY(-50%)',
-                  padding: '0',
+                  padding: 0,
                   width: '32px',
                   height: '32px',
-                  borderRadius: '8px',
+                  borderRadius: '10px',
                   border: 'none',
                   backgroundColor: inputMessage.trim() && !isStreaming ? '#3bb0e6' : '#666',
                   color: '#fff',
@@ -2304,7 +2304,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 title={isStreaming ? '正在流式传输...' : '发送消息'}
               >
                 {isStreaming ? (
-                  <span className="streaming-indicator">⟲</span>
+                  <div className="typing-indicator">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
                 ) : '↑'}
               </button>
             </div>

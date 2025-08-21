@@ -672,28 +672,21 @@ async def search_papers_api(req: SearchRequest):
                     logger.info(f"🎯 使用LLM优化布尔查询: {search_query}")
                     logger.info(f"📈 搜索策略: {search_strategy}")
                 else:
-                    # 备用方案：如果LLM没有返回布尔查询，则使用关键词构建
-                    logger.info("⚠️ LLM未返回布尔查询，使用关键词构建")
-                    all_terms = []
-                    exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
-                    core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
-                    related_terms = hierarchical.get("related_terms", {}).get("terms", [])
+                    # 🔄 备用方案：权重驱动的查询构建（与工作流保持一致）
+                    logger.info("⚠️ LLM未返回布尔查询，使用权重驱动构建")
                     
-                    # 收集术语
-                    all_terms.extend(exact_terms[:2])
-                    all_terms.extend(core_synonyms[:2])
-                    all_terms.extend(related_terms[:1])
+                    # 使用paper_search_workflow中的智能构建逻辑
+                    from langchain_workflows.paper_search_workflow import IntelligentPaperSearchAgent
+                    temp_agent = IntelligentPaperSearchAgent()
                     
-                    # 去重并构建查询
-                    unique_terms = list(dict.fromkeys(all_terms))[:4]
-                    if unique_terms:
-                        quoted_terms = [
-                            f'"{term}"' if ' ' in term else term
-                            for term in unique_terms
-                        ]
-                        search_query = " OR ".join(quoted_terms)
-                    else:
-                        search_query = req.query
+                    # 构建分析数据结构
+                    analysis_data = {
+                        "hierarchical_keywords": hierarchical,
+                        "search_strategy": req.expanded_keywords.get('search_strategy', 'balanced')
+                    }
+                    
+                    search_query = temp_agent._build_search_query(req.query, analysis_data)
+                    logger.info(f"🔧 权重驱动查询构建: {search_query}")
                 
                 logger.info(f"🎯 构建优化查询: {search_query}")
                 

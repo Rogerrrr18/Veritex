@@ -491,6 +491,9 @@ class IntelligentPaperSearchAgent:
             
             # 解析可能的关键词信息（恢复原始逻辑）
             keywords_analysis = self._extract_json_analysis(response)
+            print(f"学术探讨关键词分析结果: {bool(keywords_analysis)}")
+            if keywords_analysis:
+                print(f"关键词分析包含的字段: {list(keywords_analysis.keys())}")
             
             # 根据模式决定搜索建议策略
             should_suggest_search = False
@@ -759,36 +762,36 @@ class IntelligentPaperSearchAgent:
             cleaned = re.sub(r'^\s*[#*\-\s]*普通对话模式[:：]?\s*', '', cleaned, flags=re.MULTILINE)
             
             # 🔧 移除模板相关的元描述语句（增强版）
+            # 🎯 模板清理规则 - 针对学术探讨进行优化，减少误删
             template_patterns = [
-                # 文献搜索相关的模板语句
+                # 文献搜索相关的模板语句（保持原有）
                 r'关键词扩展结果的JSON格式[（(][^）)]*[）)]?',
-                r'对用户查询的直接分析回复\s*',
-                r'个性化研究建议[（(][^）)]*[）)]?',
                 r'按以下格式组织\s*',
                 r'如上所示\s*',
-                r'输出内容结构[:：]\s*',
-                r'\d+\.\s*\*\*[^*]*\*\*[（(][^）)]*[）)]?\s*',
                 r'JSON关键词数据[（(][^）)]*[）)]?\s*',
                 
-                # 🎯 针对泄漏问题的精准清理
+                # 🎯 针对泄漏问题的精准清理（减少误删学术内容）
                 r'## 后续建议\s*[\r\n]*',  # 整个"后续建议"标题块
-                r'后续建议\s*[\r\n]*.*?(?=\n\n|\n##|\n\*\*|$)',  # 后续建议内容块
                 r'关键词识别[（(]*内部参考[）)]*\s*.*?(?=\n|$)',  # 关键词识别（内部参考）
-                r'关键词识别\s*.*?(?=\n|$)',  # 普通关键词识别
                 r'内部参考.*?(?=\n|$)',
                 r'不输出到回答框.*?(?=\n|$)',
                 
-                # 星号清理（仅删除多余星号，不删除内容）
+                # 星号清理（仅删除多余星号，不删除内容）- 更精确
                 r'(?<=：)\s*\*(?=\s*$)',             # 冒号后行尾星号
                 r'(?<=。)\s*\*(?=\s*$)',             # 句号后行尾星号
                 r'(?<=\w)\*+(?=\s*$)',               # 词汇后的行尾星号
                 
-                # 特殊的模板语句
-                r'基于以上讨论，我发现了几个值得深入研究的要点。我可以为您搜索相关的最新文献来补充和深化这个讨论吗？',
-                
                 # 清理空的标题行
                 r'\n\s*\*\*\s*\*\*\s*\n',
                 r'\n\s*###?\s*\n',
+                
+                # ⚠️ 移除过度清理的规则，保护学术讨论内容
+                # 注释掉可能误删学术内容的规则：
+                # r'对用户查询的直接分析回复\s*', 
+                # r'个性化研究建议[（(][^）)]*[）)]?',
+                # r'输出内容结构[:：]\s*',
+                # r'后续建议\s*[\r\n]*.*?(?=\n\n|\n##|\n\*\*|$)',
+                # r'基于以上讨论，我发现了几个值得深入研究的要点。我可以为您搜索相关的最新文献来补充和深化这个讨论吗？',
             ]
             
             # 🎯 第一步：格式修复（在删除前先修复格式）
@@ -820,13 +823,16 @@ class IntelligentPaperSearchAgent:
             # 优化列表格式和智能换行
             cleaned = re.sub(r'\n\s*[-*]\s*', '\n• ', cleaned)
             
-            # 🎯 智能换行处理：确保每个要点适当分行
+            # 🎯 智能换行处理：确保每个要点适当分行（学术探讨专用优化）
             # 在句号后添加换行（如果后面不是列表项或空行）
             cleaned = re.sub(r'([。！？])\s*([^•\n\s])', r'\1\n\n\2', cleaned)
             
-            # 确保每个主要要点前有适当间距
+            # 确保每个主要要点前有适当间距 - 保持学术探讨的良好分段
             cleaned = re.sub(r'([。])• \*\*', r'\1\n\n• **', cleaned)  # 句号后紧接着的要点前加空行
             cleaned = re.sub(r'(?<!\n\n)• \*\*', '\n\n• **', cleaned)  # 确保每个主要标题前有空行
+            
+            # 保持emoji和标题的正确格式（学术探讨重点）
+            cleaned = re.sub(r'(🎓|📊|💡|🔍|🚀)\s*\*\*([^*]+)\*\*', r'\1 **\2**', cleaned)  # emoji + 加粗标题格式
             
             # 清理多余空行和空白字符
             cleaned = re.sub(r'^\s*\n', '', cleaned, flags=re.MULTILINE)
@@ -1079,13 +1085,64 @@ class IntelligentPaperSearchAgent:
                 "search_results": []
             }
     
+    def _smart_quote_term(self, term: str) -> str:
+        """智能引号处理 - 识别学术术语模式"""
+        if not term or not isinstance(term, str):
+            return term
+            
+        term = term.strip()
+        if not term:
+            return term
+            
+        # 学术缩写不加引号 (2-5个大写字母)
+        if re.match(r'^[A-Z]{2,5}$', term):
+            return term
+            
+        # 化学式和数学表达式不加引号
+        if re.match(r'^[A-Za-z0-9]+[0-9]+$', term) or re.match(r'^[A-Z][a-z]*[0-9]+$', term):
+            return term
+            
+        # 单个单词不加引号
+        if not ' ' in term and not '-' in term:
+            return term
+            
+        # 包含空格或连字符的复合术语加引号
+        if ' ' in term or '-' in term:
+            return f'"{term}"'
+            
+        return term
+    
+    def _collect_weighted_terms(self, hierarchical: Dict[str, Any]) -> List[tuple]:
+        """收集所有关键词及其权重信息"""
+        weighted_terms = []
+        
+        for level, level_data in hierarchical.items():
+            if isinstance(level_data, dict) and 'terms' in level_data and 'weight' in level_data:
+                terms = level_data['terms']
+                weight = level_data['weight']
+                
+                # 确保terms是列表
+                if isinstance(terms, str):
+                    terms = [terms]
+                elif not isinstance(terms, list):
+                    continue
+                    
+                # 添加每个术语及其权重
+                for term in terms:
+                    if term and isinstance(term, str) and term.strip():
+                        weighted_terms.append((term.strip(), weight, level))
+        
+        # 按权重排序（降序）
+        weighted_terms.sort(key=lambda x: x[1], reverse=True)
+        return weighted_terms
+
     def _build_search_query(self, original_query: str, analysis: Optional[Dict[str, Any]]) -> str:
-        """使用LLM返回的优化布尔查询和搜索策略"""
+        """基于权重驱动的智能布尔查询构建"""
         if not analysis:
             return original_query
         
         try:
-            # 优先使用LLM返回的优化布尔查询
+            # 🎯 优先使用LLM返回的优化布尔查询
             if analysis.get("optimized_boolean_query"):
                 optimized_query = analysis["optimized_boolean_query"]
                 search_strategy = analysis.get("search_strategy", "balanced")
@@ -1093,68 +1150,163 @@ class IntelligentPaperSearchAgent:
                 print(f"📈 搜索策略: {search_strategy}")
                 return optimized_query
             
-            # 备用方案：如果LLM没有返回布尔查询，则基于search_strategy构建查询
+            # 🔄 备用方案：权重驱动的动态查询构建
             search_strategy = analysis.get("search_strategy", "balanced")
             hierarchical = analysis.get("hierarchical_keywords", {})
-            exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
-            core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
-            related_terms = hierarchical.get("related_terms", {}).get("terms", [])
-            context_terms = hierarchical.get("context_terms", {}).get("terms", [])
             
-            print(f"⚠️ LLM未返回布尔查询，基于策略构建: {search_strategy}")
+            if not hierarchical:
+                print("⚠️ 无分层关键词数据，使用原始查询")
+                return original_query
             
-            # 根据搜索策略构建查询
+            # 收集所有权重化的术语
+            weighted_terms = self._collect_weighted_terms(hierarchical)
+            
+            if not weighted_terms:
+                print("⚠️ 无有效关键词，使用原始查询")
+                return original_query
+            
+            print(f"🔍 权重驱动构建查询，策略: {search_strategy}")
+            print(f"📊 可用术语: {len(weighted_terms)}个")
+            
+            # 🎯 根据策略和权重动态构建查询
             if search_strategy == "precision_focused":
-                # 精准策略：使用AND连接核心术语
-                all_terms = []
-                all_terms.extend(exact_terms[:2])
-                all_terms.extend(core_synonyms[:1])
+                # 🎯 精准策略：1核心+1灵活 → "核心术语" AND ("灵活术语1" OR "灵活术语2")
                 
-                if all_terms:
-                    quoted_terms = [f'"{term}"' if ' ' in term else term for term in all_terms]
-                    final_query = " AND ".join(quoted_terms)
+                # 选择1个最重要的核心术语（来自exact_terms，权重1.0）
+                exact_terms = [term for term, weight, level in weighted_terms if level == "exact_terms"]
+                core_terms = [term for term, weight, level in weighted_terms if level == "core_synonyms"]
+                
+                if exact_terms:
+                    # 使用权重最高的exact_term作为核心
+                    core_term = exact_terms[0]
+                    core_quoted = self._smart_quote_term(core_term)
+                    
+                    # 从core_synonyms中选择1-2个作为灵活补充
+                    if core_terms:
+                        flexible_terms = core_terms[:2]  # 最多2个灵活术语
+                        flexible_quoted = [self._smart_quote_term(term) for term in flexible_terms]
+                        
+                        if len(flexible_quoted) == 1:
+                            final_query = f"{core_quoted} AND {flexible_quoted[0]}"
+                        else:
+                            flexible_part = " OR ".join(flexible_quoted)
+                            final_query = f"{core_quoted} AND ({flexible_part})"
+                        
+                        print(f"🎯 精准策略: 1核心({core_term}) + {len(flexible_terms)}灵活术语")
+                    else:
+                        # 如果没有core_synonyms，使用另一个exact_term作为补充
+                        if len(exact_terms) > 1:
+                            second_term = exact_terms[1]
+                            second_quoted = self._smart_quote_term(second_term)
+                            final_query = f"{core_quoted} AND {second_quoted}"
+                            print(f"🎯 精准策略: 2个核心术语")
+                        else:
+                            final_query = core_quoted
+                            print(f"🎯 精准策略: 单一核心术语")
                 else:
-                    final_query = original_query
+                    # 回退：使用权重最高的术语
+                    if len(weighted_terms) >= 2:
+                        top_two = [term for term, _, _ in weighted_terms[:2]]
+                        quoted_terms = [self._smart_quote_term(term) for term in top_two]
+                        final_query = f"{quoted_terms[0]} AND {quoted_terms[1]}"
+                        print(f"🎯 精准策略回退: 使用前2个高权重术语")
+                    else:
+                        top_term = weighted_terms[0][0] if weighted_terms else "machine learning"
+                        final_query = self._smart_quote_term(top_term)
+                        print(f"🎯 精准策略最小回退: 单一术语")
                     
             elif search_strategy == "recall_focused":
-                # 召回策略：使用OR连接所有相关术语
-                all_terms = []
-                all_terms.extend(exact_terms[:2])
-                all_terms.extend(core_synonyms[:3])
-                all_terms.extend(related_terms[:2])
+                # 召回策略：使用权重≥0.4的所有术语，OR连接
+                all_terms = [term for term, weight, level in weighted_terms if weight >= 0.4]
+                all_terms = all_terms[:8]  # 防止查询过长
                 
                 if all_terms:
-                    quoted_terms = [f'"{term}"' if ' ' in term else term for term in all_terms]
+                    quoted_terms = [self._smart_quote_term(term) for term in all_terms]
                     final_query = " OR ".join(quoted_terms)
+                    print(f"🔍 召回策略: 使用{len(all_terms)}个术语扩大搜索范围")
                 else:
-                    final_query = original_query
+                    # 使用所有可用术语
+                    all_terms = [term for term, _, _ in weighted_terms[:6]]
+                    quoted_terms = [self._smart_quote_term(term) for term in all_terms]
+                    final_query = " OR ".join(quoted_terms)
+                    print(f"🔍 召回策略回退: 使用前{len(all_terms)}个术语")
                     
             else:  # balanced 平衡策略
-                # 平衡策略：核心术语AND连接，相关术语OR扩展
-                core_terms = []
-                core_terms.extend(exact_terms[:2])
-                core_terms.extend(core_synonyms[:1])
+                # ⚖️ 平衡策略：四层结构 → exact(内部OR) OR core AND related OR context
                 
-                if core_terms:
-                    quoted_core = [f'"{term}"' if ' ' in term else term for term in core_terms]
-                    core_query = " AND ".join(quoted_core)
-                    
-                    # 添加可选的相关术语
-                    optional_terms = related_terms[:2] + context_terms[:1]
-                    if optional_terms:
-                        quoted_optional = [f'"{term}"' if ' ' in term else term for term in optional_terms]
-                        optional_query = " OR ".join(quoted_optional)
-                        final_query = f"({core_query}) OR ({optional_query})"
+                # 按层级分组术语
+                exact_terms = [term for term, weight, level in weighted_terms if level == "exact_terms"]
+                core_terms = [term for term, weight, level in weighted_terms if level == "core_synonyms"]
+                related_terms = [term for term, weight, level in weighted_terms if level == "related_terms"]
+                context_terms = [term for term, weight, level in weighted_terms if level == "context_terms"]
+                
+                query_parts = []
+                
+                # 1. exact_terms 内部OR连接
+                if exact_terms:
+                    exact_quoted = [self._smart_quote_term(term) for term in exact_terms[:3]]  # 限制数量
+                    if len(exact_quoted) == 1:
+                        exact_part = exact_quoted[0]
                     else:
-                        final_query = core_query
+                        exact_part = f"({' OR '.join(exact_quoted)})"
+                    query_parts.append(exact_part)
+                    print(f"⚖️ exact层: {len(exact_quoted)}个术语")
+                
+                # 2. core_synonyms 作为AND必需项
+                if core_terms:
+                    core_quoted = [self._smart_quote_term(term) for term in core_terms[:2]]  # 限制数量
+                    core_part = " AND ".join(core_quoted)
+                    
+                    # 3. related_terms 作为OR扩展
+                    extensions = []
+                    if related_terms:
+                        related_quoted = [self._smart_quote_term(term) for term in related_terms[:3]]
+                        related_part = " OR ".join(related_quoted)
+                        extensions.append(f"({related_part})")
+                        print(f"⚖️ related层: {len(related_quoted)}个术语")
+                    
+                    # 4. context_terms 作为OR补充
+                    if context_terms:
+                        context_quoted = [self._smart_quote_term(term) for term in context_terms[:2]]
+                        context_part = " OR ".join(context_quoted)
+                        extensions.append(f"({context_part})")
+                        print(f"⚖️ context层: {len(context_quoted)}个术语")
+                    
+                    # 组合core + extensions
+                    if extensions:
+                        extension_part = " OR ".join(extensions)
+                        core_and_ext = f"({core_part}) AND ({extension_part})"
+                    else:
+                        core_and_ext = core_part
+                    
+                    query_parts.append(core_and_ext)
+                    print(f"⚖️ core层: {len(core_quoted)}个术语")
+                
+                # 最终组合：exact OR (core AND related/context)
+                if len(query_parts) == 2:
+                    final_query = f"{query_parts[0]} OR ({query_parts[1]})"
+                elif len(query_parts) == 1:
+                    final_query = query_parts[0]
                 else:
-                    final_query = original_query
+                    # 回退策略：使用权重最高的术语
+                    top_terms = [term for term, _, _ in weighted_terms[:4]]
+                    if len(top_terms) >= 2:
+                        quoted_terms = [self._smart_quote_term(term) for term in top_terms]
+                        final_query = f"{quoted_terms[0]} AND ({' OR '.join(quoted_terms[1:])})"
+                        print(f"⚖️ 平衡策略回退: 1核心 + {len(quoted_terms)-1}扩展")
+                    else:
+                        final_query = self._smart_quote_term(top_terms[0]) if top_terms else "machine learning"
+                        print(f"⚖️ 平衡策略最小回退: 单一术语")
+                
+                print(f"⚖️ 平衡策略完成: {len(query_parts)}个部分组合")
             
-            print(f"构建的{search_strategy}查询: {final_query}")
+            print(f"✅ 构建完成 - {search_strategy}: {final_query}")
             return final_query
             
         except Exception as e:
-            print(f"查询构建失败，使用原始查询: {e}")
+            print(f"❌ 查询构建失败，使用原始查询: {e}")
+            import traceback
+            print(f"错误详情: {traceback.format_exc()}")
             return original_query
     
     def _extract_keywords_from_analysis(self, analysis: Optional[Dict[str, Any]]) -> List[str]:
