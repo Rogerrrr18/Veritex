@@ -28,6 +28,19 @@ class BaseLLMAdapter(ABC):
         """聊天完成接口 - 使用原生消息格式"""
         pass
     
+    async def chat_completion_stream(
+        self, 
+        messages: List[Dict[str, str]], 
+        **kwargs
+    ):
+        """流式聊天完成接口 - 默认实现为降级到普通聊天"""
+        # 默认实现：对于不支持流式的适配器，降级到普通聊天
+        response = await self.chat_completion(messages, **kwargs)
+        if response:
+            yield response
+        else:
+            yield "抱歉，我现在无法回复。请稍后再试。"
+    
     @abstractmethod
     async def simple_chat(self, user_input: str, history: List[Dict[str, str]] = None) -> str:
         """简单聊天接口"""
@@ -124,6 +137,20 @@ class UniversalLLM:
     ) -> Optional[str]:
         """统一聊天完成接口"""
         return await self.adapter.chat_completion(messages, **kwargs)
+    
+    async def chat_completion_stream(
+        self, 
+        messages: List[Dict[str, str]], 
+        **kwargs
+    ):
+        """统一流式聊天完成接口"""
+        if hasattr(self.adapter, 'chat_completion_stream'):
+            async for chunk in self.adapter.chat_completion_stream(messages, **kwargs):
+                yield chunk
+        else:
+            # 降级到普通聊天
+            async for chunk in self.adapter.chat_completion_stream(messages, **kwargs):
+                yield chunk
     
     async def simple_chat(self, user_input: str, history: List[Dict[str, str]] = None) -> str:
         """统一简单聊天接口"""

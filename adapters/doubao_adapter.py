@@ -113,6 +113,95 @@ class DoubaoAdapter(BaseLLMAdapter):
         except Exception as e:
             print(f"Doubao处理响应时出错: {e}")
             return None
+
+    async def chat_completion_stream(
+        self, 
+        messages: List[Dict[str, Any]], 
+        **kwargs
+    ):
+        """
+        Doubao 流式聊天完成API调用
+        返回一个异步生成器，逐步生成响应内容
+        """
+        if not self.config.api_key:
+            raise ValueError("ARK_API_KEY 或 DOUBAO_API_KEY 未设置，请检查 .env 文件")
+        
+        # 将消息转换为 Ark 期望的 content 数组格式
+        ark_messages: List[Dict[str, Any]] = []
+        for m in messages:
+            ark_messages.append({
+                "role": m.get("role", "user"),
+                "content": _to_ark_message_content(m.get("content", ""))
+            })
+        
+        payload = {
+            "model": self.model_name,
+            "messages": ark_messages,
+            "temperature": kwargs.get("temperature", self.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "stream": True  # 启用流式输出
+        }
+        
+        try:
+            url = f"{self.config.base_url}/api/v3/chat/completions"
+            
+            async with self.client.stream('POST', url, headers=self.headers, json=payload) as response:
+                response.raise_for_status()
+                
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # 处理SSE格式：data: {...}
+                    if line.startswith('data: '):
+                        data_str = line[6:]  # 移除 'data: ' 前缀
+                        
+                        # 检查是否为结束标志
+                        if data_str == '[DONE]':
+                            break
+                        
+                        try:
+                            import json
+                            data = json.loads(data_str) if data_str.startswith('{') else None
+                            if not data:
+                                continue
+                                
+                            # 解析流式响应数据
+                            choices = data.get('choices', [])
+                            if not choices:
+                                continue
+                                
+                            delta = choices[0].get('delta', {})
+                            content = delta.get('content')
+                            
+                            if content:
+                                # 处理content的不同格式
+                                if isinstance(content, str):
+                                    yield content
+                                elif isinstance(content, list):
+                                    # 处理多模态content数组格式
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get('type') == 'text':
+                                            text = item.get('text', '')
+                                            if text:
+                                                yield text
+                                                
+                        except Exception as e:
+                            print(f"解析流式响应数据失败: {e}")
+                            continue
+                
+        except httpx.HTTPError as e:
+            print(f"Doubao 流式API调用失败: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    print(f"响应内容: {e.response.text[:500]}")
+                except Exception:
+                    pass
+            raise
+        except Exception as e:
+            print(f"Doubao 流式处理出错: {e}")
+            raise
     
     async def simple_chat(self, user_input: str, history: List[Dict[str, Any]] = None) -> str:
         if history is None:

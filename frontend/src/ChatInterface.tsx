@@ -737,9 +737,164 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     }
   }, [navigate]);
 
+  // 流式传输状态
+  const [isStreaming, setIsStreaming] = useState(false);
+
+  // 处理流式响应
+  const handleStreamingResponse = async (userMessage: Message, newMessages: Message[]) => {
+    const mappedHistory = newMessages.map(m => ({
+      role: m.isUser ? 'user' : 'assistant',
+      content: m.text
+    }));
+
+    const payload = {
+      message: userMessage.text,
+      history: mappedHistory,
+      mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search',
+      stream: true // 启用流式传输
+    };
+
+    // 创建初始的助手消息
+    const assistantMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      text: '',
+      isUser: false,
+      timestamp: Date.now() + 1
+    };
+
+    const messagesWithAssistant = [...newMessages, assistantMessage];
+    setMessages(messagesWithAssistant);
+
+    try {
+      const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.CHAT}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('无法获取响应流');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let accumulatedText = '';
+      let analysisResult = null;
+      let searchResults = null;
+      let isAcademicQuery = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              if (data.type === 'start') {
+                // 流式开始
+                console.log('流式传输开始');
+              } else if (data.type === 'status') {
+                // 状态更新（可以显示给用户）
+                console.log('状态更新:', data.data.message);
+              } else if (data.type === 'content') {
+                // 内容片段
+                accumulatedText += data.data.content;
+                
+                // 实时更新消息
+                setMessages(prev => prev.map(msg => 
+                  msg.id === assistantMessage.id 
+                    ? { ...msg, text: accumulatedText }
+                    : msg
+                ));
+                
+                // 自动滚动到底部
+                setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 0);
+                
+              } else if (data.type === 'done') {
+                // 流式完成
+                isAcademicQuery = data.data.is_academic_query || false;
+                searchResults = data.data.search_results || null;
+                analysisResult = data.data.analysis_result || null;
+                
+                console.log('流式传输完成');
+              } else if (data.type === 'error') {
+                // 错误处理
+                throw new Error(data.data.error);
+              }
+            } catch (e) {
+              console.error('解析SSE数据失败:', e);
+            }
+          }
+        }
+      }
+
+      // 流式完成后更新最终消息
+      let hierarchicalKeywords = null;
+      if (analysisResult && analysisResult.hierarchical_keywords) {
+        hierarchicalKeywords = analysisResult.hierarchical_keywords;
+        setCurrentAnalysis(analysisResult);
+      }
+
+      const finalAssistantMessage: Message = {
+        ...assistantMessage,
+        text: accumulatedText || '抱歉，我无法处理您的请求。',
+        analysisResult,
+        hierarchicalKeywords
+      };
+
+      // 如果是学术查询并有搜索结果
+      if (isAcademicQuery && searchResults && searchResults.length > 0) {
+        saveSearchResultToHistory(userMessage.text, {
+          search_results: searchResults,
+          analysis_result: analysisResult,
+          is_academic_query: isAcademicQuery
+        });
+        
+        finalAssistantMessage.searchResults = searchResults;
+        finalAssistantMessage.searchMetadata = {
+          originalQuery: userMessage.text,
+          expandedKeywords: analysisResult?.hierarchical_keywords ? 
+            Object.values(analysisResult.hierarchical_keywords).flatMap((level: any) => level.terms || []) : [],
+          maxResults: searchResults.length,
+          analysisResult
+        };
+      }
+
+      const finalMessages = [...newMessages, finalAssistantMessage];
+      setMessages(finalMessages);
+      saveChatHistory(finalMessages, analysisResult);
+
+    } catch (error) {
+      console.error('流式传输错误:', error);
+      
+      // 错误情况下更新消息
+      const errorMessage = {
+        ...assistantMessage,
+        text: `抱歉，发生了错误：${error instanceof Error ? error.message : '未知错误'}`
+      };
+      
+      const errorMessages = [...newMessages, errorMessage];
+      setMessages(errorMessages);
+      saveChatHistory(errorMessages, currentAnalysis);
+    }
+  };
+
   // 发送消息
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || isLoading) return;
+    if (!inputMessage.trim() || isStreaming) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -752,95 +907,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     setMessages(newMessages);
     saveChatHistory(newMessages, currentAnalysis);
     setInputMessage('');
-    setIsLoading(true);
+    setIsStreaming(true);
 
     try {
-      // 根据LLM模式调用不同的后端API
-      let response;
-      // 传递最近的对话历史和模式
-      const mappedHistory = newMessages.map(m => ({
-        role: m.isUser ? 'user' : 'assistant',
-        content: m.text
-      }));
-
-      const payload = {
-        message: userMessage.text,
-        history: mappedHistory,
-        mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search'
-      };
-
-      response = await apiCall(API_CONFIG.ENDPOINTS.CHAT, payload);
-      
-      // 检查是否是学术查询（有搜索结果）
-      let analysisResult = null;
-      let hierarchicalKeywords = null;
-      
-      // 尝试从多个来源提取分析结果和关键词
-      if (response.analysis_result) {
-        analysisResult = response.analysis_result;
-        
-        // 尝试从分析结果中提取层次化关键词
-        if (analysisResult && analysisResult.hierarchical_keywords) {
-          hierarchicalKeywords = analysisResult.hierarchical_keywords;
-          setCurrentAnalysis(analysisResult);
-        }
-      }
-      
-      // 如果没有hierarchical_keywords，尝试从响应文本中提取关键词
-      if (!hierarchicalKeywords && response.is_academic_query && response.response) {
-        const keywordsMatch = response.response.match(/🏷️\s*\*\*关键词\*\*:\s*([^\n]+)/);
-        if (keywordsMatch) {
-          const keywordsText = keywordsMatch[1];
-          const keywords = keywordsText.split(/[,，]\s*/).map((k: string) => k.trim()).filter((k: string) => k);
-          
-          // 创建简化的hierarchical_keywords结构
-          hierarchicalKeywords = {
-            core_synonyms: {
-              terms: keywords,
-              weight: 1.0
-            }
-          };
-          
-          // 创建分析结果
-          analysisResult = {
-            hierarchical_keywords: hierarchicalKeywords,
-            domain: 'academic_research'
-          };
-          
-          setCurrentAnalysis(analysisResult);
-        }
-      }
-
-      // 在Chat & Plan模式下，只返回自然语言响应，不添加搜索确认
-      let assistantText = response.response || '抱歉，我无法处理您的请求。';
-
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: assistantText,
-        isUser: false,
-        timestamp: Date.now() + 1,
-        analysisResult,
-        hierarchicalKeywords
-      };
-
-      // 如果是学术查询并有搜索结果，将搜索结果数据附加到AI消息中
-      if (response.is_academic_query && response.search_results && response.search_results.length > 0) {
-        saveSearchResultToHistory(userMessage.text, response);
-        // 将搜索结果数据附加到AI消息中，用于跳转按钮
-        assistantMessage.searchResults = response.search_results;
-        assistantMessage.searchMetadata = {
-          originalQuery: userMessage.text,
-          expandedKeywords: response.analysis_result?.hierarchical_keywords ? 
-            Object.values(response.analysis_result.hierarchical_keywords).flatMap((level: any) => level.terms || []) : [],
-          maxResults: response.search_results.length,
-          analysisResult: response.analysis_result
-        };
-      }
-
-      const finalMessages = [...newMessages, assistantMessage];
-      setMessages(finalMessages);
-      saveChatHistory(finalMessages, analysisResult);
-
+      // 使用流式传输
+      await handleStreamingResponse(userMessage, newMessages);
     } catch (error: any) {
       console.error('Chat error:', error);
       const errorMessage: Message = {
@@ -853,7 +924,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       setMessages(errorMessages);
       saveChatHistory(errorMessages, currentAnalysis);
     } finally {
-      setIsLoading(false);
+      setIsStreaming(false);
     }
   };
 
@@ -1808,53 +1879,55 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                       <div>{message.text}</div>
                     )
                   ) : (
-                  <ReactMarkdown
-                    components={{
-                      // 自定义组件样式，适配主题
-                      h1: ({ children }) => <h1 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '18px', marginBottom: '12px' }}>{children}</h1>,
-                      h2: ({ children }) => <h2 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '16px', marginBottom: '10px' }}>{children}</h2>,
-                      h3: ({ children }) => <h3 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '15px', marginBottom: '8px' }}>{children}</h3>,
-                      p: ({ children }) => <p style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
-                      strong: ({ children }) => <strong style={{ color: theme === 'dark' ? '#fff' : '#111827', fontWeight: '600' }}>{children}</strong>,
-                      em: ({ children }) => <em style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', fontStyle: 'italic' }}>{children}</em>,
-                      ul: ({ children }) => <ul style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ul>,
-                      ol: ({ children }) => <ol style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ol>,
-                      li: ({ children }) => <li style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '4px' }}>{children}</li>,
-                      code: ({ children }) => (
-                        <code style={{
-                          backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
-                          color: theme === 'dark' ? '#fff' : '#1f2937',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          fontSize: '13px',
-                          fontFamily: 'monospace'
-                        }}>{children}</code>
-                      ),
-                      pre: ({ children }) => (
-                        <pre style={{
-                          backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
-                          color: theme === 'dark' ? '#fff' : '#1f2937',
-                          padding: '12px',
-                          borderRadius: '8px',
-                          overflow: 'auto',
-                          fontSize: '13px',
-                          fontFamily: 'monospace',
-                          marginBottom: '12px'
-                        }}>{children}</pre>
-                      ),
-                      blockquote: ({ children }) => (
-                        <blockquote style={{
-                          borderLeft: '3px solid #3bb0e6',
-                          paddingLeft: '12px',
-                          margin: '8px 0',
-                          color: theme === 'dark' ? '#ccc' : '#6b7280',
-                          fontStyle: 'italic'
-                        }}>{children}</blockquote>
-                      )
+                  <div style={{ position: 'relative' }}>
+                    <ReactMarkdown
+                      components={{
+                        // 自定义组件样式，适配主题
+                        h1: ({ children }) => <h1 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '18px', marginBottom: '12px' }}>{children}</h1>,
+                        h2: ({ children }) => <h2 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '16px', marginBottom: '10px' }}>{children}</h2>,
+                        h3: ({ children }) => <h3 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '15px', marginBottom: '8px' }}>{children}</h3>,
+                        p: ({ children }) => <p style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
+                        strong: ({ children }) => <strong style={{ color: theme === 'dark' ? '#fff' : '#111827', fontWeight: '600' }}>{children}</strong>,
+                        em: ({ children }) => <em style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', fontStyle: 'italic' }}>{children}</em>,
+                        ul: ({ children }) => <ul style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ul>,
+                        ol: ({ children }) => <ol style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ol>,
+                        li: ({ children }) => <li style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '4px' }}>{children}</li>,
+                        code: ({ children }) => (
+                          <code style={{
+                            backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
+                            color: theme === 'dark' ? '#fff' : '#1f2937',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontSize: '13px',
+                            fontFamily: 'monospace'
+                          }}>{children}</code>
+                        ),
+                        pre: ({ children }) => (
+                          <pre style={{
+                            backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
+                            color: theme === 'dark' ? '#fff' : '#1f2937',
+                            padding: '12px',
+                            borderRadius: '8px',
+                            overflow: 'auto',
+                            fontSize: '13px',
+                            fontFamily: 'monospace',
+                            marginBottom: '12px'
+                          }}>{children}</pre>
+                        ),
+                        blockquote: ({ children }) => (
+                          <blockquote style={{
+                            borderLeft: '3px solid #3bb0e6',
+                            paddingLeft: '12px',
+                            margin: '8px 0',
+                            color: theme === 'dark' ? '#ccc' : '#6b7280',
+                            fontStyle: 'italic'
+                          }}>{children}</blockquote>
+                        )
                     }}
                   >
                     {message.text}
                   </ReactMarkdown>
+                  </div>
                 )}
 
                 {/* 用户消息的Edit按钮 - 左下角 */}
@@ -2062,62 +2135,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             </div>
           ))}
 
-          {/* 加载指示器 */}
-          {isLoading && (
-            <div style={{
-              display: 'flex',
-              justifyContent: 'flex-start',
-              alignItems: 'center',
-              gap: '12px'
-            }}>
-              <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                backgroundColor: '#3bb0e6',
-                color: 'white',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '20px',
-                fontWeight: '900',
-                letterSpacing: '-1px'
-              }}>
-                V
-              </div>
-              <div style={{
-                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
-                padding: '12px 16px',
-                borderRadius: '16px 16px 16px 4px',
-                border: `1px solid ${theme === 'dark' ? '#333' : '#e5e5e5'}`
-              }}>
-                <div style={{
-                  display: 'flex',
-                  gap: '4px',
-                  alignItems: 'center'
-                }}>
-                  <div style={{ fontSize: '12px', color: theme === 'dark' ? '#666' : '#9ca3af' }}>AI正在思考</div>
-                  <div style={{
-                    display: 'flex',
-                    gap: '2px'
-                  }}>
-                    {[0, 1, 2].map(i => (
-                      <div
-                        key={i}
-                        style={{
-                          width: '4px',
-                          height: '4px',
-                          backgroundColor: '#3bb0e6',
-                          borderRadius: '50%',
-                          animation: `pulse 1.5s ease-in-out ${i * 0.3}s infinite`
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           <div ref={messagesEndRef} />
         </div>
@@ -2176,7 +2193,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyPress}
                 placeholder="输入您的学术问题或研究主题 / Enter academic/research interests..."
-                disabled={isLoading}
+                disabled={isStreaming}
                 style={{
                   width: '100%',
                   padding: '12px 60px 12px 16px',
@@ -2204,7 +2221,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               {/* 发送按钮放在输入框内部 */}
               <button
                 onClick={handleSendMessage}
-                disabled={isLoading || !inputMessage.trim()}
+                disabled={isStreaming || !inputMessage.trim()}
                 style={{
                   position: 'absolute',
                   right: '8px',
@@ -2215,9 +2232,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   height: '32px',
                   borderRadius: '8px',
                   border: 'none',
-                  backgroundColor: inputMessage.trim() && !isLoading ? '#3bb0e6' : '#666',
+                  backgroundColor: inputMessage.trim() && !isStreaming ? '#3bb0e6' : '#666',
                   color: '#fff',
-                  cursor: inputMessage.trim() && !isLoading ? 'pointer' : 'not-allowed',
+                  cursor: inputMessage.trim() && !isStreaming ? 'pointer' : 'not-allowed',
                   fontSize: '16px',
                   fontWeight: '900',
                   transition: 'all 0.2s',
@@ -2225,8 +2242,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   alignItems: 'center',
                   justifyContent: 'center'
                 }}
+                title={isStreaming ? '正在流式传输...' : '发送消息'}
               >
-                {isLoading ? '...' : '↑'}
+                {isStreaming ? (
+                  <span className="streaming-indicator">⟲</span>
+                ) : '↑'}
               </button>
             </div>
           </div>

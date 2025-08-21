@@ -1,9 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
 import logging
+import json
+import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -47,6 +50,8 @@ class ChatRequest(BaseModel):
     search_params: Optional[Dict[str, Any]] = None
     # 模式：'chat-only' | 'auto-search'
     mode: Optional[str] = None
+    # 流式传输模式
+    stream: Optional[bool] = False
 
 class ChatResponse(BaseModel):
     response: str
@@ -267,16 +272,127 @@ async def chat_get_info():
         }
     }
 
-@app.post("/chat", response_model=ChatResponse)
+async def generate_stream_response(
+    message: str,
+    history: List[Dict[str, str]],
+    search_params: Dict[str, Any],
+    mode: str
+):
+    """生成流式响应"""
+    try:
+        # 🚀 快速意图预筛选 - 对明显闲聊使用LLM生成自然回复
+        quick_intent = quick_intent_filter(message)
+        if quick_intent == "闲聊":
+            logger.info(f"⚡ 快速预筛选命中闲聊，使用LLM流式生成自然回复")
+            
+            # 使用LLM流式生成自然的闲聊回复
+            llm_client = await get_universal_llm()
+            prompt = get_chat_conversation_prompt(message)
+            
+            messages = [{"role": "user", "content": prompt}]
+            
+            # 发送开始事件
+            yield f"data: {json.dumps({'type': 'start', 'data': {}})}\n\n"
+            
+            try:
+                # 流式生成响应
+                async for chunk in llm_client.chat_completion_stream(messages):
+                    if chunk:
+                        yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
+                        await asyncio.sleep(0.01)  # 防止过快发送
+                
+                # 发送完成事件
+                yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False}})}\n\n"
+                
+            except Exception as e:
+                logger.error(f"快速闲聊LLM流式调用失败: {e}")
+                fallback_response = "你好！我是Veritex智能助手，专门帮助您查找和分析学术文献。有什么学术问题我可以帮您解答吗？"
+                yield f"data: {json.dumps({'type': 'content', 'data': {'content': fallback_response}})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False, 'error': str(e)}})}\n\n"
+                
+        else:
+            # 复杂流程：学术查询处理
+            logger.info(f"🤖 进入完整智能工作流流式处理")
+            
+            yield f"data: {json.dumps({'type': 'start', 'data': {}})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'data': {'message': '正在分析您的学术查询...'}})}\n\n"
+            
+            # 提取搜索参数
+            max_results = search_params.get('max_results', 10)
+            year_from = search_params.get('year_from')
+            year_to = search_params.get('year_to')
+            sources = search_params.get('sources')
+            
+            # 调用智能工作流
+            workflow_mode = "auto-search" if mode != "chat-only" else "chat&plan"
+            
+            agent = get_intelligent_paper_search_agent()
+            final_result = await agent.search_papers(
+                query=message,
+                mode=workflow_mode,
+                max_results=max_results,
+                force_search=False,
+                year_from=year_from,
+                year_to=year_to,
+                sources=sources,
+                allow_search=True,
+                history=history
+            )
+            
+            # 获取完整响应
+            ai_response = final_result.get('response', '')
+            is_academic = final_result.get('is_academic_query', False)
+            
+            # 分段发送响应内容
+            if ai_response:
+                # 将响应分成多个片段来模拟流式输出
+                words = ai_response.split()
+                chunk_size = 3  # 每次发送3个词
+                
+                for i in range(0, len(words), chunk_size):
+                    chunk_words = words[i:i+chunk_size]
+                    chunk_text = ' '.join(chunk_words)
+                    if i + chunk_size < len(words):
+                        chunk_text += ' '
+                    
+                    yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk_text}})}\n\n"
+                    await asyncio.sleep(0.1)  # 模拟打字效果
+            
+            # 发送完成事件和其他数据
+            yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': is_academic, 'search_results': final_result.get('search_results', []), 'analysis_result': final_result.get('analysis_result')}})}\n\n"
+            
+    except Exception as e:
+        logger.error(f"流式响应生成错误: {e}")
+        yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e)}})}\n\n"
+
+@app.post("/chat")
 async def chat(request: ChatRequest):
-    """统一聊天接口 - 智能判断学术搜索还是普通对话"""
+    """统一聊天接口 - 支持流式和非流式响应"""
+    # 转换历史记录格式
+    history = [{"role": msg.role, "content": msg.content} for msg in request.history]
+    
+    logger.info(f"收到聊天请求: {request.message}, 流式模式: {request.stream}")
+    
+    # 如果请求流式响应
+    if request.stream:
+        search_params = request.search_params or {}
+        mode = (request.mode or "chat-only").lower()
+        
+        return StreamingResponse(
+            generate_stream_response(request.message, history, search_params, mode),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+            }
+        )
+    
+    # 非流式模式的原有逻辑
     import time
     start_time = time.time()
     
     try:
-        # 转换历史记录格式
-        history = [{"role": msg.role, "content": msg.content} for msg in request.history]
-        
         logger.info(f"收到聊天请求: {request.message}")
         
         # 🚀 快速意图预筛选 - 对明显闲聊使用LLM生成自然回复
