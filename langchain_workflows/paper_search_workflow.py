@@ -332,12 +332,10 @@ class IntelligentPaperSearchAgent:
             result["should_search"] = True
             result["mode"] = mode  # 确保模式也被保持
             
-            # 更新响应内容为auto-search模式的说明
-            from langchain_core.messages import AIMessage
-            auto_search_message = "我已经为您扩展了搜索关键词，正在自动搜索相关文献..."
-            result["messages"] = [AIMessage(content=auto_search_message)]
+            # 保留原始详细分析内容，不用简单提示覆盖
+            # result["messages"]保持不变，保留详细的关键词分析响应
             
-            print("auto-search模式：设置自动搜索")
+            print("auto-search模式：保留详细分析 + 自动搜索")
         else:
             # chat&plan模式保持原有逻辑，等待用户决策
             result["should_search"] = False
@@ -503,12 +501,22 @@ class IntelligentPaperSearchAgent:
             # 明确导入AIMessage避免作用域问题
             from langchain_core.messages import AIMessage
             
+            # 根据模式决定是否继续搜索流程
+            if mode == "auto-search":
+                # auto-search模式：输出深度分析 + 自动继续文献检索
+                is_completed = False
+                need_search = should_suggest_search
+            else:
+                # chat&plan模式：只输出分析，不自动搜索
+                is_completed = True
+                need_search = False
+            
             return {
                 "current_step": "discussion_completed",
-                "is_completed": True,  # 学术探讨通常不需要后续搜索，除非用户主动要求
+                "is_completed": is_completed,
                 "analysis_result": keywords_analysis,
                 "is_academic_query": True,
-                "need_search_strategy": False,  # 默认不自动搜索
+                "need_search_strategy": need_search,
                 "mode": mode,
                 "messages": [AIMessage(content=cleaned_response)],  # 使用清洗后的响应
                 "search_suggestion": should_suggest_search  # 是否建议搜索
@@ -1002,12 +1010,17 @@ class IntelligentPaperSearchAgent:
         """学术探讨节点后的路由决策"""
         mode = state.get("mode", "auto-search") 
         search_suggestion = state.get("search_suggestion", False)
+        need_search = state.get("need_search_strategy", False)
         
-        print(f"学术探讨后路由: 模式={mode}, 搜索建议={search_suggestion}")
+        print(f"学术探讨后路由: 模式={mode}, 搜索建议={search_suggestion}, 需要搜索={need_search}")
         
-        # 学术探讨通常不自动搜索，只在特殊情况下建议
-        # 这里暂时都返回 "end"，未来可以根据需要添加更复杂的逻辑
-        return "end"
+        # 在auto-search模式下，如果有搜索建议则继续搜索流程
+        if mode == "auto-search" and (search_suggestion or need_search):
+            print("auto-search模式：学术探讨后继续搜索")
+            return "search"
+        else:
+            print("学术探讨完成，结束流程")
+            return "end"
     
     # 已移除：未使用的路由决策辅助函数 should_execute_search
     
@@ -1067,82 +1080,77 @@ class IntelligentPaperSearchAgent:
             }
     
     def _build_search_query(self, original_query: str, analysis: Optional[Dict[str, Any]]) -> str:
-        """根据分析结果构建简化且有效的搜索查询"""
+        """使用LLM返回的优化布尔查询和搜索策略"""
         if not analysis:
             return original_query
         
         try:
-            # 提取层次化关键词
+            # 优先使用LLM返回的优化布尔查询
+            if analysis.get("optimized_boolean_query"):
+                optimized_query = analysis["optimized_boolean_query"]
+                search_strategy = analysis.get("search_strategy", "balanced")
+                print(f"🎯 使用LLM优化布尔查询: {optimized_query}")
+                print(f"📈 搜索策略: {search_strategy}")
+                return optimized_query
+            
+            # 备用方案：如果LLM没有返回布尔查询，则基于search_strategy构建查询
+            search_strategy = analysis.get("search_strategy", "balanced")
             hierarchical = analysis.get("hierarchical_keywords", {})
             exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
             core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
             related_terms = hierarchical.get("related_terms", {}).get("terms", [])
             context_terms = hierarchical.get("context_terms", {}).get("terms", [])
             
-            # 简化策略：构建多层次查询，从严格到宽松
-            all_important_terms = []
+            print(f"⚠️ LLM未返回布尔查询，基于策略构建: {search_strategy}")
             
-            # 1. 优先使用核心术语（exact_terms 和 core_synonyms）
-            if exact_terms:
-                # 只取前2个最重要的精确术语
-                quoted_exact = [f'"{term}"' if ' ' in term else term for term in exact_terms[:2]]
-                all_important_terms.extend(quoted_exact)
-            
-            if core_synonyms and len(all_important_terms) < 3:
-                # 如果核心术语不够，补充同义词
-                quoted_synonyms = [f'"{term}"' if ' ' in term else term for term in core_synonyms[:2]]
-                all_important_terms.extend(quoted_synonyms)
-            
-            # 2. 如果仍然没有足够术语，添加相关术语
-            if len(all_important_terms) < 2 and related_terms:
-                quoted_related = [f'"{term}"' if ' ' in term else term for term in related_terms[:1]]
-                all_important_terms.extend(quoted_related)
-            
-            # 3. 构建简化查询
-            if len(all_important_terms) >= 2:
-                # 对于化学/材料科学术语，优化组合方式
-                if any('nickel' in term.lower() or 'ni-based' in term.lower() for term in all_important_terms):
-                    # 对于金属基催化剂，使用更专业的组合
-                    catalyst_terms = [term for term in all_important_terms if 'nickel' in term.lower() or 'ni-based' in term.lower()]
-                    process_terms = [term for term in all_important_terms if 'reforming' in term.lower() or 'methane' in term.lower()]
-                    
-                    if catalyst_terms and process_terms:
-                        final_query = f"{catalyst_terms[0]} AND {process_terms[0]}"
-                        if len(process_terms) > 1:
-                            final_query += f" AND {process_terms[1]}"
-                    else:
-                        final_query = " AND ".join(all_important_terms[:3])
-                else:
-                    # 使用前2-3个最重要的术语，用AND连接
-                    final_query = " AND ".join(all_important_terms[:3])
+            # 根据搜索策略构建查询
+            if search_strategy == "precision_focused":
+                # 精准策略：使用AND连接核心术语
+                all_terms = []
+                all_terms.extend(exact_terms[:2])
+                all_terms.extend(core_synonyms[:1])
                 
-                # 如果有额外的同义词，作为可选扩展（仅在术语不足时）
-                if len(all_important_terms) < 3:
-                    optional_terms = []
-                    remaining_synonyms = core_synonyms[2:4] if len(core_synonyms) > 2 else []
-                    if remaining_synonyms:
-                        optional_terms.extend([f'"{term}"' if ' ' in term else term for term in remaining_synonyms])
-                    
-                    if optional_terms:
-                        optional_group = " OR ".join(optional_terms)
-                        final_query = f"({final_query}) OR ({optional_group})"
-                    
-            elif len(all_important_terms) == 1:
-                # 如果只有一个术语，尝试添加同义词扩展
-                main_term = all_important_terms[0]
-                if core_synonyms:
-                    # 添加同义词选择
-                    synonyms = [f'"{term}"' if ' ' in term else term for term in core_synonyms[:3]]
-                    all_terms = [main_term] + synonyms
-                    final_query = " OR ".join(all_terms)
+                if all_terms:
+                    quoted_terms = [f'"{term}"' if ' ' in term else term for term in all_terms]
+                    final_query = " AND ".join(quoted_terms)
                 else:
-                    final_query = main_term
-            else:
-                # 回退到原始查询
-                final_query = original_query
+                    final_query = original_query
+                    
+            elif search_strategy == "recall_focused":
+                # 召回策略：使用OR连接所有相关术语
+                all_terms = []
+                all_terms.extend(exact_terms[:2])
+                all_terms.extend(core_synonyms[:3])
+                all_terms.extend(related_terms[:2])
+                
+                if all_terms:
+                    quoted_terms = [f'"{term}"' if ' ' in term else term for term in all_terms]
+                    final_query = " OR ".join(quoted_terms)
+                else:
+                    final_query = original_query
+                    
+            else:  # balanced 平衡策略
+                # 平衡策略：核心术语AND连接，相关术语OR扩展
+                core_terms = []
+                core_terms.extend(exact_terms[:2])
+                core_terms.extend(core_synonyms[:1])
+                
+                if core_terms:
+                    quoted_core = [f'"{term}"' if ' ' in term else term for term in core_terms]
+                    core_query = " AND ".join(quoted_core)
+                    
+                    # 添加可选的相关术语
+                    optional_terms = related_terms[:2] + context_terms[:1]
+                    if optional_terms:
+                        quoted_optional = [f'"{term}"' if ' ' in term else term for term in optional_terms]
+                        optional_query = " OR ".join(quoted_optional)
+                        final_query = f"({core_query}) OR ({optional_query})"
+                    else:
+                        final_query = core_query
+                else:
+                    final_query = original_query
             
-            print(f"构建的简化查询: {final_query}")
-            
+            print(f"构建的{search_strategy}查询: {final_query}")
             return final_query
             
         except Exception as e:

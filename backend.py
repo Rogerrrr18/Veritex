@@ -488,32 +488,38 @@ async def search_papers_api(req: SearchRequest):
                 from multi_source_engine import MultiSourceEngine
                 search_engine = MultiSourceEngine()
                 
-                # 参考Paper-god-beta2: 简化查询构建 - 只用OR连接关键词
+                # 使用LLM返回的优化布尔查询和搜索策略
                 hierarchical = req.expanded_keywords['hierarchical_keywords']
                 
-                # 收集所有术语
-                all_terms = []
-                exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
-                core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
-                related_terms = hierarchical.get("related_terms", {}).get("terms", [])
-                
-                # 优先级：精确术语 > 核心同义词 > 相关术语
-                all_terms.extend(exact_terms[:2])  # 最多2个精确术语
-                all_terms.extend(core_synonyms[:2])  # 最多2个核心同义词
-                all_terms.extend(related_terms[:1])  # 最多1个相关术语
-                
-                # 去重并限制总数
-                unique_terms = list(dict.fromkeys(all_terms))[:4]  # 最多4个术语
-                
-                # 参考Paper-god-beta2: 对包含空格的术语加引号，用OR连接
-                if unique_terms:
-                    quoted_terms = [
-                        f'"{term}"' if ' ' in term else term
-                        for term in unique_terms
-                    ]
-                    search_query = " OR ".join(quoted_terms)
+                # 优先使用LLM提供的优化布尔查询
+                if req.expanded_keywords.get('optimized_boolean_query'):
+                    search_query = req.expanded_keywords['optimized_boolean_query']
+                    search_strategy = req.expanded_keywords.get('search_strategy', 'balanced')
+                    logger.info(f"🎯 使用LLM优化布尔查询: {search_query}")
+                    logger.info(f"📈 搜索策略: {search_strategy}")
                 else:
-                    search_query = req.query
+                    # 备用方案：如果LLM没有返回布尔查询，则使用关键词构建
+                    logger.info("⚠️ LLM未返回布尔查询，使用关键词构建")
+                    all_terms = []
+                    exact_terms = hierarchical.get("exact_terms", {}).get("terms", [])
+                    core_synonyms = hierarchical.get("core_synonyms", {}).get("terms", [])
+                    related_terms = hierarchical.get("related_terms", {}).get("terms", [])
+                    
+                    # 收集术语
+                    all_terms.extend(exact_terms[:2])
+                    all_terms.extend(core_synonyms[:2])
+                    all_terms.extend(related_terms[:1])
+                    
+                    # 去重并构建查询
+                    unique_terms = list(dict.fromkeys(all_terms))[:4]
+                    if unique_terms:
+                        quoted_terms = [
+                            f'"{term}"' if ' ' in term else term
+                            for term in unique_terms
+                        ]
+                        search_query = " OR ".join(quoted_terms)
+                    else:
+                        search_query = req.query
                 
                 logger.info(f"🎯 构建优化查询: {search_query}")
                 
