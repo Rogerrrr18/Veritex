@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from scholar_mirror_api import ScholarMirrorAPI
 
 # 加载环境变量
 load_dotenv()
@@ -669,7 +670,7 @@ class ScholarlyAPI:
             self.consecutive_requests = 0
     
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """使用scholarly库搜索学术文献 - 参考Paper-god-beta2的简单直接做法"""
+        """使用scholarly库搜索学术文献 - 增强错误处理版本"""
         papers = []
         
         try:
@@ -678,14 +679,36 @@ class ScholarlyAPI:
             
             logger.info(f"🔍 开始scholarly库搜索: {query}")
             
-            # 参考Paper-god-beta2: 直接调用，不做复杂的配置
-            search_generator = scholarly.search_pubs(query)
+            # 重置scholarly会话，避免'str' object has no attribute 'domain'错误
+            try:
+                scholarly._SESSION.close()  # 关闭可能损坏的会话
+            except:
+                pass
+                
+            # 创建新的搜索生成器，使用更安全的方法
+            search_generator = None
+            try:
+                search_generator = scholarly.search_pubs(query)
+            except Exception as e:
+                error_str = str(e).lower()
+                if "domain" in error_str or "str" in error_str:
+                    logger.warning(f"⚠️ scholarly会话问题，尝试重新初始化: {e}")
+                    # 强制重新初始化scholarly
+                    import importlib
+                    importlib.reload(scholarly)
+                    search_generator = scholarly.search_pubs(query)
+                else:
+                    raise
+            
             count = 0
             retrieved_count = 0
             
-            # 参考Paper-god-beta2: 使用for循环和next()的方式
+            # 使用更安全的循环方式
             for i in range(limit * 2):  # 尝试获取更多结果，以防过滤
                 try:
+                    if search_generator is None:
+                        break
+                        
                     pub = next(search_generator)
                     retrieved_count += 1
                     
@@ -758,13 +781,25 @@ class ScholarlyAPI:
                     logger.info("scholarly搜索已无更多结果")
                     break
                 except Exception as e:
-                    logger.debug(f"处理单个结果时出错: {e}")
-                    continue
+                    error_str = str(e).lower()
+                    if "domain" in error_str or "str" in error_str:
+                        logger.warning(f"⚠️ scholarly会话问题: {e}")
+                        # 尝试重新创建搜索生成器
+                        try:
+                            search_generator = scholarly.search_pubs(query)
+                            continue
+                        except:
+                            break  # 无法恢复，退出循环
+                    else:
+                        logger.debug(f"处理单个结果时出错: {e}")
+                        continue
             
             logger.info(f"✅ scholarly库搜索完成，获得 {len(papers)} 篇论文")
             
         except Exception as e:
             error_str = str(e).lower()
+            # 检测domain属性错误 - scholarly库内部错误
+            is_domain_error = "domain" in error_str and "attribute" in error_str
             # 增强429错误检测和重试机制
             is_rate_limit_error = any(keyword in error_str for keyword in [
                 '429', 'too many requests', 'rate limit', 'blocked', 
@@ -772,7 +807,11 @@ class ScholarlyAPI:
                 'captcha', 'temporarily blocked', 'retry-after'
             ])
             
-            if is_rate_limit_error:
+            if is_domain_error:
+                logger.warning(f"⚠️ scholarly库内部错误 (domain属性): {str(e)[:100]}...")
+                logger.info("📍 检测到scholarly库会话错误，建议稍后重试")
+                return papers  # 返回已获取的结果
+            elif is_rate_limit_error:
                 logger.warning(f"⚠️ scholarly遇到访问限制: {str(e)[:100]}...")
                 logger.info("📍 检测到Google Scholar访问限制，建议稍后重试")
                 
@@ -1092,11 +1131,18 @@ class MultiSourceEngine:
     def __init__(self):
         # 初始化数据源
         self.arxiv = ArxivAPI()
-        # 根据配置决定是否启用Google Scholar
+        
+        # Google Scholar访问策略升级
         if GOOGLE_SCHOLAR_ENABLED:
-            self.scholarly = ScholarlyAPI() if not SCHOLAR_PY_ENABLED else ScholarPyAPI()
+            if SCHOLAR_PY_ENABLED:
+                self.scholarly = ScholarPyAPI()
+            else:
+                self.scholarly = ScholarlyAPI()
+            # 新增：镜像API作为备用方案
+            self.scholar_mirror = ScholarMirrorAPI()
         else:
             self.scholarly = None
+            self.scholar_mirror = None
             logger.info("🚫 Google Scholar已禁用，使用稳定数据源")
         self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
@@ -1111,6 +1157,8 @@ class MultiSourceEngine:
                 enabled_sources.append("Scholar.py (自定义)")
             else:
                 enabled_sources.append("Scholarly库")
+            if self.scholar_mirror:
+                enabled_sources.append("Google Scholar镜像 (备用)")
         elif GOOGLE_SCHOLAR_ENABLED:
             enabled_sources.append("Google Scholar (配置错误-未正确初始化)")
         else:
@@ -1234,7 +1282,7 @@ class MultiSourceEngine:
                 if is_access_limited:
                     captcha_errors.append(source_name)
                     if source_name == 'scholarly':
-                        logger.warning(f"⚠️ 主力搜索源 Google Scholar 访问受限，切换到辅助数据源: {result}")
+                        logger.warning(f"⚠️ 主力搜索源 Google Scholar 访问受限，准备启用镜像搜索: {result}")
                     else:
                         logger.warning(f"⚠️ 搜索源 {source_name} 访问受限: {result}")
                 else:
@@ -1267,6 +1315,23 @@ class MultiSourceEngine:
             missing_quota = scholar_limit - scholarly_papers
             
             logger.warning(f"🔄 主力搜索源未达预期：获得{scholarly_papers}篇，预期{scholar_limit}篇，缺口{missing_quota}篇")
+            
+            # 优先尝试镜像搜索来补偿scholarly的缺失
+            if 'scholarly' in captcha_errors and self.scholar_mirror and missing_quota > 0:
+                logger.info(f"🔍 启动镜像搜索来补偿Google Scholar限制，尝试获取{missing_quota}篇论文")
+                try:
+                    mirror_papers = await asyncio.wait_for(
+                        self.scholar_mirror.search(query, missing_quota), 
+                        timeout=60.0
+                    )
+                    if mirror_papers:
+                        all_papers.extend(mirror_papers)
+                        logger.info(f"✅ 镜像搜索成功，额外获得 {len(mirror_papers)} 篇论文")
+                        missing_quota = max(0, missing_quota - len(mirror_papers))
+                    else:
+                        logger.warning("⚠️ 镜像搜索未获得结果")
+                except Exception as e:
+                    logger.warning(f"⚠️ 镜像搜索失败: {e}")
             
             if stable_success_count > 0 and missing_quota > 0:
                 # 启动补偿搜索：将缺失的配额分配给可用的辅助源
@@ -1446,6 +1511,8 @@ class MultiSourceEngine:
         coros = [self.arxiv.close()]
         if self.scholarly:
             coros.append(self.scholarly.close())
+        if self.scholar_mirror:
+            coros.append(self.scholar_mirror.close())
         if self.semantic_scholar:
             coros.append(self.semantic_scholar.close())
         if self.crossref:

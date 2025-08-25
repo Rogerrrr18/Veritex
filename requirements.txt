@@ -19,8 +19,8 @@ openai>=1.50.0
 anthropic>=0.25.0
 groq>=0.9.0
 
-# 学术搜索和文本处理
-scholarly>=1.7.0
+# 学术搜索和文本处理 - 使用稳定版本避免domain错误
+scholarly==1.7.11
 feedparser>=6.0.11
 beautifulsoup4>=4.12.3
 lxml>=5.1.0
@@ -47,6 +47,9 @@ supabase>=2.3.0
 # 性能监控
 opentelemetry-api>=1.21.0
 opentelemetry-sdk>=1.21.0
+
+# 网络请求支持
+Brotli>=1.1.0
 
 # 开发和测试工具
 pytest>=8.0.0
