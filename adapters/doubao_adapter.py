@@ -36,9 +36,24 @@ class DoubaoAdapter(BaseLLMAdapter):
             "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json"
         }
+        # 优化HTTP客户端配置以提升性能和稳定性
+        timeout_config = httpx.Timeout(
+            connect=10.0,  # 连接超时
+            read=120.0,    # 读取超时（为流式响应留余时间）
+            write=30.0,    # 写入超时
+            pool=10.0      # 连接池超时
+        )
+        
+        limits_config = httpx.Limits(
+            max_keepalive_connections=15,  # 增加保持连接数
+            max_connections=25,            # 增加最大连接数
+            keepalive_expiry=30.0          # 连接保持时间
+        )
+        
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(config.timeout),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            timeout=timeout_config,
+            limits=limits_config,
+            http2=True  # 启用HTTP/2以提升性能
         )
     
     async def chat_completion(

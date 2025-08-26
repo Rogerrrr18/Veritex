@@ -212,8 +212,10 @@ class IntelligentPaperSearchAgent:
             from prompt_utils import get_chat_conversation_prompt
             prompt = get_chat_conversation_prompt(user_message)
             
-            # 调用LLM生成对话回复（设置较短超时）
-            response = await self.llm.simple_chat(prompt=prompt, timeout=45.0)
+            # 调用LLM生成对话回复（使用简单聊天超时配置）
+            import os
+            simple_timeout = float(os.getenv('SIMPLE_CHAT_TIMEOUT', '30.0'))
+            response = await self.llm.simple_chat(prompt=prompt, timeout=simple_timeout)
             
             # 🧹 应用统一的消息清洗处理
             cleaned_response = self._final_clean_response(response)
@@ -383,8 +385,10 @@ class IntelligentPaperSearchAgent:
             from prompt_utils import get_literature_search_prompt
             prompt = get_literature_search_prompt(user_message, mode=mode)
             
-            # 调用LLM进行关键词扩展和搜索分析
-            response = await self.llm.simple_chat(prompt=prompt, timeout=60.0)
+            # 调用LLM进行关键词扩展和搜索分析（使用学术搜索超时配置）
+            import os
+            academic_timeout = float(os.getenv('ACADEMIC_SEARCH_TIMEOUT', '120.0'))
+            response = await self.llm.simple_chat(prompt=prompt, timeout=academic_timeout)
             
             # 验证LLM响应
             if not response or len(response.strip()) < 20:
@@ -475,7 +479,9 @@ class IntelligentPaperSearchAgent:
             import time
             start_time = time.time()
             
-            response = await self.llm.simple_chat(prompt=prompt, timeout=60.0)  # 增加到60秒
+            # 使用复杂查询超时配置
+            complex_timeout = float(os.getenv('COMPLEX_QUERY_TIMEOUT', '90.0'))
+            response = await self.llm.simple_chat(prompt=prompt, timeout=complex_timeout)
             end_time = time.time()
             print(f"LLM调用完成，耗时: {end_time - start_time:.2f}秒")
             
@@ -1642,7 +1648,14 @@ class IntelligentPaperSearchAgent:
         config = {"configurable": {"thread_id": thread_id}} if self.enable_memory else {}
         
         try:
-            final_state = await self.graph.ainvoke(initial_state, config)
+            # 为LangGraph工作流添加超时控制
+            import os
+            workflow_timeout = float(os.getenv('ACADEMIC_SEARCH_TIMEOUT', '120.0'))
+            
+            final_state = await asyncio.wait_for(
+                self.graph.ainvoke(initial_state, config),
+                timeout=workflow_timeout
+            )
             
             messages = final_state.get("messages", [])
             is_completed = final_state.get("is_completed", False)
@@ -1671,6 +1684,22 @@ class IntelligentPaperSearchAgent:
             
             print(f"工作流完成: {'成功' if result['success'] else '失败'}")
             return result
+            
+        except asyncio.TimeoutError:
+            timeout_msg = f"学术查询超时（{workflow_timeout}秒），可能由于网络或服务器繁忙。"
+            print(f"⚠️ {timeout_msg}")
+            
+            return {
+                "success": False,
+                "response": "抱歉，查询超时了。请稍后重试或尝试使用更简单的关键词。",
+                "error_message": timeout_msg,
+                "thread_id": thread_id,
+                "query": query,
+                "search_results": [],
+                "analysis_result": None,
+                "is_academic_query": True,
+                "need_search_strategy": False
+            }
             
         except Exception as e:
             error_msg = f"工作流执行错误: {str(e)}"

@@ -363,7 +363,7 @@ async def generate_stream_response(
                 async for chunk in llm_client.chat_completion_stream(messages):
                     if chunk:
                         yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
-                        await asyncio.sleep(0.01)  # 防止过快发送
+                        # 移除人工延迟以提升响应速度
                 
                 # 发送完成事件
                 yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False}})}\n\n"
@@ -414,7 +414,7 @@ async def generate_stream_response(
                 
                 for chunk in chunks:
                     yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
-                    await asyncio.sleep(0.05)  # 减少延迟，提升用户体验
+                    # 移除人工延迟以提升响应速度
             
             # 发送完成事件和其他数据
             yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': is_academic, 'search_results': final_result.get('search_results', []), 'analysis_result': final_result.get('analysis_result')}})}\n\n"

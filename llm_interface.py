@@ -235,28 +235,43 @@ class LangGraphLLMWrapper:
         await self._ensure_initialized()
         return await self.universal_llm.analyze_query(query, system_prompt)
     
-    async def simple_chat(self, prompt: str, system_prompt: str = None, timeout: float = 30.0) -> str:
-        """简单聊天接口（与原接口兼容）- 增加超时控制"""
+    async def simple_chat(self, prompt: str, system_prompt: str = None, timeout: float = None) -> str:
+        """简单聊天接口（与原接口兼容）- 增加超时控制和重试机制"""
         await self._ensure_initialized()
+        
+        # 使用环境变量设置超时时间，如果未提供则使用默认值
+        if timeout is None:
+            import os
+            timeout = float(os.getenv('SIMPLE_CHAT_TIMEOUT', '30.0'))
         
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        try:
-            # 添加超时控制
-            result = await asyncio.wait_for(
-                self.universal_llm.chat_completion(messages),
-                timeout=timeout
-            )
-            return result if result else "抱歉，我现在无法回复。请稍后再试。"
-        except asyncio.TimeoutError:
-            print(f"⚠️ LLM调用超时 ({timeout}秒)")
-            return "抱歉，响应时间过长，请稍后再试。"
-        except Exception as e:
-            print(f"❌ LLM调用失败: {e}")
-            return "抱歉，服务暂时不可用，请稍后再试。"
+        # 重试机制：最多重试1次
+        for attempt in range(2):
+            try:
+                # 添加超时控制
+                result = await asyncio.wait_for(
+                    self.universal_llm.chat_completion(messages),
+                    timeout=timeout
+                )
+                return result if result else "抱歉，我现在无法回复。请稍后再试。"
+            except asyncio.TimeoutError:
+                print(f"⚠️ LLM调用超时 ({timeout}秒) - 第{attempt + 1}次尝试")
+                if attempt == 0:
+                    print("🔄 等待5秒后重试...")
+                    await asyncio.sleep(5)
+                    continue
+                return "抱歉，响应时间过长，请稍后再试。"
+            except Exception as e:
+                print(f"❌ LLM调用失败 - 第{attempt + 1}次尝试: {e}")
+                if attempt == 0:
+                    print("🔄 等待5秒后重试...")
+                    await asyncio.sleep(5)
+                    continue
+                return "抱歉，服务暂时不可用，请稍后再试。"
 
 # 向后兼容的全局实例
 _langgraph_llm_instance = None

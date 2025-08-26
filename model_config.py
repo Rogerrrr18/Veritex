@@ -18,7 +18,7 @@ class ModelConfig:
     model_name: str
     temperature: float = 0.3
     max_tokens: int = 8000  # 增加token限制以支持复杂查询
-    timeout: float = 60.0   # 增加超时时间
+    timeout: float = None   # 超时时间由具体场景决定，不在此设置默认值
 
 class ModelConfigManager:
     """统一模型配置管理器"""

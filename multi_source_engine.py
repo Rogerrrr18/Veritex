@@ -20,6 +20,14 @@ from scholar_mirror_api import ScholarMirrorAPI
 # 加载环境变量
 load_dotenv()
 
+# 语义搜索相关导入（可选，不影响现有功能）
+try:
+    from semantic_search_engine import SemanticSearchEngine
+    from query_enhancer import QueryEnhancer
+    SEMANTIC_IMPORTS_AVAILABLE = True
+except ImportError:
+    SEMANTIC_IMPORTS_AVAILABLE = False
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,6 +42,10 @@ GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "true").lower() == 
 CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "false").lower() == "true"
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
 PUBMED_ENABLED = False  # 暂时禁用
+
+# 语义搜索配置（默认关闭，保证兼容性）
+SEMANTIC_SEARCH_ENABLED = os.getenv("ENABLE_SEMANTIC_SEARCH", "false").lower() == "true"
+SEMANTIC_ENHANCEMENT_ENABLED = os.getenv("ENABLE_SEMANTIC_ENHANCEMENT", "false").lower() == "true"
 
 # 兼容性支持：SCHOLARLY_ENABLED 映射到 SCHOLAR_PY_ENABLED
 if os.getenv("SCHOLARLY_ENABLED"):
@@ -162,7 +174,7 @@ class ArxivAPI:
     """arXiv API客户端"""
     
     def __init__(self):
-        self.base_url = "http://export.arxiv.org/api/query"
+        self.base_url = "https://export.arxiv.org/api/query"
         self.session = None
         
     async def _get_session(self):
@@ -584,8 +596,8 @@ class ScholarlyAPI:
             from scholarly import scholarly
             import random
             
-            # 更保守的请求参数
-            scholarly.set_timeout(30)  # 增加超时时间到30秒
+            # 针对网络连接问题优化超时参数
+            scholarly.set_timeout(60)  # 增加超时时间到60秒，适应网络延迟
             
             # 使用更多真实的用户代理
             user_agents = [
@@ -596,11 +608,25 @@ class ScholarlyAPI:
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
             ]
             
-            # 配置scholarly库的保守策略
+            # 配置scholarly库的网络优化策略
             try:
-                scholarly.set_retries(2)  # 允许2次重试，提高成功率
-                scholarly.set_timeout(30)  # 增加单次请求超时到30秒
-            except:
+                scholarly.set_retries(3)  # 增加重试次数到3次
+                scholarly.set_timeout(60)  # 增加单次请求超时到60秒
+                
+                # 添加网络连接检测和代理支持
+                import requests
+                try:
+                    # 快速网络连接测试
+                    response = requests.get("https://httpbin.org/ip", timeout=10)
+                    if response.status_code == 200:
+                        logger.info("✅ 网络连接正常")
+                    else:
+                        logger.warning("⚠️ 网络连接可能不稳定")
+                except Exception as net_e:
+                    logger.warning(f"⚠️ 网络连接测试失败: {net_e}")
+                    logger.info("📡 建议检查网络连接或配置代理")
+            except Exception as config_e:
+                logger.warning(f"scholarly配置部分失败: {config_e}")
                 pass
                 
             self.is_configured = True
@@ -685,7 +711,7 @@ class ScholarlyAPI:
             except:
                 pass
                 
-            # 创建新的搜索生成器，使用更安全的方法
+            # 创建新的搜索生成器，增强网络错误处理
             search_generator = None
             try:
                 search_generator = scholarly.search_pubs(query)
@@ -697,6 +723,14 @@ class ScholarlyAPI:
                     import importlib
                     importlib.reload(scholarly)
                     search_generator = scholarly.search_pubs(query)
+                elif "timed out" in error_str or "timeout" in error_str or "connecttimeout" in error_str:
+                    logger.error(f"🌐 网络连接超时: {e}")
+                    logger.info("📡 建议方案：")
+                    logger.info("   1. 检查网络连接是否稳定")
+                    logger.info("   2. 如在中国大陆，可能需要配置科学上网")
+                    logger.info("   3. 稍后重试或使用其他数据源")
+                    # 抛出特定异常，让上层处理
+                    raise ConnectionError(f"Google Scholar网络连接超时: {e}")
                 else:
                     raise
             
@@ -800,6 +834,11 @@ class ScholarlyAPI:
             error_str = str(e).lower()
             # 检测domain属性错误 - scholarly库内部错误
             is_domain_error = "domain" in error_str and "attribute" in error_str
+            # 检测网络连接超时错误
+            is_connection_error = any(keyword in error_str for keyword in [
+                'timed out', 'timeout', 'connecttimeout', 'connection refused',
+                'network is unreachable', 'failed to establish a new connection'
+            ])
             # 增强429错误检测和重试机制
             is_rate_limit_error = any(keyword in error_str for keyword in [
                 '429', 'too many requests', 'rate limit', 'blocked', 
@@ -807,7 +846,17 @@ class ScholarlyAPI:
                 'captcha', 'temporarily blocked', 'retry-after'
             ])
             
-            if is_domain_error:
+            if is_connection_error:
+                logger.error(f"🌐 scholarly网络连接超时: {str(e)[:100]}...")
+                logger.info("📡 网络连接问题诊断：")
+                logger.info("   • 当前网络可能无法访问Google Scholar")
+                logger.info("   • 如在中国大陆，需要科学上网工具")
+                logger.info("   • 检查网络代理设置或防火墙配置")
+                logger.info("   • 系统将切换到其他可用数据源")
+                # 标记为临时禁用，避免重复尝试
+                self._handle_captcha_failure()
+                return papers  # 返回已获取的结果
+            elif is_domain_error:
                 logger.warning(f"⚠️ scholarly库内部错误 (domain属性): {str(e)[:100]}...")
                 logger.info("📍 检测到scholarly库会话错误，建议稍后重试")
                 return papers  # 返回已获取的结果
@@ -1148,6 +1197,22 @@ class MultiSourceEngine:
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
         
+        # 语义搜索组件（可选，不影响现有功能）
+        if SEMANTIC_SEARCH_ENABLED and SEMANTIC_IMPORTS_AVAILABLE:
+            self.semantic_search = SemanticSearchEngine()
+            logger.info("✅ 语义搜索引擎已启用")
+        else:
+            self.semantic_search = None
+            if SEMANTIC_SEARCH_ENABLED and not SEMANTIC_IMPORTS_AVAILABLE:
+                logger.warning("⚠️ 语义搜索功能需要安装额外依赖: pip install sentence-transformers scikit-learn")
+        
+        # 查询增强器（可选）
+        if SEMANTIC_ENHANCEMENT_ENABLED and SEMANTIC_IMPORTS_AVAILABLE:
+            self.query_enhancer = QueryEnhancer()
+            logger.info("✅ 查询增强器已启用")
+        else:
+            self.query_enhancer = None
+        
         # 显示启用的数据源
         enabled_sources = []
         if self.arxiv:
@@ -1169,6 +1234,12 @@ class MultiSourceEngine:
             enabled_sources.append("Crossref")
         if self.pubmed:
             enabled_sources.append("PubMed")
+        
+        # 显示语义搜索组件
+        if self.semantic_search:
+            enabled_sources.append("语义搜索引擎")
+        if self.query_enhancer:
+            enabled_sources.append("查询增强器")
             
         logger.info(f"多源搜索引擎初始化完成，启用数据源: {', '.join(enabled_sources)}")
         
@@ -1405,7 +1476,25 @@ class MultiSourceEngine:
         
         # 排序并限制数量
         ranked_papers = self._rank_papers(filtered_papers, query)
-        final_results = ranked_papers[:max_results]
+        traditional_results = ranked_papers[:max_results]
+        
+        # 🎯 新增：语义搜索增强（完全向后兼容）
+        if self.semantic_search:
+            try:
+                logger.info("🧠 启动语义搜索增强...")
+                enhanced_results = await self.semantic_search.enhance_search_results(
+                    query=query,
+                    traditional_results=traditional_results,
+                    max_results=max_results
+                )
+                # 如果语义增强成功，使用增强结果；否则使用传统结果
+                final_results = enhanced_results if enhanced_results else traditional_results
+                logger.info(f"✅ 语义增强完成，最终结果数量: {len(final_results)}")
+            except Exception as e:
+                logger.warning(f"⚠️ 语义增强失败，使用传统搜索结果: {e}")
+                final_results = traditional_results
+        else:
+            final_results = traditional_results
         
         logger.info(f"搜索完成: 原始 {len(all_papers)} 篇 → 去重 {len(deduplicated_papers)} 篇 → 最终 {len(final_results)} 篇")
         return final_results
@@ -1519,4 +1608,11 @@ class MultiSourceEngine:
             coros.append(self.crossref.close())
         if self.pubmed:
             coros.append(self.pubmed.close())
+        
+        # 关闭语义搜索组件
+        if self.semantic_search:
+            coros.append(self.semantic_search.close())
+        if self.query_enhancer:
+            coros.append(self.query_enhancer.close())
+            
         await asyncio.gather(*coros)
