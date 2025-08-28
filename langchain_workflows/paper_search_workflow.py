@@ -552,138 +552,178 @@ class IntelligentPaperSearchAgent:
     
     def _clean_json_string(self, json_str: str) -> str:
         """
-        清洗JSON字符串，修复常见的LLM生成格式问题
-        - 移除尾随逗号
+        更稳定的JSON字符串清洗，减少格式破坏风险
+        - 修复尾随逗号
         - 修复引号问题
-        - 处理换行和空格
+        - 保持JSON结构完整性
         """
         try:
             print(f"🧹 开始JSON清洗，原始长度: {len(json_str)}")
             
             # 保存原始JSON用于调试
             original = json_str
+            cleaned = json_str.strip()
             
-            # 1. 基础清理：移除多余空白但保持结构
-            cleaned = re.sub(r'\n\s*\n', '\n', json_str)
-            cleaned = re.sub(r'^\s+', '', cleaned, flags=re.MULTILINE)
+            # 1. 首先尝试直接解析，如果成功则无需清洗
+            try:
+                json.loads(cleaned)
+                print("JSON格式良好，无需清洗")
+                return cleaned
+            except json.JSONDecodeError:
+                print("JSON格式有问题，开始清洗...")
             
-            # 2. 修复最常见问题：尾随逗号
-            # 对象中的尾随逗号: },} -> }}
-            cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
-            
-            # 数组中的尾随逗号: ,] -> ]
-            cleaned = re.sub(r',(\s*\])', r'\1', cleaned)
-            
-            # 对象属性后的尾随逗号: ,"key" -> "key" 或 ,} -> }
-            cleaned = re.sub(r',(\s*})', r'\1', cleaned)
-            
-            # 3. 修复引号问题（中文引号转换）
+            # 2. 修复中文引号（最常见的问题）
             cleaned = re.sub(r'["""]', '"', cleaned)
             cleaned = re.sub(r"['']", '"', cleaned)
             
-            # 4. 确保属性名都有引号
-            cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
+            # 3. 修复属性名缺少引号的问题（避免固定宽度后瞻问题）
+            # 匹配大括号或逗号后的未引号属性名
+            cleaned = re.sub(r'([{,]\s*)(\w+)(\s*:)', r'\1"\2"\3', cleaned)
             
-            # 5. 修复多重逗号问题
-            cleaned = re.sub(r',\s*,', ',', cleaned)
-            
-            # 6. 处理数组中的逗号问题
-            # 修复 ["item1", "item2",] 这种情况
+            # 4. 修复尾随逗号（分步处理避免冲突）
+            # 对象结尾的逗号: ,} -> }
+            cleaned = re.sub(r',(\s*})', r'\1', cleaned)
+            # 数组结尾的逗号: ,] -> ]
             cleaned = re.sub(r',(\s*\])', r'\1', cleaned)
             
-            # 7. 最后检查：移除对象结尾的多余逗号
-            # {..., } -> {...}
-            cleaned = re.sub(r',(\s*})(?!\s*[,\]\}])', r'\1', cleaned)
+            # 5. 修复多重逗号问题
+            cleaned = re.sub(r',\s*,+', ',', cleaned)
             
-            if cleaned != original:
-                print(f"🛠️ JSON已清洗，修复了格式问题")
-                # 省略详细预览
-            else:
-                print("JSON格式良好")
-            
-            return cleaned
+            # 6. 尝试解析修复后的JSON
+            try:
+                json.loads(cleaned)
+                print("🛠️ JSON清洗成功")
+                return cleaned
+            except json.JSONDecodeError as e:
+                print(f"⚠️ JSON清洗后仍有问题: {e}")
+                
+                # 7. 最后的修复尝试：移除可能的问题字符
+                # 移除非打印字符但保持结构
+                cleaned = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned)
+                
+                try:
+                    json.loads(cleaned)
+                    print("🔧 深度清洗成功")
+                    return cleaned
+                except json.JSONDecodeError:
+                    print("❌ JSON无法修复，返回原始内容")
+                    return original
             
         except Exception as e:
-            print(f"JSON清洗失败: {e}")
+            print(f"JSON清洗处理失败: {e}")
             return json_str
     
     def _extract_json_analysis(self, response: str) -> Optional[Dict[str, Any]]:
-        """从LLM响应中提取JSON分析结果"""
+        """从LLM响应中提取JSON分析结果，增强错误处理"""
         try:
             print("JSON提取开始")
             
             # 检查是否包含JSON标识符
-            has_query_analysis = '"query_analysis"' in response
+            has_query_analysis = '"query_analysis"' in response or '"original_query"' in response
             has_core_concepts = '"core_concepts"' in response
-            print(f"JSON标识符检查: {has_query_analysis or has_core_concepts}")
+            has_hierarchical = '"hierarchical_keywords"' in response
+            print(f"JSON标识符检查: {has_query_analysis or has_core_concepts or has_hierarchical}")
             
-            # 使用更智能的JSON提取方法
-            if has_query_analysis or has_core_concepts:
-                # 查找完整的JSON块（从第一个{到最后一个}）
-                json_start = response.find('{')
-                print(f"JSON开始位置: {json_start}")
-                
-                if json_start != -1:
+            # 如果没有明显的JSON标识符，直接返回None
+            if not (has_query_analysis or has_core_concepts or has_hierarchical):
+                print("未检测到JSON标识符，跳过JSON提取")
+                return None
+            
+            # 方法1：精确大括号匹配
+            json_candidates = []
+            
+            # 查找所有可能的JSON块
+            i = 0
+            while i < len(response):
+                if response[i] == '{':
                     brace_count = 0
-                    json_end = json_start
+                    start_pos = i
                     
-                    for i in range(json_start, len(response)):
-                        if response[i] == '{':
+                    # 找到匹配的右大括号
+                    for j in range(i, len(response)):
+                        if response[j] == '{':
                             brace_count += 1
-                        elif response[i] == '}':
+                        elif response[j] == '}':
                             brace_count -= 1
                             if brace_count == 0:
-                                json_end = i + 1
+                                json_candidates.append((start_pos, j + 1))
+                                i = j + 1
                                 break
-                    
-                    print(f"JSON结束位置: {json_end}")
-                    
-                    if brace_count == 0:  # 找到完整的JSON
-                        json_str = response[json_start:json_end]
-                        print(f"提取到完整JSON，长度: {len(json_str)}")
-                        
-                        # 🛠️ JSON清洗 - 修复常见格式问题
-                        cleaned_json = self._clean_json_string(json_str)
-                        
-                        analysis = json.loads(cleaned_json)
-                        print(f"成功解析JSON结果: {len(analysis)}个字段")
-                        return analysis
                     else:
-                        print("JSON结构不完整，尝试备选方法")
-                        # 尝试找到最大的有效JSON块
-                        for end_pos in range(len(response) - 1, json_start, -1):
-                            if response[end_pos] == '}':
-                                try_json = response[json_start:end_pos + 1]
-                                try:
-                                    analysis = json.loads(try_json)
-                                    print("备选方法成功解析JSON")
-                                    return analysis
-                                except:
-                                    continue
-                        print("备选方法也失败")
-                        return None
+                        # 没找到匹配的右大括号
+                        break
+                else:
+                    i += 1
             
-            # 原有的JSON查找逻辑作为备选
-            print("使用正则表达式备选方法")
-            json_match = re.search(r'\{[\s\S]*?\}', response)
-            if json_match:
-                json_str = json_match.group()
-                print(f"正则表达式找到JSON")
+            print(f"找到 {len(json_candidates)} 个JSON候选块")
+            
+            # 尝试解析每个候选JSON块
+            for start, end in json_candidates:
+                json_str = response[start:end]
+                print(f"尝试解析JSON块 ({start}-{end})，长度: {len(json_str)}")
                 
-                # 🛠️ JSON清洗 - 修复常见格式问题
-                cleaned_json = self._clean_json_string(json_str)
-                
-                analysis = json.loads(cleaned_json)
-                print("备选方法成功提取JSON结果")
-                return analysis
-            else:
-                print("响应中未包含JSON分析")
-                return None
-        except json.JSONDecodeError as je:
-            print(f"JSON解析错误: {je}")
+                try:
+                    # 首先尝试直接解析
+                    analysis = json.loads(json_str)
+                    
+                    # 验证是否包含预期的关键字段
+                    if any(key in analysis for key in ['core_concepts', 'hierarchical_keywords', 'original_query']):
+                        print(f"✅ 成功解析有效JSON: {len(analysis)}个字段")
+                        return analysis
+                except json.JSONDecodeError as e:
+                    print(f"直接解析失败: {e}")
+                    
+                    # 尝试清洗后解析
+                    try:
+                        cleaned_json = self._clean_json_string(json_str)
+                        analysis = json.loads(cleaned_json)
+                        
+                        # 验证是否包含预期的关键字段
+                        if any(key in analysis for key in ['core_concepts', 'hierarchical_keywords', 'original_query']):
+                            print(f"✅ 清洗后成功解析JSON: {len(analysis)}个字段")
+                            return analysis
+                    except json.JSONDecodeError as e:
+                        print(f"清洗后解析仍失败: {e}")
+                        continue
+                except Exception as e:
+                    print(f"解析JSON块时发生异常: {e}")
+                    continue
+            
+            # 方法2：正则表达式备选方法（贪婪匹配）
+            print("尝试正则表达式方法...")
+            json_patterns = [
+                r'\{[^{}]*"(?:core_concepts|hierarchical_keywords|original_query)"[^{}]*\{[^{}]*\}[^{}]*\}',  # 嵌套结构
+                r'\{[^{}]*"(?:core_concepts|hierarchical_keywords|original_query)"[^{}]*\}',  # 简单结构
+                r'\{[\s\S]*?"hierarchical_keywords"[\s\S]*?\}',  # 宽松匹配
+            ]
+            
+            for pattern in json_patterns:
+                matches = re.findall(pattern, response)
+                for match in matches:
+                    try:
+                        # 直接尝试
+                        analysis = json.loads(match)
+                        if any(key in analysis for key in ['core_concepts', 'hierarchical_keywords', 'original_query']):
+                            print("✅ 正则表达式方法成功")
+                            return analysis
+                    except:
+                        try:
+                            # 清洗后尝试
+                            cleaned = self._clean_json_string(match)
+                            analysis = json.loads(cleaned)
+                            if any(key in analysis for key in ['core_concepts', 'hierarchical_keywords', 'original_query']):
+                                print("✅ 正则表达式+清洗方法成功")
+                                return analysis
+                        except:
+                            continue
+            
+            print("❌ 所有JSON提取方法都失败")
             return None
+            
         except Exception as e:
-            print(f"JSON提取失败: {type(e).__name__}: {e}")
+            print(f"JSON提取过程发生异常: {type(e).__name__}: {e}")
+            import traceback
+            print(f"详细错误: {traceback.format_exc()}")
             return None
     
     # 已移除：_extract_user_friendly_response（不再需要单独提取）
@@ -1040,7 +1080,7 @@ class IntelligentPaperSearchAgent:
         """搜索执行节点 - 调用现有多源搜索引擎"""
         try:
             query = state.get("query", "")
-            max_results = state.get("max_results", 10)
+            max_results = state.get("max_results", 20)
             analysis = state.get("analysis_result", {})
             year_from = state.get("year_from")
             year_to = state.get("year_to")
@@ -1055,21 +1095,26 @@ class IntelligentPaperSearchAgent:
             # 获取搜索引擎并执行搜索
             search_engine = await self._get_search_engine()
             
+            # 获取analysis结果用于统一布尔查询
+            analysis = state.get("analysis_result", {})
+            
             # MultiSourceEngine使用不同的搜索接口
             if hasattr(search_engine, 'search_parallel_with_filters'):
-                # 使用新的带筛选的搜索方法
+                # 使用新的带筛选的搜索方法，传递analysis参数
                 papers = await search_engine.search_parallel_with_filters(
                     query=search_query,
                     max_results=max_results,
                     year_from=year_from,
                     year_to=year_to,
-                    sources=sources
+                    sources=sources,
+                    analysis=analysis
                 )
             elif hasattr(search_engine, 'search_parallel'):
-                papers = await search_engine.search_parallel(search_query, max_results)
+                # 传递analysis参数
+                papers = await search_engine.search_parallel(search_query, max_results, analysis=analysis)
             else:
                 # 兜底：使用基础搜索接口
-                search_result = await search_engine.search_parallel(search_query, max_results)
+                search_result = await search_engine.search_parallel(search_query, max_results, analysis=analysis)
                 papers = search_result if isinstance(search_result, list) else search_result.get('papers', [])
             print(f"搜索完成，找到 {len(papers)} 篇论文")
             
@@ -1605,7 +1650,7 @@ class IntelligentPaperSearchAgent:
         
         return unique_terms
     
-    async def search_papers(self, query: str, max_results: int = 10, thread_id: str = None, mode: str = "auto-search", force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    async def search_papers(self, query: str, max_results: int = 20, thread_id: str = None, mode: str = "auto-search", force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """主要搜索接口"""
         if thread_id is None:
             thread_id = f"thread_{uuid.uuid4().hex[:8]}"
@@ -1741,7 +1786,7 @@ def get_intelligent_paper_search_agent(enable_memory: bool = True) -> Intelligen
         _intelligent_agent = IntelligentPaperSearchAgent(enable_memory=enable_memory)
     return _intelligent_agent
 
-async def chat_with_search_strategy(query: str, thread_id: str = None, force_search: bool = False, max_results: int = 10, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+async def chat_with_search_strategy(query: str, thread_id: str = None, force_search: bool = False, max_results: int = 20, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """智能聊天与搜索策略分析的统一入口"""
     agent = get_intelligent_paper_search_agent()
     return await agent.search_papers(query, max_results, thread_id, force_search, year_from, year_to, sources, allow_search, history)

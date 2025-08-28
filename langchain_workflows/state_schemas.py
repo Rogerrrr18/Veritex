@@ -53,7 +53,7 @@ def create_initial_state(
     query: str,
     user_message: str = None,
     mode: str = "auto-search",
-    max_results: int = 10,
+    max_results: int = 20,
     force_search: bool = False,
     allow_search: bool = True,
     year_from: Optional[int] = None,

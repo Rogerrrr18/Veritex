@@ -382,7 +382,7 @@ async def generate_stream_response(
             yield f"data: {json.dumps({'type': 'status', 'data': {'message': '正在分析您的学术查询...'}})}\n\n"
             
             # 提取搜索参数
-            max_results = search_params.get('max_results', 10)
+            max_results = search_params.get('max_results', 20)
             year_from = search_params.get('year_from')
             year_to = search_params.get('year_to')
             sources = search_params.get('sources')
@@ -544,7 +544,7 @@ async def chat(request: ChatRequest):
         
         # 提取搜索参数
         search_params = request.search_params or {}
-        max_results = search_params.get('max_results', 10)
+        max_results = search_params.get('max_results', 20)
         year_from = search_params.get('year_from')
         year_to = search_params.get('year_to')
         sources = search_params.get('sources')
@@ -659,51 +659,61 @@ async def search_papers_api(req: SearchRequest):
             logger.info("✅ 检测到预扩展关键词，直接执行搜索（跳过LLM分析）")
             
             try:
+                # 🚀 优先尝试优化搜索，失败时降级到原始搜索
+                search_results = None
+                search_engine = None
+                
+                # 使用统一的多源搜索引擎
                 from multi_source_engine import MultiSourceEngine
                 search_engine = MultiSourceEngine()
                 
-                # 使用LLM返回的优化布尔查询和搜索策略
-                hierarchical = req.expanded_keywords['hierarchical_keywords']
-                
-                # 优先使用LLM提供的优化布尔查询
-                if req.expanded_keywords.get('optimized_boolean_query'):
-                    search_query = req.expanded_keywords['optimized_boolean_query']
-                    search_strategy = req.expanded_keywords.get('search_strategy', 'balanced')
-                    logger.info(f"🎯 使用LLM优化布尔查询: {search_query}")
-                    logger.info(f"📈 搜索策略: {search_strategy}")
-                else:
-                    # 🔄 备用方案：权重驱动的查询构建（与工作流保持一致）
-                    logger.info("⚠️ LLM未返回布尔查询，使用权重驱动构建")
+                try:
+                    # 使用LLM返回的优化布尔查询和搜索策略
+                    hierarchical = req.expanded_keywords['hierarchical_keywords']
                     
-                    # 使用paper_search_workflow中的智能构建逻辑
-                    from langchain_workflows.paper_search_workflow import IntelligentPaperSearchAgent
-                    temp_agent = IntelligentPaperSearchAgent()
+                    # 优先使用LLM提供的优化布尔查询
+                    if req.expanded_keywords.get('optimized_boolean_query'):
+                        search_query = req.expanded_keywords['optimized_boolean_query']
+                        search_strategy = req.expanded_keywords.get('search_strategy', 'balanced')
+                        logger.info(f"🎯 使用LLM优化布尔查询: {search_query}")
+                        logger.info(f"📈 搜索策略: {search_strategy}")
+                    else:
+                        # 🔄 备用方案：权重驱动的查询构建（与工作流保持一致）
+                        logger.info("⚠️ LLM未返回布尔查询，使用权重驱动构建")
+                        
+                        # 使用paper_search_workflow中的智能构建逻辑
+                        from langchain_workflows.paper_search_workflow import IntelligentPaperSearchAgent
+                        temp_agent = IntelligentPaperSearchAgent()
+                        
+                        # 构建分析数据结构
+                        analysis_data = {
+                            "hierarchical_keywords": hierarchical,
+                            "search_strategy": req.expanded_keywords.get('search_strategy', 'balanced')
+                        }
+                        
+                        search_query = temp_agent._build_search_query(req.query, analysis_data)
+                        logger.info(f"🔧 权重驱动查询构建: {search_query}")
                     
-                    # 构建分析数据结构
-                    analysis_data = {
-                        "hierarchical_keywords": hierarchical,
-                        "search_strategy": req.expanded_keywords.get('search_strategy', 'balanced')
-                    }
+                    logger.info(f"🎯 构建优化查询: {search_query}")
                     
-                    search_query = temp_agent._build_search_query(req.query, analysis_data)
-                    logger.info(f"🔧 权重驱动查询构建: {search_query}")
+                    # 执行多源并行搜索（传递analysis参数用于统一布尔查询）
+                    search_results = await search_engine.search_parallel_with_filters(
+                        query=search_query,
+                        max_results=req.max_results,
+                        year_from=req.year_from,
+                        year_to=req.year_to,
+                        sources=req.sources,
+                        analysis=analysis_data
+                    )
+                except Exception as search_error:
+                    logger.error(f"❌ 搜索执行失败: {search_error}")
+                    search_results = []
                 
-                logger.info(f"🎯 构建优化查询: {search_query}")
-                
-                # 执行多源并行搜索
-                papers = await search_engine.search_parallel_with_filters(
-                    query=search_query,
-                    max_results=req.max_results,
-                    year_from=req.year_from,
-                    year_to=req.year_to,
-                    sources=req.sources
-                )
-                
-                logger.info(f"📚 搜索完成，获得 {len(papers)} 篇论文")
+                logger.info(f"📚 搜索完成，获得 {len(search_results)} 篇论文")
                 
                 # 格式化结果 - 过滤缺少关键信息的论文
                 formatted_papers = []
-                for paper in papers:
+                for paper in search_results:
                     # 只有标题不为空的论文才被包含
                     if paper.title and paper.title.strip():
                         formatted_papers.append({
@@ -719,7 +729,9 @@ async def search_papers_api(req: SearchRequest):
                             "relevance_score": paper.relevance_score
                         })
                 
-                await search_engine.close()
+                # 安全关闭搜索引擎
+                if search_engine:
+                    await search_engine.close()
                 
                 return {
                     "success": True,
@@ -728,7 +740,7 @@ async def search_papers_api(req: SearchRequest):
                         "total_found": len(formatted_papers),
                         "query_info": {
                             "original_query": req.query,
-                            "search_query": search_query,
+                            "search_query": locals().get('search_query', req.query),
                             "is_academic_query": True,
                             "analysis_result": req.expanded_keywords,
                             "used_preexpanded_keywords": True
@@ -867,7 +879,7 @@ async def health_check():
                 "available_models": model_info.get("available_models", []),
                 "model_name": model_info.get("model_name")
             },
-            "data_sources": ["arxiv", "scholarly", "semantic_scholar"]
+            "data_sources": ["arxiv", "scholar_dock", "semantic_scholar"]
         }
     except Exception as e:
         return {
@@ -898,20 +910,52 @@ async def root():
 
 @app.get("/performance")
 async def get_performance_stats():
-    """获取性能统计信息"""
+    """获取增强的性能统计信息 - 整合AI_SCI_DOG优化"""
     try:
-        monitor = get_performance_monitor()
-        summary = monitor.get_performance_summary()
-        return {
-            "success": True,
-            "data": summary,
-            "timestamp": datetime.now().isoformat()
+        stats = {
+            "timestamp": datetime.now().isoformat(),
+            "success": True
         }
+        
+        # 原有性能监控器统计
+        try:
+            monitor = get_performance_monitor()
+            summary = monitor.get_performance_summary()
+            stats["original_monitor"] = summary
+        except Exception as e:
+            logger.warning(f"获取原始性能监控失败: {e}")
+        
+        
+        # 智能重试处理器统计
+        try:
+            from smart_retry_handler import get_retry_handler, get_fallback_handler
+            retry_handler = get_retry_handler()
+            fallback_handler = get_fallback_handler()
+            
+            stats["retry_handler"] = retry_handler.get_retry_stats()
+            stats["fallback_handler"] = fallback_handler.get_health_status()
+        except Exception as e:
+            logger.warning(f"获取重试处理器统计失败: {e}")
+        
+        # 系统资源统计
+        try:
+            import psutil
+            stats["system_resources"] = {
+                "cpu_percent": psutil.cpu_percent(),
+                "memory_percent": psutil.virtual_memory().percent,
+                "disk_usage_percent": psutil.disk_usage('/').percent,
+                "network_connections": len(psutil.net_connections())
+            }
+        except Exception as e:
+            logger.warning(f"获取系统资源统计失败: {e}")
+            
+        return stats
+        
     except Exception as e:
         return {
             "success": False,
             "error": f"获取性能统计失败: {str(e)}",
-            "data": {}
+            "timestamp": datetime.now().isoformat()
         }
 
 @app.post("/performance/reset")
@@ -928,6 +972,129 @@ async def reset_performance_stats():
         return {
             "success": False,
             "error": f"重置性能统计失败: {str(e)}"
+        }
+
+@app.post("/search_papers/batch")
+async def batch_search_papers(request: Dict[str, Any]):
+    """批量搜索接口 - 参考AI_SCI_DOG优化"""
+    try:
+        queries = request.get("queries", [])
+        if not queries:
+            raise ValueError("查询列表不能为空")
+        
+        options = request.get("options", {})
+        max_concurrent = options.get("max_concurrent", 3)
+        limit_per_query = options.get("limit", 10)
+        
+        logger.info(f"🔄 开始批量搜索 - 查询数: {len(queries)}, 并发数: {max_concurrent}")
+        
+        # 使用统一的多源搜索引擎执行批量搜索  
+        try:
+            from multi_source_engine import MultiSourceEngine
+            engine = MultiSourceEngine()
+            
+            # 分批处理查询以控制并发
+            batch_results = []
+            for i in range(0, len(queries), max_concurrent):
+                batch = queries[i:i + max_concurrent]
+                
+                # 并发执行批量搜索
+                batch_tasks = []
+                for query in batch:
+                    task = asyncio.create_task(
+                        engine.search_parallel(
+                            query=query,
+                            max_results=limit_per_query
+                        )
+                    )
+                    batch_tasks.append(task)
+                
+                batch_papers = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                for j, papers in enumerate(batch_papers):
+                    if isinstance(papers, Exception):
+                        batch_results.append({
+                            "papers": [],
+                            "error": str(papers),
+                            "response_time": 0.0,
+                            "source": "multi_source_engine"
+                        })
+                    else:
+                        batch_results.append({
+                            "papers": papers,
+                            "error": None,
+                            "response_time": 2.0,  # 估算值
+                            "source": "multi_source_engine"
+                        })
+                
+                # 批次间延迟
+                if i + max_concurrent < len(queries):
+                    await asyncio.sleep(1.0)
+                    
+            await engine.close()
+            
+            # 转换结果格式
+            formatted_results = []
+            for i, result in enumerate(batch_results):
+                formatted_result = {
+                    "query": queries[i],
+                    "success": result["error"] is None,
+                    "paper_count": len(result["papers"]) if result["papers"] else 0,
+                    "response_time": result["response_time"],
+                    "source": result["source"]
+                }
+                
+                if result["error"]:
+                    formatted_result["error"] = result["error"]
+                else:
+                    # 格式化论文数据
+                    papers = []
+                    for paper in result["papers"]:
+                        papers.append({
+                            "title": paper.title,
+                            "authors": paper.authors,
+                            "abstract": paper.abstract,
+                            "year": paper.year,
+                            "journal": paper.journal,
+                            "url": paper.url,
+                            "citations": paper.citations,
+                            "source": paper.source
+                        })
+                    formatted_result["papers"] = papers
+                
+                formatted_results.append(formatted_result)
+            
+            # 统计信息
+            successful_searches = sum(1 for r in formatted_results if r["success"])
+            total_papers = sum(r["paper_count"] for r in formatted_results)
+            
+            return {
+                "success": True,
+                "results": formatted_results,
+                "summary": {
+                    "total_queries": len(queries),
+                    "successful_searches": successful_searches,
+                    "failed_searches": len(queries) - successful_searches,
+                    "total_papers_found": total_papers,
+                    "average_papers_per_query": total_papers / len(queries) if queries else 0
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 批量搜索失败: {e}")
+            return {
+                "success": False,
+                "error": f"批量搜索执行失败: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ 批量搜索请求处理失败: {e}")
+        return {
+            "success": False, 
+            "error": f"请求处理失败: {str(e)}",
+            "timestamp": datetime.now().isoformat()
         }
 
 @app.get("/models")

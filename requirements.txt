@@ -19,11 +19,14 @@ openai>=1.50.0
 anthropic>=0.25.0
 groq>=0.9.0
 
-# 学术搜索和文本处理 - 使用稳定版本避免domain错误
-scholarly==1.7.11
+# 学术搜索和文本处理
 feedparser>=6.0.11
 beautifulsoup4>=4.12.3
 lxml>=5.1.0
+
+# ScholarDock集成依赖
+selenium>=4.17.2
+requests>=2.31.0
 
 # 数据处理和表格
 pandas>=2.2.0
@@ -51,14 +54,6 @@ opentelemetry-sdk>=1.21.0
 # 网络请求支持
 Brotli>=1.1.0
 
-# 语义搜索依赖（可选）
-sentence-transformers>=2.2.0
-scikit-learn>=1.3.0
-
 # 开发和测试工具
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
-
-# 可选依赖（用于增强功能）
-numpy>=1.26.0  # 用于向量计算
-# scikit-learn>=1.4.0  # 用于文本相似度计算（已在第56行包含）

@@ -16,17 +16,11 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 from scholar_mirror_api import ScholarMirrorAPI
+from scholar_dock_spider import ScholarDockSpider, ScholarDockPaper
 
 # 加载环境变量
 load_dotenv()
 
-# 语义搜索相关导入（可选，不影响现有功能）
-try:
-    from semantic_search_engine import SemanticSearchEngine
-    from query_enhancer import QueryEnhancer
-    SEMANTIC_IMPORTS_AVAILABLE = True
-except ImportError:
-    SEMANTIC_IMPORTS_AVAILABLE = False
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +30,8 @@ logger = logging.getLogger(__name__)
 SEMANTIC_SCHOLAR_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "true").lower() == "true"
 # 启用ScholarPy（自定义的Google Scholar访问实现）
 SCHOLAR_PY_ENABLED = os.getenv("SCHOLAR_PY_ENABLED", "false").lower() == "true"  
+# ScholarDock高效爬虫（推荐使用，默认启用）
+SCHOLAR_DOCK_ENABLED = os.getenv("SCHOLAR_DOCK_ENABLED", "true").lower() == "true"
 # 新增：控制是否启用Google Scholar（默认启用作为主力搜索源）
 GOOGLE_SCHOLAR_ENABLED = os.getenv("GOOGLE_SCHOLAR_ENABLED", "true").lower() == "true"
 # 暂时禁用其他数据源
@@ -43,9 +39,6 @@ CROSSREF_ENABLED = os.getenv("CROSSREF_ENABLED", "false").lower() == "true"
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
 PUBMED_ENABLED = False  # 暂时禁用
 
-# 语义搜索配置（默认关闭，保证兼容性）
-SEMANTIC_SEARCH_ENABLED = os.getenv("ENABLE_SEMANTIC_SEARCH", "false").lower() == "true"
-SEMANTIC_ENHANCEMENT_ENABLED = os.getenv("ENABLE_SEMANTIC_ENHANCEMENT", "false").lower() == "true"
 
 # 兼容性支持：SCHOLARLY_ENABLED 映射到 SCHOLAR_PY_ENABLED
 if os.getenv("SCHOLARLY_ENABLED"):
@@ -53,7 +46,7 @@ if os.getenv("SCHOLARLY_ENABLED"):
 
 @dataclass
 class Paper:
-    """论文数据结构"""
+    """论文数据结构 - 集成ScholarDock增强字段"""
     title: str
     authors: List[str]
     abstract: str
@@ -66,6 +59,34 @@ class Paper:
     relevance_score: float = 0.0
     pmid: Optional[str] = None
     keywords: Optional[List[str]] = None
+    
+    # ScholarDock增强字段
+    citations_per_year: float = 0.0
+    venue: str = ""
+    publisher: str = ""
+    description: str = ""
+
+def convert_scholar_dock_paper(scholar_paper: ScholarDockPaper) -> Paper:
+    """将ScholarDockPaper转换为标准Paper对象"""
+    return Paper(
+        title=scholar_paper.title,
+        authors=scholar_paper.authors,
+        abstract=scholar_paper.abstract or scholar_paper.description,
+        year=scholar_paper.year,
+        journal=scholar_paper.journal or scholar_paper.venue,
+        url=scholar_paper.url,
+        doi=scholar_paper.doi,
+        citations=scholar_paper.citations,
+        source=scholar_paper.source,
+        relevance_score=0.0,
+        pmid=None,
+        keywords=None,
+        # ScholarDock增强字段
+        citations_per_year=scholar_paper.citations_per_year,
+        venue=scholar_paper.venue,
+        publisher=scholar_paper.publisher,
+        description=scholar_paper.description
+    )
 
 class SemanticScholarAPI:
     """Semantic Scholar API客户端 - 简化版"""
@@ -580,336 +601,42 @@ class ScholarPyAPI:
         """清理资源"""
         pass
 
-class ScholarlyAPI:
-    """Scholarly库客户端 - 参考Paper-god-beta2的简单成功实现"""
+
+class ScholarDockAPI:
+    """ScholarDock高效Google Scholar爬虫API包装器"""
     
     def __init__(self):
-        # 参考Paper-god-beta2: 最小化配置，只保留必要的
-        self.request_delay_range = (1, 3)  # 1-3秒随机延迟，与Paper-god-beta2一致
-        
-    def _configure_scholarly(self):
-        """配置scholarly库，设置更保守的反CAPTCHA机制"""
-        if self.is_configured:
-            return
-            
-        try:
-            from scholarly import scholarly
-            import random
-            
-            # 针对网络连接问题优化超时参数
-            scholarly.set_timeout(60)  # 增加超时时间到60秒，适应网络延迟
-            
-            # 使用更多真实的用户代理
-            user_agents = [
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
-            ]
-            
-            # 配置scholarly库的网络优化策略
-            try:
-                scholarly.set_retries(3)  # 增加重试次数到3次
-                scholarly.set_timeout(60)  # 增加单次请求超时到60秒
-                
-                # 添加网络连接检测和代理支持
-                import requests
-                try:
-                    # 快速网络连接测试
-                    response = requests.get("https://httpbin.org/ip", timeout=10)
-                    if response.status_code == 200:
-                        logger.info("✅ 网络连接正常")
-                    else:
-                        logger.warning("⚠️ 网络连接可能不稳定")
-                except Exception as net_e:
-                    logger.warning(f"⚠️ 网络连接测试失败: {net_e}")
-                    logger.info("📡 建议检查网络连接或配置代理")
-            except Exception as config_e:
-                logger.warning(f"scholarly配置部分失败: {config_e}")
-                pass
-                
-            self.is_configured = True
-            logger.info("✅ scholarly库配置完成，启用保守访问策略")
-            
-        except Exception as e:
-            logger.warning(f"scholarly库配置失败: {e}")
-        
-    async def _rate_limit_delay(self):
-        """保守延迟策略，基于Paper-god-beta2经验优化"""
-        import time
-        import random
-        
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        session_duration = current_time - self.session_start
-        
-        # 更保守的延迟策略，参考Paper-god-beta2经验
-        if self.last_request_time == 0 or time_since_last > 300:  # 5分钟重置
-            delay = random.uniform(6.0, 12.0)  # 首次请求：6-12秒
-            logger.info(f"🕒 首次/长间隔延迟: {delay:.2f}秒")
-        elif self.consecutive_requests >= 3:  # 3次后才增加延迟
-            base_delay = self.min_delay + (self.consecutive_requests - 2) * random.uniform(1.0, 2.0)
-            delay = min(base_delay, 15.0)  # 最大不超过15秒
-            logger.debug(f"🕒 连续访问适度延迟: {delay:.2f}秒 (第{self.consecutive_requests}次)")
-        elif time_since_last < self.min_delay:
-            delay = self.min_delay - time_since_last + random.uniform(1.0, 3.0)  # 基础延迟
-            logger.debug(f"🕒 基础延迟: {delay:.2f}秒")
-        else:
-            delay = random.uniform(3.0, 6.0)  # 最小3-6秒随机延迟
-            logger.debug(f"🕒 正常随机延迟: {delay:.2f}秒")
-            
-        await asyncio.sleep(delay)
-        self.last_request_time = time.time()
-        self.consecutive_requests += 1
-        
-        # 长时间无访问重置计数器
-        if time_since_last > 180:  # 3分钟就重置
-            self.consecutive_requests = 0
-            self.captcha_failures = max(0, self.captcha_failures - 1)  # 逐渐恢复失败计数
-        
-    def _is_temporarily_disabled(self) -> bool:
-        """检查是否因CAPTCHA而临时禁用"""
-        import time
-        if self.temporary_disabled and time.time() < self.disable_until:
-            return True
-        elif self.temporary_disabled and time.time() >= self.disable_until:
-            # 禁用期已过，重置状态
-            self.temporary_disabled = False
-            self.captcha_failures = 0
-            logger.info("🔓 Google Scholar临时禁用期已过，重新启用")
-            return False
-        return False
-    
-    def _handle_captcha_failure(self):
-        """处理CAPTCHA失败 - 快速切换策略"""
-        import time
-        self.captcha_failures += 1
-        logger.warning(f"⚠️ scholarly库访问限制计数: {self.captcha_failures}/{self.max_captcha_failures}")
-        
-        if self.captcha_failures >= self.max_captcha_failures:
-            # 临时禁用5分钟，快速恢复
-            self.temporary_disabled = True
-            self.disable_until = time.time() + (5 * 60)  # 缩短到5分钟
-            logger.warning(f"🚫 scholarly库因访问限制已临时禁用5分钟，系统将使用其他数据源")
-            # 重置连续请求计数
-            self.consecutive_requests = 0
+        self.spider = None
+        logger.info("🚀 ScholarDock API初始化")
     
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """使用scholarly库搜索学术文献 - 增强错误处理版本"""
-        papers = []
-        
+        """使用ScholarDock技术搜索Google Scholar"""
         try:
-            from scholarly import scholarly
-            import random
+            logger.info(f"🔍 ScholarDock开始搜索: {query}")
             
-            logger.info(f"🔍 开始scholarly库搜索: {query}")
+            # 创建并使用ScholarDock爬虫
+            async with ScholarDockSpider() as spider:
+                scholar_papers = await spider.search(query, limit)
             
-            # 重置scholarly会话，避免'str' object has no attribute 'domain'错误
-            try:
-                scholarly._SESSION.close()  # 关闭可能损坏的会话
-            except:
-                pass
-                
-            # 创建新的搜索生成器，增强网络错误处理
-            search_generator = None
-            try:
-                search_generator = scholarly.search_pubs(query)
-            except Exception as e:
-                error_str = str(e).lower()
-                if "domain" in error_str or "str" in error_str:
-                    logger.warning(f"⚠️ scholarly会话问题，尝试重新初始化: {e}")
-                    # 强制重新初始化scholarly
-                    import importlib
-                    importlib.reload(scholarly)
-                    search_generator = scholarly.search_pubs(query)
-                elif "timed out" in error_str or "timeout" in error_str or "connecttimeout" in error_str:
-                    logger.error(f"🌐 网络连接超时: {e}")
-                    logger.info("📡 建议方案：")
-                    logger.info("   1. 检查网络连接是否稳定")
-                    logger.info("   2. 如在中国大陆，可能需要配置科学上网")
-                    logger.info("   3. 稍后重试或使用其他数据源")
-                    # 抛出特定异常，让上层处理
-                    raise ConnectionError(f"Google Scholar网络连接超时: {e}")
-                else:
-                    raise
-            
-            count = 0
-            retrieved_count = 0
-            
-            # 使用更安全的循环方式
-            for i in range(limit * 2):  # 尝试获取更多结果，以防过滤
+            # 转换为标准Paper对象
+            papers = []
+            for scholar_paper in scholar_papers:
                 try:
-                    if search_generator is None:
-                        break
-                        
-                    pub = next(search_generator)
-                    retrieved_count += 1
-                    
-                    if not pub:
-                        continue
-                        
-                    bib = pub.get('bib', {})
-                    title = bib.get('title', '').strip()
-                    
-                    # 跳过没有标题的论文
-                    if not title:
-                        continue
-                        
-                    # 获取作者
-                    authors_raw = bib.get('author', [])
-                    if isinstance(authors_raw, list):
-                        authors = [str(author).strip() for author in authors_raw if str(author).strip()]
-                    else:
-                        authors = [str(authors_raw).strip()] if authors_raw else []
-                    
-                    # 获取年份
-                    year = None
-                    pub_year = bib.get('pub_year')
-                    if pub_year:
-                        try:
-                            year = int(pub_year)
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    # 获取摘要
-                    abstract = bib.get('abstract', '')
-                    if abstract and len(abstract) > 300:
-                        abstract = abstract[:300] + "..."
-                    
-                    # 获取URL
-                    url = pub.get('pub_url', '') or pub.get('eprint_url', '')
-                    
-                    # 获取引用数
-                    citations = 0
-                    if 'num_citations' in pub:
-                        try:
-                            citations = int(pub['num_citations'])
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    paper = Paper(
-                        title=title,
-                        authors=authors,
-                        abstract=abstract,
-                        year=year,
-                        journal=bib.get('venue', ''),
-                        url=url,
-                        doi=None,
-                        citations=citations,
-                        source='scholarly',
-                        relevance_score=1.0 - (count * 0.1)
-                    )
-                    
+                    paper = convert_scholar_dock_paper(scholar_paper)
                     papers.append(paper)
-                    count += 1
-                    
-                    if count >= limit:
-                        break
-                        
-                    # 增强的结果间延迟策略，避免429错误
-                    delay = random.uniform(2.0, 5.0)  # 2-5秒随机延迟，更保守
-                    await asyncio.sleep(delay)
-                    
-                except StopIteration:
-                    logger.info("scholarly搜索已无更多结果")
-                    break
                 except Exception as e:
-                    error_str = str(e).lower()
-                    if "domain" in error_str or "str" in error_str:
-                        logger.warning(f"⚠️ scholarly会话问题: {e}")
-                        # 尝试重新创建搜索生成器
-                        try:
-                            search_generator = scholarly.search_pubs(query)
-                            continue
-                        except:
-                            break  # 无法恢复，退出循环
-                    else:
-                        logger.debug(f"处理单个结果时出错: {e}")
-                        continue
+                    logger.warning(f"转换论文失败: {e}")
+                    continue
             
-            logger.info(f"✅ scholarly库搜索完成，获得 {len(papers)} 篇论文")
+            logger.info(f"✅ ScholarDock返回 {len(papers)} 篇论文")
+            return papers
             
         except Exception as e:
-            error_str = str(e).lower()
-            # 检测domain属性错误 - scholarly库内部错误
-            is_domain_error = "domain" in error_str and "attribute" in error_str
-            # 检测网络连接超时错误
-            is_connection_error = any(keyword in error_str for keyword in [
-                'timed out', 'timeout', 'connecttimeout', 'connection refused',
-                'network is unreachable', 'failed to establish a new connection'
-            ])
-            # 增强429错误检测和重试机制
-            is_rate_limit_error = any(keyword in error_str for keyword in [
-                '429', 'too many requests', 'rate limit', 'blocked', 
-                'cannot fetch from google scholar', 'unusual traffic',
-                'captcha', 'temporarily blocked', 'retry-after'
-            ])
-            
-            if is_connection_error:
-                logger.error(f"🌐 scholarly网络连接超时: {str(e)[:100]}...")
-                logger.info("📡 网络连接问题诊断：")
-                logger.info("   • 当前网络可能无法访问Google Scholar")
-                logger.info("   • 如在中国大陆，需要科学上网工具")
-                logger.info("   • 检查网络代理设置或防火墙配置")
-                logger.info("   • 系统将切换到其他可用数据源")
-                # 标记为临时禁用，避免重复尝试
-                self._handle_captcha_failure()
-                return papers  # 返回已获取的结果
-            elif is_domain_error:
-                logger.warning(f"⚠️ scholarly库内部错误 (domain属性): {str(e)[:100]}...")
-                logger.info("📍 检测到scholarly库会话错误，建议稍后重试")
-                return papers  # 返回已获取的结果
-            elif is_rate_limit_error:
-                logger.warning(f"⚠️ scholarly遇到访问限制: {str(e)[:100]}...")
-                logger.info("📍 检测到Google Scholar访问限制，建议稍后重试")
-                
-                # 短暂等待后尝试一次补救
-                if len(papers) == 0:
-                    logger.info("🔄 尝试短延迟后的补救搜索...")
-                    await asyncio.sleep(random.uniform(15.0, 30.0))
-                    
-                    try:
-                        # 简单的补救尝试
-                        search_generator = scholarly.search_pubs(query)
-                        for i in range(min(5, limit)):  # 只尝试获取少量结果
-                            try:
-                                pub = next(search_generator)
-                                if pub and pub.get('bib', {}).get('title'):
-                                    bib = pub.get('bib', {})
-                                    paper = Paper(
-                                        title=bib.get('title', '').strip(),
-                                        authors=[str(author).strip() for author in bib.get('author', [])],
-                                        abstract=bib.get('abstract', '')[:300] + "..." if bib.get('abstract') else '',
-                                        year=int(bib.get('pub_year')) if bib.get('pub_year') else None,
-                                        journal=bib.get('venue', ''),
-                                        url=pub.get('pub_url', '') or pub.get('eprint_url', ''),
-                                        citations=int(pub.get('num_citations', 0)) if pub.get('num_citations') else 0,
-                                        source='scholarly',
-                                        relevance_score=1.0 - (i * 0.1)
-                                    )
-                                    papers.append(paper)
-                                    await asyncio.sleep(random.uniform(8.0, 15.0))  # 更保守的延迟
-                                    
-                            except (StopIteration, Exception):
-                                break
-                                
-                        if papers:
-                            logger.info(f"✅ 补救搜索成功，获得 {len(papers)} 篇论文")
-                        else:
-                            logger.info("📍 补救搜索仍然失败，切换到其他数据源")
-                            
-                    except Exception as retry_e:
-                        logger.debug(f"补救搜索也失败: {retry_e}")
-                
-                return papers  # 返回已获取的结果
-            else:
-                logger.warning(f"⚠️ scholarly搜索错误: {str(e)[:100]}...")
-                return papers  # 返回已获取的结果
-        
-        return papers
+            logger.error(f"ScholarDock搜索失败: {e}")
+            return []
     
     async def close(self):
+        """清理资源"""
         pass
 
 class CrossrefAPI:
@@ -1181,12 +908,10 @@ class MultiSourceEngine:
         # 初始化数据源
         self.arxiv = ArxivAPI()
         
-        # Google Scholar访问策略升级
-        if GOOGLE_SCHOLAR_ENABLED:
-            if SCHOLAR_PY_ENABLED:
-                self.scholarly = ScholarPyAPI()
-            else:
-                self.scholarly = ScholarlyAPI()
+        # Google Scholar访问 - 只使用ScholarDock
+        if GOOGLE_SCHOLAR_ENABLED and SCHOLAR_DOCK_ENABLED:
+            self.scholarly = ScholarDockAPI()
+            logger.info("🚀 使用ScholarDock高效爬虫引擎")
             # 新增：镜像API作为备用方案
             self.scholar_mirror = ScholarMirrorAPI()
         else:
@@ -1197,37 +922,17 @@ class MultiSourceEngine:
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
         
-        # 语义搜索组件（可选，不影响现有功能）
-        if SEMANTIC_SEARCH_ENABLED and SEMANTIC_IMPORTS_AVAILABLE:
-            self.semantic_search = SemanticSearchEngine()
-            logger.info("✅ 语义搜索引擎已启用")
-        else:
-            self.semantic_search = None
-            if SEMANTIC_SEARCH_ENABLED and not SEMANTIC_IMPORTS_AVAILABLE:
-                logger.warning("⚠️ 语义搜索功能需要安装额外依赖: pip install sentence-transformers scikit-learn")
-        
-        # 查询增强器（可选）
-        if SEMANTIC_ENHANCEMENT_ENABLED and SEMANTIC_IMPORTS_AVAILABLE:
-            self.query_enhancer = QueryEnhancer()
-            logger.info("✅ 查询增强器已启用")
-        else:
-            self.query_enhancer = None
         
         # 显示启用的数据源
         enabled_sources = []
         if self.arxiv:
             enabled_sources.append("Arxiv")
         if self.scholarly:
-            if SCHOLAR_PY_ENABLED:
-                enabled_sources.append("Scholar.py (自定义)")
-            else:
-                enabled_sources.append("Scholarly库")
+            enabled_sources.append("ScholarDock高效爬虫")
             if self.scholar_mirror:
                 enabled_sources.append("Google Scholar镜像 (备用)")
-        elif GOOGLE_SCHOLAR_ENABLED:
-            enabled_sources.append("Google Scholar (配置错误-未正确初始化)")
         else:
-            enabled_sources.append("Google Scholar (主动禁用)")
+            enabled_sources.append("Google Scholar (禁用)")
         if self.semantic_scholar:
             enabled_sources.append("Semantic Scholar") 
         if self.crossref:
@@ -1235,11 +940,6 @@ class MultiSourceEngine:
         if self.pubmed:
             enabled_sources.append("PubMed")
         
-        # 显示语义搜索组件
-        if self.semantic_search:
-            enabled_sources.append("语义搜索引擎")
-        if self.query_enhancer:
-            enabled_sources.append("查询增强器")
             
         logger.info(f"多源搜索引擎初始化完成，启用数据源: {', '.join(enabled_sources)}")
         
@@ -1252,20 +952,76 @@ class MultiSourceEngine:
         if not PUBMED_ENABLED:
             logger.info("📍 PubMed数据源已暂时禁用")
     
-    async def search_parallel(self, query: str, max_results: int = 50) -> List[Paper]:
-        """并行搜索多个数据源"""
-        return await self.search_parallel_with_filters(query, max_results)
+    async def search_parallel(self, query: str, max_results: int = 20, analysis: Optional[Dict] = None) -> List[Paper]:
+        """并行搜索多个数据源（支持统一布尔查询）"""
+        return await self.search_parallel_with_filters(query, max_results, analysis=analysis)
     
+    def _build_unified_boolean_query(self, query: str, analysis: Optional[Dict] = None) -> Dict[str, str]:
+        """构建统一的布尔查询，适配不同搜索源"""
+        unified_queries = {}
+        
+        # 如果有LLM分析结果，使用优化的布尔查询
+        if analysis and analysis.get("optimized_boolean_query"):
+            boolean_query = analysis["optimized_boolean_query"]
+            logger.info(f"使用LLM优化布尔查询: {boolean_query}")
+        else:
+            boolean_query = query
+            logger.info(f"使用原始查询: {query}")
+        
+        # 为每个搜索源适配查询格式
+        unified_queries['scholar_dock'] = boolean_query  # ScholarDock处理复杂查询
+        unified_queries['semantic_scholar'] = self._adapt_query_for_semantic_scholar(boolean_query)
+        unified_queries['arxiv'] = self._adapt_query_for_arxiv(boolean_query)
+        unified_queries['crossref'] = self._adapt_query_for_crossref(boolean_query)
+        unified_queries['pubmed'] = self._adapt_query_for_pubmed(boolean_query)
+        
+        return unified_queries
+    
+    def _adapt_query_for_semantic_scholar(self, boolean_query: str) -> str:
+        """为Semantic Scholar适配查询"""
+        # Semantic Scholar使用自然语言查询，将布尔操作符转换
+        adapted = boolean_query
+        adapted = adapted.replace(' AND ', ' ')
+        adapted = adapted.replace(' OR ', ' ')
+        adapted = adapted.replace('"', '')
+        adapted = adapted.replace('(', '').replace(')', '')
+        return adapted
+    
+    def _adapt_query_for_arxiv(self, boolean_query: str) -> str:
+        """为arXiv适配查询"""
+        # arXiv支持布尔操作符
+        return boolean_query
+    
+    def _adapt_query_for_crossref(self, boolean_query: str) -> str:
+        """为Crossref适配查询"""
+        # Crossref使用简单查询，移除复杂布尔操作符
+        adapted = boolean_query
+        adapted = adapted.replace(' AND ', ' ')
+        adapted = adapted.replace(' OR ', ' ')
+        adapted = adapted.replace('"', '')
+        adapted = adapted.replace('(', '').replace(')', '')
+        return adapted
+    
+    def _adapt_query_for_pubmed(self, boolean_query: str) -> str:
+        """为PubMed适配查询"""
+        # PubMed支持布尔操作符，但格式略有不同
+        return boolean_query.replace('"', '')
+
     async def search_parallel_with_filters(
         self, 
         query: str, 
-        max_results: int = 50, 
+        max_results: int = 20, 
         year_from: Optional[int] = None,
         year_to: Optional[int] = None,
-        sources: Optional[List[str]] = None
+        sources: Optional[List[str]] = None,
+        analysis: Optional[Dict] = None
     ) -> List[Paper]:
-        """并行搜索多个数据源（带筛选参数）"""
+        """并行搜索多个数据源（带筛选参数和统一布尔查询）"""
         logger.info(f"开始多源并行搜索: {query}")
+        
+        # 构建统一的布尔查询
+        unified_queries = self._build_unified_boolean_query(query, analysis)
+        logger.info(f"构建统一布尔查询完成，适配{len(unified_queries)}个搜索源")
         
         # 优先级排序：稳定数据源优先，Google Scholar作为补充
         stable_sources = [
@@ -1280,14 +1036,14 @@ class MultiSourceEngine:
         has_scholar = self.scholarly is not None
         active_sources = active_stable_sources + (1 if has_scholar else 0)
         
-        # 修复搜索篇数分配逻辑：scholarly作为主力搜索源应获得更大配额
+        # 修复搜索篇数分配逻辑：ScholarDock作为主力搜索源应获得更大配额
         if has_scholar and active_stable_sources > 0:
-            # scholarly获得70%配额，其他数据源分享30%
-            scholar_limit = max(10, int(max_results * 0.7))  # scholarly主力搜索70%
+            # ScholarDock获得70%配额，其他数据源分享30%
+            scholar_limit = max(10, int(max_results * 0.7))  # ScholarDock主力搜索70%
             remaining_quota = max_results - scholar_limit
             stable_per_source = max(5, int(remaining_quota // active_stable_sources)) if active_stable_sources > 0 else 0
         elif has_scholar and active_stable_sources == 0:
-            # 只有scholarly时，获取全部结果
+            # 只有ScholarDock时，获取全部结果
             stable_per_source = 0
             scholar_limit = max_results
         elif not has_scholar and active_stable_sources > 0:
@@ -1298,7 +1054,7 @@ class MultiSourceEngine:
             stable_per_source = 0
             scholar_limit = 0
             
-        logger.info(f"启用 {active_sources} 个数据源：scholarly主力搜索{scholar_limit}篇，其他源({active_stable_sources})每源{stable_per_source}篇")
+        logger.info(f"启用 {active_sources} 个数据源：ScholarDock主力搜索{scholar_limit}篇，其他源({active_stable_sources})每源{stable_per_source}篇")
         
         tasks = []
         source_names = []
@@ -1317,14 +1073,18 @@ class MultiSourceEngine:
         if self.pubmed:
             sources_to_search.append(('pubmed', self.pubmed, 30.0, stable_per_source))
             
-        # Google Scholar（主力搜索源，优先级高）
+        # ScholarDock（主力搜索源，优先级高）
         if self.scholarly:
-            sources_to_search.insert(0, ('scholarly', self.scholarly, 150.0, scholar_limit))  # 增加超时到150秒
+            sources_to_search.insert(0, ('scholar_dock', self.scholarly, 150.0, scholar_limit))  # 增加超时到150秒
         
         for source_name, source_api, source_timeout, source_limit in sources_to_search:
             source_names.append(source_name)
+            # 使用对应的统一布尔查询
+            source_query = unified_queries.get(source_name, query)
+            logger.debug(f"{source_name}使用查询: {source_query}")
+            
             task = asyncio.create_task(
-                asyncio.wait_for(source_api.search(query, source_limit), timeout=source_timeout)
+                asyncio.wait_for(source_api.search(source_query, source_limit), timeout=source_timeout)
             )
             tasks.append(task)
         
@@ -1352,8 +1112,8 @@ class MultiSourceEngine:
                 
                 if is_access_limited:
                     captcha_errors.append(source_name)
-                    if source_name == 'scholarly':
-                        logger.warning(f"⚠️ 主力搜索源 Google Scholar 访问受限，准备启用镜像搜索: {result}")
+                    if source_name == 'scholar_dock':
+                        logger.warning(f"⚠️ 主力搜索源 ScholarDock 访问受限，准备启用镜像搜索: {result}")
                     else:
                         logger.warning(f"⚠️ 搜索源 {source_name} 访问受限: {result}")
                 else:
@@ -1362,7 +1122,7 @@ class MultiSourceEngine:
             elif isinstance(result, list):
                 all_papers.extend(result)
                 # 标记数据源的成功
-                if source_name == 'scholarly':
+                if source_name == 'scholar_dock':
                     logger.info(f"✅ 主力搜索源 {source_name} 返回 {len(result)} 篇论文")
                 elif source_name in ['semantic_scholar', 'arxiv', 'crossref', 'pubmed']:
                     logger.info(f"✅ 辅助数据源 {source_name} 返回 {len(result)} 篇论文")
@@ -1371,28 +1131,30 @@ class MultiSourceEngine:
         
         # 统计数据源成功情况和实际获取的论文数量
         stable_success_count = len([name for name in source_names 
-                                  if name != 'scholarly' and name not in captcha_errors])
-        scholar_success = 'scholarly' not in captcha_errors if has_scholar else False
+                                  if name != 'scholar_dock' and name not in captcha_errors])
+        scholar_success = 'scholar_dock' not in captcha_errors if has_scholar else False
         
         # 检查主力源是否失败且获得的论文数量不足
-        scholarly_papers = sum(len(result) for i, result in enumerate(results) 
+        scholar_dock_papers = sum(len(result) for i, result in enumerate(results) 
                             if isinstance(result, list) and i < len(source_names) 
-                            and source_names[i] == 'scholarly')
+                            and source_names[i] == 'scholar_dock')
         
         need_compensation = False
-        if 'scholarly' in captcha_errors or (scholar_success and scholarly_papers < scholar_limit * 0.3):
+        if 'scholar_dock' in captcha_errors or (scholar_success and scholar_dock_papers < scholar_limit * 0.3):
             # 主力源失败或获得的论文数量严重不足（少于预期的30%）
             need_compensation = True
-            missing_quota = scholar_limit - scholarly_papers
+            missing_quota = scholar_limit - scholar_dock_papers
             
-            logger.warning(f"🔄 主力搜索源未达预期：获得{scholarly_papers}篇，预期{scholar_limit}篇，缺口{missing_quota}篇")
+            logger.warning(f"🔄 主力搜索源未达预期：获得{scholar_dock_papers}篇，预期{scholar_limit}篇，缺口{missing_quota}篇")
             
-            # 优先尝试镜像搜索来补偿scholarly的缺失
-            if 'scholarly' in captcha_errors and self.scholar_mirror and missing_quota > 0:
+            # 优先尝试镜像搜索来补偿ScholarDock的缺失
+            if 'scholar_dock' in captcha_errors and self.scholar_mirror and missing_quota > 0:
                 logger.info(f"🔍 启动镜像搜索来补偿Google Scholar限制，尝试获取{missing_quota}篇论文")
                 try:
+                    # 镜像搜索也使用统一的布尔查询
+                    mirror_query = unified_queries.get('scholar_dock', query)
                     mirror_papers = await asyncio.wait_for(
-                        self.scholar_mirror.search(query, missing_quota), 
+                        self.scholar_mirror.search(mirror_query, missing_quota), 
                         timeout=60.0
                     )
                     if mirror_papers:
@@ -1414,7 +1176,7 @@ class MultiSourceEngine:
                 
                 # 为成功的辅助数据源分配额外配额
                 for source_name, source_api, source_timeout, original_limit in sources_to_search:
-                    if source_name != 'scholarly' and source_name not in captcha_errors:
+                    if source_name != 'scholar_dock' and source_name not in captcha_errors:
                         # 检查该源是否已经达到或接近其原始配额
                         source_papers = sum(len(result) for i, result in enumerate(results) 
                                           if isinstance(result, list) and i < len(source_names) 
@@ -1422,9 +1184,11 @@ class MultiSourceEngine:
                         
                         if source_papers < original_limit * 1.5:  # 如果没有明显超额，则进行补偿搜索
                             compensation_source_names.append(source_name)
+                            # 补偿搜索也使用统一的布尔查询
+                            source_query = unified_queries.get(source_name, query)
                             task = asyncio.create_task(
                                 asyncio.wait_for(
-                                    source_api.search(query, compensation_per_source), 
+                                    source_api.search(source_query, compensation_per_source), 
                                     timeout=source_timeout
                                 )
                             )
@@ -1453,10 +1217,10 @@ class MultiSourceEngine:
                         logger.warning(f"⚠️ 补偿搜索失败: {e}")
         
         if captcha_errors:
-            if 'scholarly' in captcha_errors and stable_success_count > 0:
+            if 'scholar_dock' in captcha_errors and stable_success_count > 0:
                 status = "已启动补偿搜索" if need_compensation else "使用辅助数据源"
-                logger.warning(f"⚠️ 主力搜索源 scholarly 访问受限，{status}({stable_success_count}个)")
-            elif 'scholarly' in captcha_errors and stable_success_count == 0:
+                logger.warning(f"⚠️ 主力搜索源 ScholarDock 访问受限，{status}({stable_success_count}个)")
+            elif 'scholar_dock' in captcha_errors and stable_success_count == 0:
                 logger.warning(f"🚫 主力搜索源和辅助源均访问受限: {', '.join(captcha_errors)}")
                 logger.info("💡 建议: 稍后重试或使用不同关键词")
             elif stable_success_count == 0:
@@ -1478,23 +1242,7 @@ class MultiSourceEngine:
         ranked_papers = self._rank_papers(filtered_papers, query)
         traditional_results = ranked_papers[:max_results]
         
-        # 🎯 新增：语义搜索增强（完全向后兼容）
-        if self.semantic_search:
-            try:
-                logger.info("🧠 启动语义搜索增强...")
-                enhanced_results = await self.semantic_search.enhance_search_results(
-                    query=query,
-                    traditional_results=traditional_results,
-                    max_results=max_results
-                )
-                # 如果语义增强成功，使用增强结果；否则使用传统结果
-                final_results = enhanced_results if enhanced_results else traditional_results
-                logger.info(f"✅ 语义增强完成，最终结果数量: {len(final_results)}")
-            except Exception as e:
-                logger.warning(f"⚠️ 语义增强失败，使用传统搜索结果: {e}")
-                final_results = traditional_results
-        else:
-            final_results = traditional_results
+        final_results = traditional_results
         
         logger.info(f"搜索完成: 原始 {len(all_papers)} 篇 → 去重 {len(deduplicated_papers)} 篇 → 最终 {len(final_results)} 篇")
         return final_results
@@ -1509,7 +1257,7 @@ class MultiSourceEngine:
         papers_sorted = sorted(papers, key=lambda p: (
             -(p.citations or 0),
             p.doi is not None,
-            p.source == 'scholarly',  # scholarly主力优先
+            p.source == 'scholar_dock',  # ScholarDock主力优先
             p.source in ['semantic_scholar', 'arxiv', 'crossref', 'pubmed'],  # 辅助数据源次之
         ), reverse=True)
         
@@ -1609,10 +1357,5 @@ class MultiSourceEngine:
         if self.pubmed:
             coros.append(self.pubmed.close())
         
-        # 关闭语义搜索组件
-        if self.semantic_search:
-            coros.append(self.semantic_search.close())
-        if self.query_enhancer:
-            coros.append(self.query_enhancer.close())
             
         await asyncio.gather(*coros)
