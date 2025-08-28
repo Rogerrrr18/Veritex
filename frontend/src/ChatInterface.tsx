@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { apiCall, API_CONFIG } from './config';
@@ -98,7 +98,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState<string>('');
   const [inputMessage, setInputMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [currentAnalysis, setCurrentAnalysis] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -1032,7 +1031,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         
         // 重新发送消息以获取新的AI回复
         try {
-          setIsLoading(true);
           const mappedHistory = newMessages.map(m => ({
             role: m.isUser ? 'user' : 'assistant',
             content: m.text
@@ -1072,7 +1070,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           const errorMessages = [...newMessages, errorMessage];
           setMessages(errorMessages);
         } finally {
-          setIsLoading(false);
+          // Loading状态由流式传输状态控制
         }
       }
     }

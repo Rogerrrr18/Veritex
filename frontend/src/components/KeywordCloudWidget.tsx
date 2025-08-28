@@ -364,8 +364,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               </div>
             </div>
             
-            {/* 数据源选择 - 暂时注释掉 */}
-            {/*
+            {/* 数据源选择 - 独立选择按钮 */}
             <div>
               <label style={{ 
                 display: 'block', 
@@ -377,52 +376,71 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               </label>
               <div style={{ 
                 display: 'flex', 
-                flexWrap: 'wrap', 
-                gap: '8px' 
+                gap: '8px',
+                flexWrap: 'wrap'
               }}>
-                {[
-                  { id: 'arxiv', name: 'arXiv', color: '#b91c1c' },
-                  { id: 'semantic_scholar', name: 'Semantic Scholar', color: '#1d4ed8' },
-                  { id: 'crossref', name: 'Crossref', color: '#059669' },
-                  { id: 'scholarly', name: 'Scholarly', color: '#dc2626' },
-                  { id: 'pubmed', name: 'PubMed', color: '#7c3aed' }
-                ].map(source => (
-                  <label 
-                    key={source.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontSize: '12px',
-                      color: theme === 'dark' ? '#d1d5db' : '#374151',
-                      cursor: 'pointer',
-                      userSelect: 'none'
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={searchSettings.sources.includes(source.id)}
-                      onChange={(e) => {
-                        const isChecked = e.target.checked;
-                        setSearchSettings(prev => ({
-                          ...prev,
-                          sources: isChecked 
-                            ? [...prev.sources, source.id]
-                            : prev.sources.filter(s => s !== source.id)
-                        }));
-                      }}
-                      style={{
-                        width: '14px',
-                        height: '14px',
-                        accentColor: source.color
-                      }}
-                    />
-                    <span style={{ color: source.color }}>{source.name}</span>
-                  </label>
-                ))}
+                {/* Google Scholar 按钮 */}
+                <button
+                  onClick={() => setSearchSettings(prev => ({
+                    ...prev,
+                    sources: ['scholarly'] // 只选择Google Scholar
+                  }))}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    border: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly') 
+                      ? '2px solid #10b981' : '1px solid #333',
+                    backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
+                      ? 'rgba(16, 185, 129, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                    color: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
+                      ? '#10b981' : (theme === 'dark' ? '#fff' : '#1f2937'),
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    outline: 'none',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  Google Scholar
+                </button>
+                
+                {/* arXiv 按钮 */}
+                <button
+                  onClick={() => setSearchSettings(prev => ({
+                    ...prev,
+                    sources: ['arxiv'] // 只选择arXiv
+                  }))}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    border: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv') 
+                      ? '2px solid #f59e0b' : '1px solid #333',
+                    backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv')
+                      ? 'rgba(245, 158, 11, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                    color: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv')
+                      ? '#f59e0b' : (theme === 'dark' ? '#fff' : '#1f2937'),
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    outline: 'none',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  arXiv
+                </button>
+              </div>
+              
+              {/* 显示当前选择的数据源 */}
+              <div style={{
+                marginTop: '6px',
+                fontSize: '11px',
+                color: theme === 'dark' ? '#666' : '#9ca3af'
+              }}>
+                {searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly') && 'Google Scholar selected'}
+                {searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv') && 'arXiv selected'}
+                {searchSettings.sources.length !== 1 && `${searchSettings.sources.length} sources selected`}
               </div>
             </div>
-            */}
           </div>
         </div>
 
@@ -560,6 +578,74 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 }}
               />
             </div>
+          </div>
+          
+          {/* 数据源选择 - 独立选择按钮 */}
+          <div>
+            <label style={{ 
+              display: 'block', 
+              fontSize: '12px', 
+              color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
+              marginBottom: '6px' 
+            }}>
+              Data Sources
+            </label>
+            <div style={{ 
+              display: 'flex', 
+              gap: '8px',
+              flexWrap: 'wrap'
+            }}>
+              {/* Google Scholar 按钮 */}
+              <button
+                onClick={() => setSearchSettings(prev => ({
+                  ...prev,
+                  sources: ['scholarly'] // 只选择Google Scholar
+                }))}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  border: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly') 
+                    ? '2px solid #10b981' : '1px solid #333',
+                  backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
+                    ? 'rgba(16, 185, 129, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                  color: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
+                    ? '#10b981' : (theme === 'dark' ? '#fff' : '#1f2937'),
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  outline: 'none',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Google Scholar
+              </button>
+              
+              {/* arXiv 按钮 */}
+              <button
+                onClick={() => setSearchSettings(prev => ({
+                  ...prev,
+                  sources: ['arxiv'] // 只选择arXiv
+                }))}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  border: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv') 
+                    ? '2px solid #f59e0b' : '1px solid #333',
+                  backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv')
+                    ? 'rgba(245, 158, 11, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                  color: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv')
+                    ? '#f59e0b' : (theme === 'dark' ? '#fff' : '#1f2937'),
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  outline: 'none',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                arXiv
+              </button>
+            </div>
+            
           </div>
         </div>
       </div>

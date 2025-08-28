@@ -158,25 +158,67 @@ class ScholarDockSpider:
             return query[:100]
     
     def _extract_citations(self, content: str) -> int:
-        """从内容中提取引用数"""
-        citation_match = re.search(r'Cited by (\d+)', content)
-        if citation_match:
-            try:
-                return int(citation_match.group(1))
-            except ValueError:
-                pass
+        """从内容中提取引用数 - 增强版本"""
+        # 支持多种引用格式匹配
+        patterns = [
+            r'Cited by\s*(\d+)',  # 标准格式: "Cited by 123"
+            r'引用\s*(\d+)',      # 中文格式: "引用 123"
+            r'被引用\s*(\d+)',    # 中文格式: "被引用 123"
+            r'>\s*(\d+)\s*</a>.*[Cc]ited',  # HTML格式
+            r'"gs_fl">\s*<a[^>]*>(\d+)</a>.*[Cc]itation',  # HTML具体格式
+            r'<a[^>]*>(\d+)</a>\s*citations?',  # 通用HTML citation格式（支持单复数）
+            r'href="[^"]*">(\d+)</a>[^<]*citation'  # 更通用的HTML格式
+        ]
+        
+        for pattern in patterns:
+            citation_match = re.search(pattern, content, re.IGNORECASE)
+            if citation_match:
+                try:
+                    citations = int(citation_match.group(1))
+                    # 合理性检查：引用数不应超过1,000,000
+                    if 0 <= citations <= 1000000:
+                        return citations
+                except (ValueError, IndexError):
+                    continue
         return 0
     
     def _extract_year(self, content: str) -> Optional[int]:
-        """从内容中提取年份"""
-        # 查找4位数字年份
-        year_matches = re.findall(r'\b(19|20)\d{2}\b', content)
-        if year_matches:
-            try:
-                # 返回最后一个匹配的年份（通常是发表年份）
-                return int(year_matches[-1])
-            except ValueError:
-                pass
+        """从内容中提取年份 - 增强版本，提高准确性"""
+        import datetime
+        current_year = datetime.datetime.now().year
+        
+        # 多种年份提取模式，按优先级排序
+        patterns = [
+            r'(\b(?:19|20)\d{2}\b)(?=\s*-\s*[^\d])',  # 年份后跟破折号和非数字
+            r'\b((?:19|20)\d{2})\b(?=\s*$)',          # 行尾的年份
+            r'\b((?:19|20)\d{2})\b(?=\s*,)',          # 年份后跟逗号
+            r'\b((?:19|20)\d{2})\b(?=\s*\))',         # 年份后跟右括号
+            r'\(((?:19|20)\d{2})\)',                   # 括号内的年份
+            r'\b((?:19|20)\d{2})\b'                   # 通用4位数年份
+        ]
+        
+        for pattern in patterns:
+            year_matches = re.findall(pattern, content)
+            if year_matches:
+                # 筛选合理的年份（1900-当前年份+2）
+                valid_years = []
+                for year_str in year_matches:
+                    try:
+                        year = int(year_str)
+                        if 1900 <= year <= current_year + 2:  # 允许未来2年的论文
+                            valid_years.append(year)
+                    except ValueError:
+                        continue
+                
+                if valid_years:
+                    # 如果有多个有效年份，选择最接近当前时间但不超过的年份
+                    # 或选择在合理发表范围内的年份
+                    if len(valid_years) == 1:
+                        return valid_years[0]
+                    else:
+                        # 优先选择较新的年份，但要在合理范围内
+                        sorted_years = sorted(valid_years, reverse=True)
+                        return sorted_years[0]
         return None
     
     def _extract_author(self, gs_a_text: str) -> str:
