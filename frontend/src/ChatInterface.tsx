@@ -71,20 +71,6 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
-// Markdown完整性检查
-const isMarkdownComplete = (text: string): boolean => {
-  // 检查配对的markdown标记
-  const boldMarks = (text.match(/\*\*/g) || []).length;
-  const italicMarks = (text.match(/(?<!\*)\*(?!\*)/g) || []).length;
-  const codeBlocks = (text.match(/```/g) || []).length;
-  const inlineCode = (text.match(/(?<!`)`(?!`)/g) || []).length;
-  
-  // 检查是否配对
-  return boldMarks % 2 === 0 && 
-         italicMarks % 2 === 0 && 
-         codeBlocks % 2 === 0 && 
-         inlineCode % 2 === 0;
-};
 
 // 使用用户隔离存储键名
 const CHAT_STORAGE_KEY = USER_DATA_KEYS.CHAT_HISTORY;
@@ -104,7 +90,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   // 流式传输相关状态
   const [streamingText, setStreamingText] = useState('');
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
-  const debouncedStreamingText = useDebounce(streamingText, 100); // 100ms 防抖
+  const debouncedStreamingText = useDebounce(streamingText, 200); // 200ms 防抖，确保markdown语法完整性
   
   // 关键词云面板状态
   const [isKeywordPanelCollapsed, setIsKeywordPanelCollapsed] = useState(false);
@@ -126,10 +112,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   // 处理防抖后的流式文本更新
   useEffect(() => {
     if (streamingMessageId && debouncedStreamingText) {
-      // 检查markdown完整性，如果不完整则显示为纯文本
-      const textToDisplay = isMarkdownComplete(debouncedStreamingText) 
-        ? debouncedStreamingText 
-        : debouncedStreamingText.replace(/\*\*/g, ''); // 移除不完整的粗体标记
+      // 修复markdown列表格式问题：确保列表项完整性
+      let textToDisplay = debouncedStreamingText;
+      
+      // 检查是否以不完整的列表项结尾，如果是则暂时隐藏
+      const incompleteListRegex = /\n[\s]*\*[\s]*[^\n]*$/;
+      const endsWithIncompleteList = incompleteListRegex.test(textToDisplay);
+      
+      if (endsWithIncompleteList) {
+        // 如果以不完整的列表项结尾，去掉最后的不完整项
+        textToDisplay = textToDisplay.replace(incompleteListRegex, '');
+      }
       
       setMessages(prev => prev.map(msg => 
         msg.id === streamingMessageId 
@@ -1946,9 +1939,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                         p: ({ children }) => <p style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
                         strong: ({ children }) => <strong style={{ color: theme === 'dark' ? '#fff' : '#111827', fontWeight: '600' }}>{children}</strong>,
                         em: ({ children }) => <em style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', fontStyle: 'italic' }}>{children}</em>,
-                        ul: ({ children }) => <ul style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ul>,
-                        ol: ({ children }) => <ol style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '8px' }}>{children}</ol>,
-                        li: ({ children }) => <li style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '4px' }}>{children}</li>,
+                        ul: ({ children }) => <ul style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '12px', listStyleType: 'disc' }}>{children}</ul>,
+                        ol: ({ children }) => <ol style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '12px', listStyleType: 'decimal' }}>{children}</ol>,
+                        li: ({ children }) => <li style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6', paddingLeft: '4px' }}>{children}</li>,
                         code: ({ children }) => (
                           <code style={{
                             backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
