@@ -22,6 +22,7 @@ from llm_interface import get_universal_llm, get_model_config_manager
 from multi_source_engine import Paper
 from performance_monitor import track_chat_performance, get_performance_monitor
 from prompt_utils import get_chat_conversation_prompt
+from conversation_manager import get_conversation_manager
 
 app = FastAPI(
     title="Paper God API - 智能对话版",
@@ -47,7 +48,9 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[ChatMessage]] = []
-    # 新增：搜索参数（可选）
+    # 新增：对话ID支持多轮对话
+    conversation_id: Optional[str] = None
+    # 搜索参数（可选）
     search_params: Optional[Dict[str, Any]] = None
     # 模式：'chat-only' | 'auto-search'
     mode: Optional[str] = None
@@ -57,6 +60,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     history: List[ChatMessage]
+    conversation_id: Optional[str] = None
     is_academic_query: bool = False
     search_results: Optional[List[Dict[str, Any]]] = None
     analysis_result: Optional[Dict[str, Any]] = None
@@ -423,13 +427,163 @@ async def generate_stream_response(
         logger.error(f"流式响应生成错误: {e}")
         yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e)}})}\n\n"
 
+async def generate_stream_response_with_conversation(
+    message: str,
+    history: List[Dict[str, str]],
+    search_params: Dict[str, Any],
+    mode: str,
+    conversation_id: str
+):
+    """生成流式响应并保存到对话管理器"""
+    conversation_manager = get_conversation_manager()
+    ai_response_parts = []  # 收集AI回复内容
+    
+    try:
+        # 🚀 快速意图预筛选
+        quick_intent = quick_intent_filter(message)
+        if quick_intent == "闲聊":
+            logger.info(f"⚡ 快速预筛选命中闲聊，使用LLM流式生成自然回复")
+            
+            # 使用LLM流式生成自然的闲聊回复
+            llm_client = await get_universal_llm()
+            prompt = get_chat_conversation_prompt(message)
+            
+            messages = [{"role": "user", "content": prompt}]
+            
+            # 发送开始事件
+            yield f"data: {json.dumps({'type': 'start', 'data': {}})}\n\n"
+            
+            try:
+                # 流式生成响应
+                async for chunk in llm_client.chat_completion_stream(messages):
+                    if chunk:
+                        ai_response_parts.append(chunk)
+                        yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
+                
+                # 保存完整的AI回复
+                full_response = "".join(ai_response_parts)
+                if full_response:
+                    await conversation_manager.add_message_to_conversation(
+                        conversation_id, 
+                        "assistant", 
+                        full_response
+                    )
+                
+                # 发送完成事件
+                yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False, 'conversation_id': conversation_id}})}\n\n"
+                
+            except Exception as e:
+                logger.error(f"快速闲聊LLM流式调用失败: {e}")
+                fallback_response = "你好！我是Veritex智能助手，专门帮助您查找和分析学术文献。有什么学术问题我可以帮您解答吗？"
+                
+                # 保存降级回复
+                await conversation_manager.add_message_to_conversation(
+                    conversation_id, 
+                    "assistant", 
+                    fallback_response
+                )
+                
+                yield f"data: {json.dumps({'type': 'content', 'data': {'content': fallback_response}})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False, 'conversation_id': conversation_id, 'error': str(e)}})}\n\n"
+                
+        else:
+            # 复杂流程：学术查询处理
+            logger.info(f"🤖 进入完整智能工作流流式处理")
+            
+            yield f"data: {json.dumps({'type': 'start', 'data': {}})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'data': {'message': '正在分析您的学术查询...'}})}\n\n"
+            
+            # 提取搜索参数
+            max_results = search_params.get('max_results', 20)
+            year_from = search_params.get('year_from')
+            year_to = search_params.get('year_to')
+            sources = search_params.get('sources')
+            
+            # 调用智能工作流
+            workflow_mode = "auto-search" if mode != "chat-only" else "chat&plan"
+            
+            agent = get_intelligent_paper_search_agent()
+            final_result = await agent.search_papers(
+                query=message,
+                mode=workflow_mode,
+                max_results=max_results,
+                force_search=False,
+                year_from=year_from,
+                year_to=year_to,
+                sources=sources,
+                allow_search=True,
+                history=history
+            )
+            
+            # 获取完整响应
+            ai_response = final_result.get('response', '')
+            is_academic = final_result.get('is_academic_query', False)
+            
+            # 分段发送响应内容
+            if ai_response:
+                # 保存AI回复
+                await conversation_manager.add_message_to_conversation(
+                    conversation_id, 
+                    "assistant", 
+                    ai_response
+                )
+                
+                # 智能分割，避免破坏markdown格式
+                chunks = smart_chunk_text(ai_response)
+                
+                for chunk in chunks:
+                    yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
+            
+            # 发送完成事件和其他数据
+            yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': is_academic, 'conversation_id': conversation_id, 'search_results': final_result.get('search_results', []), 'analysis_result': final_result.get('analysis_result')}})}\n\n"
+            
+    except Exception as e:
+        logger.error(f"流式响应生成错误: {e}")
+        yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e), 'conversation_id': conversation_id}})}\n\n"
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    """统一聊天接口 - 支持流式和非流式响应"""
-    # 转换历史记录格式
-    history = [{"role": msg.role, "content": msg.content} for msg in request.history]
+    """统一聊天接口 - 支持多轮对话和流式响应"""
+    import time
+    start_time = time.time()
     
-    logger.info(f"收到聊天请求: {request.message}, 流式模式: {request.stream}")
+    # 获取对话管理器
+    conversation_manager = get_conversation_manager()
+    
+    # 处理对话ID
+    conversation_id = request.conversation_id
+    conversation = None
+    
+    if conversation_id:
+        # 获取现有对话
+        conversation = await conversation_manager.get_conversation(conversation_id)
+        if not conversation:
+            logger.warning(f"对话不存在: {conversation_id}")
+            conversation_id = None
+    
+    if not conversation:
+        # 创建新对话
+        conversation = await conversation_manager.create_conversation()
+        conversation_id = conversation.conversation_id
+        logger.info(f"创建新对话: {conversation_id}")
+    
+    # 将用户消息添加到对话历史
+    await conversation_manager.add_message_to_conversation(
+        conversation_id, 
+        "user", 
+        request.message
+    )
+    
+    # 获取完整的对话历史（优先使用管理器中的历史）
+    conversation = await conversation_manager.get_conversation(conversation_id)
+    if conversation and conversation.messages:
+        # 使用对话管理器中的历史记录
+        history = [{"role": msg.role, "content": msg.content} for msg in conversation.messages[:-1]]  # 排除刚添加的用户消息
+    else:
+        # 降级使用请求中的历史记录
+        history = [{"role": msg.role, "content": msg.content} for msg in request.history]
+    
+    logger.info(f"收到聊天请求 - 对话ID: {conversation_id}, 消息: {request.message[:50]}..., 流式模式: {request.stream}")
     
     # 如果请求流式响应
     if request.stream:
@@ -437,7 +591,9 @@ async def chat(request: ChatRequest):
         mode = (request.mode or "chat-only").lower()
         
         return StreamingResponse(
-            generate_stream_response(request.message, history, search_params, mode),
+            generate_stream_response_with_conversation(
+                request.message, history, search_params, mode, conversation_id
+            ),
             media_type="text/plain",
             headers={
                 "Cache-Control": "no-cache",
@@ -447,11 +603,8 @@ async def chat(request: ChatRequest):
         )
     
     # 非流式模式的原有逻辑
-    import time
-    start_time = time.time()
-    
     try:
-        logger.info(f"收到聊天请求: {request.message}")
+        logger.info(f"处理对话请求: {conversation_id}")
         
         # 🚀 快速意图预筛选 - 对明显闲聊使用LLM生成自然回复
         quick_intent = quick_intent_filter(request.message)
@@ -486,11 +639,19 @@ async def chat(request: ChatRequest):
                     token_count=estimate_tokens(request.message + ai_response)
                 )
                 
+                # 将AI回复保存到对话管理器
+                await conversation_manager.add_message_to_conversation(
+                    conversation_id, 
+                    "assistant", 
+                    ai_response
+                )
+                
                 logger.info(f"⚡ 快速闲聊完成 (耗时: {response_time:.3f}s, LLM调用: 1次)")
                 
                 return ChatResponse(
                     response=ai_response,
                     history=response_history,
+                    conversation_id=conversation_id,
                     is_academic_query=False,
                     search_results=[],
                     analysis_result=None,
@@ -527,9 +688,17 @@ async def chat(request: ChatRequest):
                     error_occurred=True
                 )
                 
+                # 将降级回复保存到对话管理器
+                await conversation_manager.add_message_to_conversation(
+                    conversation_id, 
+                    "assistant", 
+                    fallback_response
+                )
+                
                 return ChatResponse(
                     response=fallback_response,
                     history=response_history,
+                    conversation_id=conversation_id,
                     is_academic_query=False,
                     search_results=[],
                     analysis_result=None,
@@ -615,9 +784,17 @@ async def chat(request: ChatRequest):
             token_count=token_info.get('total_tokens', 0)
         )
         
+        # 将AI回复保存到对话管理器
+        await conversation_manager.add_message_to_conversation(
+            conversation_id, 
+            "assistant", 
+            ai_response
+        )
+        
         return ChatResponse(
             response=ai_response,
             history=response_history,
+            conversation_id=conversation_id,
             is_academic_query=is_academic,
             search_results=final_result.get('search_results', []),
             analysis_result=final_result.get('analysis_result'),
@@ -627,6 +804,127 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"聊天服务错误: {str(e)}")
         raise HTTPException(status_code=500, detail=f"聊天服务错误: {str(e)}")
+
+# === 对话管理API接口 ===
+
+@app.get("/conversations")
+async def list_conversations(
+    limit: int = 20, 
+    offset: int = 0,
+    archived: Optional[bool] = None,
+    search: Optional[str] = None
+):
+    """获取对话列表"""
+    try:
+        conversation_manager = get_conversation_manager()
+        conversations = await conversation_manager.list_conversations(
+            limit=limit,
+            offset=offset,
+            archived=archived,
+            search_query=search
+        )
+        return {
+            "success": True,
+            "conversations": [conv.dict() for conv in conversations],
+            "total": len(conversations)
+        }
+    except Exception as e:
+        logger.error(f"获取对话列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取对话列表失败: {str(e)}")
+
+@app.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    """获取特定对话详情"""
+    try:
+        conversation_manager = get_conversation_manager()
+        conversation = await conversation_manager.get_conversation(conversation_id)
+        
+        if not conversation:
+            raise HTTPException(status_code=404, detail="对话不存在")
+        
+        return {
+            "success": True,
+            "conversation": conversation.dict()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取对话详情失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取对话详情失败: {str(e)}")
+
+@app.post("/conversations")
+async def create_conversation(title: Optional[str] = None):
+    """创建新对话"""
+    try:
+        conversation_manager = get_conversation_manager()
+        from models.conversation import ConversationCreateRequest
+        
+        request = ConversationCreateRequest(title=title) if title else None
+        conversation = await conversation_manager.create_conversation(request)
+        
+        return {
+            "success": True,
+            "conversation_id": conversation.conversation_id,
+            "conversation": conversation.dict()
+        }
+    except Exception as e:
+        logger.error(f"创建对话失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建对话失败: {str(e)}")
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """删除对话"""
+    try:
+        conversation_manager = get_conversation_manager()
+        success = await conversation_manager.delete_conversation(conversation_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="对话不存在")
+        
+        return {
+            "success": True,
+            "message": "对话删除成功"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除对话失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除对话失败: {str(e)}")
+
+@app.put("/conversations/{conversation_id}/archive")
+async def archive_conversation(conversation_id: str):
+    """归档对话"""
+    try:
+        conversation_manager = get_conversation_manager()
+        success = await conversation_manager.archive_conversation(conversation_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="对话不存在")
+        
+        return {
+            "success": True,
+            "message": "对话归档成功"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"归档对话失败: {e}")
+        raise HTTPException(status_code=500, detail=f"归档对话失败: {str(e)}")
+
+@app.get("/conversations/stats")
+async def get_conversation_stats():
+    """获取对话统计信息"""
+    try:
+        conversation_manager = get_conversation_manager()
+        stats = await conversation_manager.get_conversation_stats()
+        
+        return {
+            "success": True,
+            "stats": stats
+        }
+    except Exception as e:
+        logger.error(f"获取对话统计失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取对话统计失败: {str(e)}")
 
 @app.post("/analytics/register")
 async def analytics_register(req: RegisterRequest):

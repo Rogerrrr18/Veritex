@@ -85,6 +85,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [editingText, setEditingText] = useState<string>('');
   const [inputMessage, setInputMessage] = useState('');
   const [currentAnalysis, setCurrentAnalysis] = useState<any>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // 流式传输相关状态
@@ -798,6 +799,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     const payload = {
       message: userMessage.text,
       history: mappedHistory,
+      conversation_id: conversationId, // 包含对话ID
       mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search',
       stream: true // 启用流式传输
     };
@@ -875,6 +877,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 isAcademicQuery = data.data.is_academic_query || false;
                 searchResults = data.data.search_results || null;
                 analysisResult = data.data.analysis_result || null;
+                
+                // 保存对话ID
+                if (data.data.conversation_id) {
+                  setConversationId(data.data.conversation_id);
+                }
                 
                 console.log('流式传输完成');
               } else if (data.type === 'error') {
@@ -1078,6 +1085,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       console.error('复制失败:', error);
     }
   };
+
 
   return (
     <div className={`chat-interface ${className}`} style={{
