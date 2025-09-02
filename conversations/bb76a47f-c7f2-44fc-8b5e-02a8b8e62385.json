@@ -1,0 +1,26 @@
+{
+  "conversation_id": "bb76a47f-c7f2-44fc-8b5e-02a8b8e62385",
+  "messages": [
+    {
+      "role": "user",
+      "content": "甲烷干重整的机理是什么？",
+      "timestamp": "2025-08-29 19:33:18.384423",
+      "metadata": null
+    },
+    {
+      "role": "assistant",
+      "content": "甲烷干重整是一个重要的工业过程...",
+      "timestamp": "2025-08-29 19:33:18.384708",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "甲烷干重整的机理是什么？",
+    "created_at": "2025-08-29 19:33:18.384185",
+    "updated_at": "2025-08-29 19:33:18.384714",
+    "message_count": 2,
+    "last_activity": "2025-08-29 19:33:18.384709",
+    "tags": [],
+    "is_archived": false
+  }
+}

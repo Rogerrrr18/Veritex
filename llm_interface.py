@@ -71,7 +71,7 @@ class BaseLLMAdapter(ABC):
     async def analyze_query(self, query: str, system_prompt: str = None) -> str:
         """分析用户查询（为LangGraph工作流提供支持）"""
         if not system_prompt:
-            system_prompt = self._load_refined_system_prompt()
+            system_prompt = """你是专业的智能学术助手。请提供准确、专业且有帮助的回答。对于学术和技术问题，请展现你的专业知识深度。始终用中文回答。"""
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -80,16 +80,6 @@ class BaseLLMAdapter(ABC):
         
         result = await self.chat_completion(messages)
         return result if result else "分析失败，请稍后再试。"
-    
-    def _load_refined_system_prompt(self) -> str:
-        """加载优化的系统提示词"""
-        try:
-            prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "refined_system_prompt.txt")
-            with open(prompt_path, 'r', encoding='utf-8') as f:
-                return f.read().strip()
-        except Exception as e:
-            print(f"❌ 无法加载系统提示词文件: {e}")
-            return """你是专业的智能学术助手。请提供准确、专业且有帮助的回答。对于学术和技术问题，请展现你的专业知识深度。始终用中文回答。"""
     
     async def close(self):
         """清理资源（子类可重写）"""
@@ -164,9 +154,54 @@ class UniversalLLM:
         """统一查询分析接口（用于LangGraph）"""
         return await self.adapter.analyze_query(query, system_prompt)
     
+    async def chat_with_history(
+        self, 
+        message: str, 
+        conversation_id: str = "default",
+        system_prompt: str = None,
+        **kwargs
+    ) -> Optional[str]:
+        """统一多轮对话接口"""
+        if hasattr(self.adapter, 'chat_with_history'):
+            return await self.adapter.chat_with_history(
+                message=message,
+                conversation_id=conversation_id,
+                system_prompt=system_prompt,
+                **kwargs
+            )
+        else:
+            # 降级到普通聊天（为不支持多轮对话的适配器提供兼容性）
+            return await self.adapter.simple_chat(message, **kwargs)
+    
+    async def chat_with_history_stream(
+        self, 
+        message: str, 
+        conversation_id: str = "default",
+        system_prompt: str = None,
+        **kwargs
+    ):
+        """统一多轮对话流式接口"""
+        if hasattr(self.adapter, 'chat_with_history_stream'):
+            async for chunk in self.adapter.chat_with_history_stream(
+                message=message,
+                conversation_id=conversation_id,
+                system_prompt=system_prompt,
+                **kwargs
+            ):
+                yield chunk
+        else:
+            # 降级到普通流式聊天
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": message})
+            
+            async for chunk in self.adapter.chat_completion_stream(messages, **kwargs):
+                yield chunk
+    
     async def intelligent_chat(self, user_input: str, history: List[Dict[str, str]] = None) -> str:
-        """智能聊天接口 - 使用refined system prompt"""
-        system_prompt = self.adapter._load_refined_system_prompt()
+        """智能聊天接口"""
+        system_prompt = """你是专业的智能学术助手。请提供准确、专业且有帮助的回答。对于学术和技术问题，请展现你的专业知识深度。始终用中文回答。"""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})

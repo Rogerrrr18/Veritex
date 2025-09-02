@@ -1,0 +1,20 @@
+{
+  "conversation_id": "2ace4126-c871-4d7e-8421-f056f23d31f2",
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我找关于量子计算最新研究的论文",
+      "timestamp": "2025-09-02 23:52:42.410388",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "帮我找关于量子计算最新研究的论文",
+    "created_at": "2025-09-02 23:52:42.409974",
+    "updated_at": "2025-09-02 23:52:42.410403",
+    "message_count": 1,
+    "last_activity": "2025-09-02 23:52:42.410391",
+    "tags": [],
+    "is_archived": false
+  }
+}

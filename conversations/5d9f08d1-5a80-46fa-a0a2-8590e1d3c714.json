@@ -1,0 +1,20 @@
+{
+  "conversation_id": "5d9f08d1-5a80-46fa-a0a2-8590e1d3c714",
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我搜索机器学习的论文",
+      "timestamp": "2025-09-02 15:31:03.787368",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "帮我搜索机器学习的论文",
+    "created_at": "2025-09-02 15:31:03.786239",
+    "updated_at": "2025-09-02 15:31:03.787413",
+    "message_count": 1,
+    "last_activity": "2025-09-02 15:31:03.787379",
+    "tags": [],
+    "is_archived": false
+  }
+}

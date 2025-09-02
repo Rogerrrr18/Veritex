@@ -68,12 +68,6 @@ cp .env.example .env
 # Start backend server (auto-reload enabled)
 python -m uvicorn backend:app --reload
 
-# 测试搜索配额分配
-python test_search_quota.py
-
-# 测试大量搜索
-python test_large_search.py
-
 # API documentation
 open http://127.0.0.1:8000/docs
 ```
@@ -115,19 +109,7 @@ npm run preview
 - 预扩展关键词复用，减少重复LLM调用
 - 快速意图预筛选，提升响应速度
 
-## Testing & Debugging
-
-### 搜索测试
-```bash
-# 测试搜索配额分配
-python test_search_quota.py
-
-# 测试大量搜索（50篇）
-python test_large_search.py
-
-# 模拟API调用测试
-python test_api_search.py
-```
+## Performance & Monitoring
 
 ### 性能监控
 - Backend logs显示配额分配和搜索进度
@@ -177,14 +159,15 @@ python test_api_search.py
 - ✅ `CLAUDE.md` - 更新开发指南和架构说明
 
 **新增文件**:
-- ✅ `test_search_quota.py` - 搜索配额分配测试
-- ✅ `test_large_search.py` - 大量搜索测试
-- ✅ `test_api_search.py` - API调用测试
+- ✅ `conversation_manager.py` - 多轮对话管理模块
+- ✅ `performance_monitor.py` - 性能监控和统计分析
 
 **删除文件**:
 - ✅ `multi_source_engine_original.py` - 删除未使用的旧版文件
 
-### 核心函数修改
-- `search_parallel_with_filters()` - 优化配额分配策略
-- `ScholarlyAPI.search()` - 简化scholarly调用逻辑
+### 核心功能优化
+- ✅ 修复chat&plan模式下工作流路由bug，确保正确完成状态
+- ✅ 优化意图分类稳定性，支持缓存机制提升性能
+- ✅ 完善多轮对话功能，支持上下文保持和对话管理
+- ✅ 集成智能工作流系统，支持学术对话和文献搜索
 

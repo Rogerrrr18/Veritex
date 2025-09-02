@@ -8,7 +8,10 @@ import uuid
 import re
 import time
 import hashlib
+import logging
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
  
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -44,7 +47,7 @@ class IntelligentPaperSearchAgent:
         
         # 使用优化的LLM意图分类器
         self.intent_classifier = get_intent_classifier()
-        print("使用优化的LLM意图分类器")
+        logger.info("🚀 [工作流] 智能Agent初始化完成")
         
         self.checkpointer = MemorySaver() if enable_memory else None
         self.graph = self._build_graph()
@@ -52,7 +55,7 @@ class IntelligentPaperSearchAgent:
         # 延迟加载搜索引擎（避免循环依赖）
         self._search_engine = None
         
-        print("智能缓存系统已启用")
+        logger.info("💾 [工作流] 智能缓存系统已启用")
     
     async def _get_search_engine(self):
         """获取搜索引擎实例（延迟加载）- 避免循环依赖"""
@@ -61,11 +64,21 @@ class IntelligentPaperSearchAgent:
                 # 使用真实的MultiSourceEngine，删除模拟引擎依赖
                 from multi_source_engine import MultiSourceEngine
                 self._search_engine = MultiSourceEngine()
-                print("多源搜索引擎实例化成功")
+                logger.info("🌐 [搜索引擎] 多源引擎实例化成功")
             except Exception as e:
-                print(f"搜索引擎实例化失败: {e}")
+                logger.error(f"❌ [搜索引擎] 实例化失败: {e}")
                 raise Exception(f"无法初始化搜索引擎: {e}，请检查依赖包安装")
         return self._search_engine
+    
+    async def _preheat_search_engine_async(self):
+        """异步预热搜索引擎，为后续搜索做准备"""
+        try:
+            # 并行预热任务：实例化搜索引擎和预加载必要组件
+            await self._get_search_engine()
+            logger.info("🔥 [搜索引擎] 预热完成")
+        except Exception as e:
+            logger.warning(f"⚠️ [搜索引擎] 预热失败（不影响主流程）: {e}")
+            # 预热失败不抛出异常，不影响主流程
     
     
     def _build_graph(self) -> StateGraph:
@@ -474,16 +487,35 @@ class IntelligentPaperSearchAgent:
             from prompt_utils import get_academic_discussion_prompt
             prompt = get_academic_discussion_prompt(user_message, mode=mode)
             
-            # 调用LLM进行学术讨论（增加超时时间）
-            print("开始LLM学术讨论分析")
+            # 并行处理：LLM学术讨论 + 搜索引擎预热
+            print("🚀 开始并行LLM学术讨论分析 + 搜索引擎预热")
             import time
             start_time = time.time()
             
             # 使用复杂查询超时配置
             complex_timeout = float(os.getenv('COMPLEX_QUERY_TIMEOUT', '90.0'))
-            response = await self.llm.simple_chat(prompt=prompt, timeout=complex_timeout)
+            
+            # 并行任务1：LLM学术讨论
+            llm_task = asyncio.create_task(
+                self.llm.simple_chat(prompt=prompt, timeout=complex_timeout)
+            )
+            
+            # 并行任务2：预热搜索引擎（为可能的后续搜索做准备）
+            search_engine_preheat_task = asyncio.create_task(
+                self._preheat_search_engine_async()
+            )
+            
+            # 等待LLM响应完成（搜索引擎预热在后台继续）
+            response = await llm_task
             end_time = time.time()
-            print(f"LLM调用完成，耗时: {end_time - start_time:.2f}秒")
+            print(f"✅ LLM调用完成，耗时: {end_time - start_time:.2f}秒")
+            
+            # 检查搜索引擎预热状态（不阻塞主流程）
+            try:
+                await asyncio.wait_for(search_engine_preheat_task, timeout=0.1)
+                print("✅ 搜索引擎预热完成")
+            except asyncio.TimeoutError:
+                print("⏳ 搜索引擎预热在后台继续...")
             
             # 验证LLM响应 - 如果失败直接抛出异常
             if not response or len(response.strip()) < 20:
@@ -510,15 +542,17 @@ class IntelligentPaperSearchAgent:
             # 明确导入AIMessage避免作用域问题
             from langchain_core.messages import AIMessage
             
-            # 根据模式决定是否继续搜索流程
+            # 🎯 新的模式策略：auto-search先返回分析，标记后台搜索
             if mode == "auto-search":
-                # auto-search模式：输出深度分析 + 自动继续文献检索
-                is_completed = False
+                # auto-search模式：先完成分析阶段，标记需要后台搜索
+                is_completed = True  # 分析阶段完成
                 need_search = should_suggest_search
+                background_search_required = should_suggest_search  # 新增标记
             else:
                 # chat&plan模式：只输出分析，不自动搜索
                 is_completed = True
                 need_search = False
+                background_search_required = False
             
             return {
                 "current_step": "discussion_completed",
@@ -528,7 +562,10 @@ class IntelligentPaperSearchAgent:
                 "need_search_strategy": need_search,
                 "mode": mode,
                 "messages": [AIMessage(content=cleaned_response)],  # 使用清洗后的响应
-                "search_suggestion": should_suggest_search  # 是否建议搜索
+                "search_suggestion": should_suggest_search,  # 是否建议搜索
+                "background_search_required": background_search_required,  # 新增：是否需要后台搜索
+                "query": state.get("query", ""),  # 保存原始查询供后台搜索使用
+                "max_results": state.get("max_results", 40)  # 保存搜索数量
             }
             
         except Exception as e:
@@ -1059,25 +1096,30 @@ class IntelligentPaperSearchAgent:
             return "wait_decision"
     
     def should_execute_search_after_discussion(self, state: PaperSearchState) -> str:
-        """学术探讨节点后的路由决策"""
+        """学术探讨节点后的路由决策 - 优化为分阶段响应"""
         mode = state.get("mode", "auto-search") 
         search_suggestion = state.get("search_suggestion", False)
         need_search = state.get("need_search_strategy", False)
+        is_completed = state.get("is_completed", False)
         
-        print(f"学术探讨后路由: 模式={mode}, 搜索建议={search_suggestion}, 需要搜索={need_search}")
+        logger.info(f"🔀 [路由] 模式={mode}, 搜索建议={search_suggestion}, 需要搜索={need_search}, 已完成={is_completed}")
         
-        # 在auto-search模式下，如果有搜索建议则继续搜索流程
+        # 🎯 新的auto-search策略：先返回分析结果，标记需要后台搜索
         if mode == "auto-search" and (search_suggestion or need_search):
-            print("auto-search模式：学术探讨后继续搜索")
-            return "search"
+            logger.info("🚀 [auto-search] 学术分析完成 → 标记后台搜索")
+            return "end"  # 先结束工作流，返回分析结果
         else:
-            print("学术探讨完成，结束流程")
+            # chat&plan模式或无需搜索的情况
+            if is_completed:
+                logger.info("✅ [路由] 学术探讨已完成，正常结束流程")
+            else:
+                logger.info("⚠️ [路由] 学术探讨未完成但无需搜索，强制完成状态")
             return "end"
     
     # 已移除：未使用的路由决策辅助函数 should_execute_search
     
     async def search_execution_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """搜索执行节点 - 调用现有多源搜索引擎"""
+        """搜索执行节点 - 调用现有多源搜索引擎，并行优化版本"""
         try:
             query = state.get("query", "")
             max_results = state.get("max_results", 20)
@@ -1086,14 +1128,33 @@ class IntelligentPaperSearchAgent:
             year_to = state.get("year_to")
             sources = state.get("sources")
             
-            print(f"开始执行搜索: query={query}, max_results={max_results}")
+            print(f"🚀 开始并行执行搜索: query={query}, max_results={max_results}")
             
-            # 构建搜索查询
-            search_query = self._build_search_query(query, analysis)
-            print(f"构建的搜索查询: {search_query}")
+            # 并行任务1：构建搜索查询（CPU密集型）
+            search_query_task = asyncio.create_task(
+                asyncio.to_thread(self._build_search_query, query, analysis)
+            )
             
-            # 获取搜索引擎并执行搜索
-            search_engine = await self._get_search_engine()
+            # 并行任务2：预热搜索引擎（I/O密集型）
+            search_engine_task = asyncio.create_task(self._get_search_engine())
+            
+            # 等待两个并行任务完成
+            search_query, search_engine = await asyncio.gather(
+                search_query_task,
+                search_engine_task,
+                return_exceptions=True
+            )
+            
+            # 检查并行任务是否有异常
+            if isinstance(search_query, Exception):
+                print(f"❌ 构建搜索查询失败: {search_query}")
+                search_query = query  # 降级使用原始查询
+            
+            if isinstance(search_engine, Exception):
+                print(f"❌ 搜索引擎预热失败: {search_engine}")
+                raise search_engine
+            
+            print(f"✅ 并行任务完成 - 搜索查询: {search_query}")
             
             # 获取analysis结果用于统一布尔查询
             analysis = state.get("analysis_result", {})
@@ -1686,9 +1747,9 @@ class IntelligentPaperSearchAgent:
                 if converted_messages:
                     initial_state['messages'] = converted_messages
         except Exception as e:
-            print(f"注入历史失败: {e}")
+            logger.warning(f"⚠️ [工作流] 注入历史失败: {e}")
         
-        print(f"启动智能学术搜索工作流 - 查询: {query}")
+        logger.info(f"🎯 [工作流] 启动 → 查询: {query[:40]}...")
         
         config = {"configurable": {"thread_id": thread_id}} if self.enable_memory else {}
         
@@ -1727,12 +1788,12 @@ class IntelligentPaperSearchAgent:
                 "need_search_strategy": final_state.get("need_search_strategy", False)
             }
             
-            print(f"工作流完成: {'成功' if result['success'] else '失败'}")
+            logger.info(f"✅ [工作流] {'完成' if result['success'] else '失败'}")
             return result
             
         except asyncio.TimeoutError:
             timeout_msg = f"学术查询超时（{workflow_timeout}秒），可能由于网络或服务器繁忙。"
-            print(f"⚠️ {timeout_msg}")
+            logger.warning(f"⚠️ [工作流] 执行超时: {timeout_msg}")
             
             return {
                 "success": False,

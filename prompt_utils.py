@@ -51,6 +51,11 @@ def get_academic_discussion_prompt(user_query: str, **kwargs) -> str:
     template = load_prompt_template("academic_discussion_prompt.txt")
     return format_prompt(template, user_query=user_query, **kwargs)
 
+def get_multi_turn_conversation_prompt(user_query: str, **kwargs) -> str:
+    """获取多轮对话prompt"""
+    template = load_prompt_template("multi_turn_conversation_prompt.txt")
+    return format_prompt(template, user_query=user_query, **kwargs)
+
 def get_prompt_by_intent(intent: str, user_query: str, **kwargs) -> str:
     """根据意图获取对应的prompt"""
     intent_mapping = {

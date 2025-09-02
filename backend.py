@@ -21,7 +21,7 @@ from langchain_workflows.paper_search_workflow import get_intelligent_paper_sear
 from llm_interface import get_universal_llm, get_model_config_manager
 from multi_source_engine import Paper
 from performance_monitor import track_chat_performance, get_performance_monitor
-from prompt_utils import get_chat_conversation_prompt
+from prompt_utils import get_chat_conversation_prompt, get_multi_turn_conversation_prompt
 from conversation_manager import get_conversation_manager
 
 app = FastAPI(
@@ -54,8 +54,8 @@ class ChatRequest(BaseModel):
     search_params: Optional[Dict[str, Any]] = None
     # 模式：'chat-only' | 'auto-search'
     mode: Optional[str] = None
-    # 流式传输模式
-    stream: Optional[bool] = False
+    # 流式传输模式（统一使用流式传输，提升用户体验）
+    stream: Optional[bool] = True
 
 class ChatResponse(BaseModel):
     response: str
@@ -149,6 +149,68 @@ def format_paper_for_api(paper: Paper) -> Dict[str, Any]:
 """作者数据格式化方法已移除"""
 
 # === 快速意图预筛选函数 ===
+async def execute_background_search(
+    query: str,
+    max_results: int = 40,
+    analysis_result: Optional[Dict] = None,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+    sources: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
+    """执行后台搜索任务 - 使用统一搜索逻辑"""
+    try:
+        logger.info(f"🔍 [后台搜索] 开始执行: {query[:40]}... | 数量: {max_results}")
+        
+        # 使用统一的多源搜索引擎
+        from multi_source_engine import MultiSourceEngine
+        search_engine = MultiSourceEngine()
+        
+        # 构建搜索查询 - 复用手动搜索的逻辑
+        search_query = query
+        if analysis_result and analysis_result.get('optimized_boolean_query'):
+            search_query = analysis_result['optimized_boolean_query']
+            logger.info(f"🎯 [后台搜索] 使用优化查询: {search_query}")
+        
+        # 执行多源并行搜索，传递auto-search模式
+        search_results = await search_engine.search_parallel_with_filters(
+            query=search_query,
+            max_results=max_results,
+            year_from=year_from,
+            year_to=year_to,
+            sources=sources,  # ['scholar_dock', 'arxiv']
+            analysis=analysis_result,
+            mode="auto-search"  # 指定auto-search模式，使用50:50配比
+        )
+        
+        logger.info(f"📚 [后台搜索] 完成，获得 {len(search_results)} 篇论文")
+        
+        # 格式化结果
+        formatted_papers = []
+        for paper in search_results:
+            if paper.title and paper.title.strip():
+                formatted_papers.append({
+                    "title": paper.title,
+                    "authors": paper.authors,
+                    "abstract": paper.abstract,
+                    "year": paper.year,
+                    "journal": paper.journal, 
+                    "url": paper.url,
+                    "doi": paper.doi,
+                    "citations": paper.citations,
+                    "source": paper.source,
+                    "relevance_score": paper.relevance_score
+                })
+        
+        # 安全关闭搜索引擎
+        if search_engine:
+            await search_engine.close()
+        
+        return formatted_papers
+        
+    except Exception as e:
+        logger.error(f"❌ [后台搜索] 执行失败: {e}")
+        raise e
+
 def quick_intent_filter(message: str) -> Optional[str]:
     """快速意图预筛选 - 对明显的闲聊直接识别，避免复杂工作流"""
     message_lower = message.lower().strip()
@@ -224,7 +286,7 @@ def calculate_total_tokens(history: List[Dict[str, Any]]) -> Dict[str, Any]:
 async def expand_keywords_api(request: KeywordExpansionRequest):
     """独立的关键词扩展接口 - 仅进行智能分析，不执行搜索"""
     try:
-        logger.info(f"关键词扩展请求: {request.query}")
+        logger.info(f"🔍 [关键词扩展] 查询: {request.query[:40]}...")
         
         # 调用新的智能工作流进行分析（不执行搜索）
         agent = get_intelligent_paper_search_agent()
@@ -256,7 +318,7 @@ async def expand_keywords_api(request: KeywordExpansionRequest):
             )
             
     except Exception as e:
-        logger.error(f"关键词扩展失败: {e}")
+        logger.error(f"❌ [关键词扩展] 失败: {e}")
         return KeywordExpansionResponse(
             success=False,
             original_query=request.query,
@@ -351,7 +413,7 @@ async def generate_stream_response(
         # 🚀 快速意图预筛选 - 对明显闲聊使用LLM生成自然回复
         quick_intent = quick_intent_filter(message)
         if quick_intent == "闲聊":
-            logger.info(f"⚡ 快速预筛选命中闲聊，使用LLM流式生成自然回复")
+            logger.info("🚀 [闲聊模式] 快速预筛选 → LLM生成回复")
             
             # 使用LLM流式生成自然的闲聊回复
             llm_client = await get_universal_llm()
@@ -373,14 +435,14 @@ async def generate_stream_response(
                 yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False}})}\n\n"
                 
             except Exception as e:
-                logger.error(f"快速闲聊LLM流式调用失败: {e}")
+                logger.error(f"❌ [闲聊模式] LLM调用失败: {e}")
                 fallback_response = "你好！我是Veritex智能助手，专门帮助您查找和分析学术文献。有什么学术问题我可以帮您解答吗？"
                 yield f"data: {json.dumps({'type': 'content', 'data': {'content': fallback_response}})}\n\n"
                 yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False, 'error': str(e)}})}\n\n"
                 
         else:
             # 复杂流程：学术查询处理
-            logger.info(f"🤖 进入完整智能工作流流式处理")
+            logger.info("🧠 [学术模式] 启动智能工作流")
             
             yield f"data: {json.dumps({'type': 'start', 'data': {}})}\n\n"
             yield f"data: {json.dumps({'type': 'status', 'data': {'message': '正在分析您的学术查询...'}})}\n\n"
@@ -410,6 +472,7 @@ async def generate_stream_response(
             # 获取完整响应
             ai_response = final_result.get('response', '')
             is_academic = final_result.get('is_academic_query', False)
+            background_search_required = final_result.get('background_search_required', False)
             
             # 分段发送响应内容
             if ai_response:
@@ -418,13 +481,40 @@ async def generate_stream_response(
                 
                 for chunk in chunks:
                     yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
-                    # 移除人工延迟以提升响应速度
             
-            # 发送完成事件和其他数据
-            yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': is_academic, 'search_results': final_result.get('search_results', []), 'analysis_result': final_result.get('analysis_result')}})}\n\n"
+            # 🎯 检查是否需要后台搜索（auto-search模式）
+            if background_search_required and workflow_mode == "auto-search":
+                logger.info("🚀 [后台搜索] 启动后台搜索任务")
+                
+                # 发送分析完成事件，提示用户可以查看分析结果
+                yield f"data: {json.dumps({'type': 'analysis_done', 'data': {'is_academic_query': is_academic, 'analysis_result': final_result.get('analysis_result'), 'background_search_pending': True}})}\n\n"
+                
+                # 启动后台搜索任务
+                try:
+                    yield f"data: {json.dumps({'type': 'status', 'data': {'message': '正在后台搜索文献，请稍候...'}})}\n\n"
+                    
+                    # 执行后台搜索，使用统一的搜索逻辑，但指定auto-search模式
+                    search_result = await execute_background_search(
+                        query=message,
+                        max_results=max_results,
+                        analysis_result=final_result.get('analysis_result'),
+                        year_from=year_from,
+                        year_to=year_to,
+                        sources=['scholar_dock', 'arxiv']  # 明确指定数据源
+                    )
+                    
+                    # 发送搜索完成事件
+                    yield f"data: {json.dumps({'type': 'search_done', 'data': {'search_results': search_result, 'show_report_button': True}})}\n\n"
+                    
+                except Exception as search_error:
+                    logger.error(f"❌ [后台搜索] 搜索失败: {search_error}")
+                    yield f"data: {json.dumps({'type': 'search_error', 'data': {'error': str(search_error)}})}\n\n"
+            else:
+                # 发送完成事件和其他数据（非auto-search模式或无需搜索）
+                yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': is_academic, 'search_results': final_result.get('search_results', []), 'analysis_result': final_result.get('analysis_result')}})}\n\n"
             
     except Exception as e:
-        logger.error(f"流式响应生成错误: {e}")
+        logger.error(f"❌ [系统] 单轮流式响应失败: {e}")
         yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e)}})}\n\n"
 
 async def generate_stream_response_with_conversation(
@@ -439,26 +529,46 @@ async def generate_stream_response_with_conversation(
     ai_response_parts = []  # 收集AI回复内容
     
     try:
-        # 🚀 快速意图预筛选
+        # 🔧 智能多轮对话：保持上下文同时进行意图分析
+        is_multi_turn = False
+        if conversation_id:
+            conversation = await conversation_manager.get_conversation(conversation_id)
+            if conversation and len(conversation.messages) > 1:
+                is_multi_turn = True
+                logger.info(f"🔄 [多轮对话] ID: {conversation_id[:8]}... 保持上下文")
+        
+        # 🚀 始终进行快速意图预筛选
         quick_intent = quick_intent_filter(message)
+        
         if quick_intent == "闲聊":
-            logger.info(f"⚡ 快速预筛选命中闲聊，使用LLM流式生成自然回复")
-            
-            # 使用LLM流式生成自然的闲聊回复
-            llm_client = await get_universal_llm()
-            prompt = get_chat_conversation_prompt(message)
-            
-            messages = [{"role": "user", "content": prompt}]
+            # 闲聊处理：支持多轮对话上下文
+            logger.info(f"🚀 [闲聊模式] {'多轮' if is_multi_turn else '单轮'}对话")
             
             # 发送开始事件
             yield f"data: {json.dumps({'type': 'start', 'data': {}})}\n\n"
             
             try:
-                # 流式生成响应
-                async for chunk in llm_client.chat_completion_stream(messages):
-                    if chunk:
-                        ai_response_parts.append(chunk)
-                        yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
+                llm_client = await get_universal_llm()
+                
+                if is_multi_turn:
+                    # 多轮对话：使用上下文
+                    system_prompt = get_multi_turn_conversation_prompt(user_query=message)
+                    async for chunk in llm_client.chat_with_history_stream(
+                        message=message,
+                        conversation_id=conversation_id or "default", 
+                        system_prompt=system_prompt
+                    ):
+                        if chunk:
+                            ai_response_parts.append(chunk)
+                            yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
+                else:
+                    # 单轮对话：使用闲聊prompt
+                    prompt = get_chat_conversation_prompt(message)
+                    messages = [{"role": "user", "content": prompt}]
+                    async for chunk in llm_client.chat_completion_stream(messages):
+                        if chunk:
+                            ai_response_parts.append(chunk)
+                            yield f"data: {json.dumps({'type': 'content', 'data': {'content': chunk}})}\n\n"
                 
                 # 保存完整的AI回复
                 full_response = "".join(ai_response_parts)
@@ -470,10 +580,11 @@ async def generate_stream_response_with_conversation(
                     )
                 
                 # 发送完成事件
-                yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False, 'conversation_id': conversation_id}})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False, 'conversation_id': conversation_id, 'multi_turn_mode': is_multi_turn}})}\n\n"
+                return
                 
             except Exception as e:
-                logger.error(f"快速闲聊LLM流式调用失败: {e}")
+                logger.error(f"❌ [闲聊模式] LLM流式调用失败: {e}")
                 fallback_response = "你好！我是Veritex智能助手，专门帮助您查找和分析学术文献。有什么学术问题我可以帮您解答吗？"
                 
                 # 保存降级回复
@@ -485,10 +596,11 @@ async def generate_stream_response_with_conversation(
                 
                 yield f"data: {json.dumps({'type': 'content', 'data': {'content': fallback_response}})}\n\n"
                 yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': False, 'conversation_id': conversation_id, 'error': str(e)}})}\n\n"
+                return
                 
         else:
-            # 复杂流程：学术查询处理
-            logger.info(f"🤖 进入完整智能工作流流式处理")
+            # 学术查询处理：支持多轮对话上下文
+            logger.info(f"🧠 [学术模式] {'多轮' if is_multi_turn else '单轮'}对话 → 智能工作流")
             
             yield f"data: {json.dumps({'type': 'start', 'data': {}})}\n\n"
             yield f"data: {json.dumps({'type': 'status', 'data': {'message': '正在分析您的学术查询...'}})}\n\n"
@@ -499,7 +611,7 @@ async def generate_stream_response_with_conversation(
             year_to = search_params.get('year_to')
             sources = search_params.get('sources')
             
-            # 调用智能工作流
+            # 调用智能工作流，传递conversation_id支持多轮对话
             workflow_mode = "auto-search" if mode != "chat-only" else "chat&plan"
             
             agent = get_intelligent_paper_search_agent()
@@ -538,7 +650,7 @@ async def generate_stream_response_with_conversation(
             yield f"data: {json.dumps({'type': 'done', 'data': {'is_academic_query': is_academic, 'conversation_id': conversation_id, 'search_results': final_result.get('search_results', []), 'analysis_result': final_result.get('analysis_result')}})}\n\n"
             
     except Exception as e:
-        logger.error(f"流式响应生成错误: {e}")
+        logger.error(f"❌ [系统] 多轮流式响应失败: {e}")
         yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e), 'conversation_id': conversation_id}})}\n\n"
 
 @app.post("/chat")
@@ -583,227 +695,23 @@ async def chat(request: ChatRequest):
         # 降级使用请求中的历史记录
         history = [{"role": msg.role, "content": msg.content} for msg in request.history]
     
-    logger.info(f"收到聊天请求 - 对话ID: {conversation_id}, 消息: {request.message[:50]}..., 流式模式: {request.stream}")
+    logger.info(f"📨 [请求] ID: {conversation_id[:8] if conversation_id else 'new'}... | 消息: {request.message[:30]}... | 流式: {request.stream}")
     
-    # 如果请求流式响应
-    if request.stream:
-        search_params = request.search_params or {}
-        mode = (request.mode or "chat-only").lower()
-        
-        return StreamingResponse(
-            generate_stream_response_with_conversation(
-                request.message, history, search_params, mode, conversation_id
-            ),
-            media_type="text/plain",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Content-Type": "text/event-stream",
-            }
-        )
+    # 统一使用流式传输，提供最佳用户体验
+    search_params = request.search_params or {}
+    mode = (request.mode or "chat-only").lower()
     
-    # 非流式模式的原有逻辑
-    try:
-        logger.info(f"处理对话请求: {conversation_id}")
-        
-        # 🚀 快速意图预筛选 - 对明显闲聊使用LLM生成自然回复
-        quick_intent = quick_intent_filter(request.message)
-        if quick_intent == "闲聊":
-            logger.info(f"⚡ 快速预筛选命中闲聊，使用LLM生成自然回复")
-            
-            try:
-                # 使用LLM生成自然的闲聊回复
-                llm_client = await get_universal_llm()
-                prompt = get_chat_conversation_prompt(request.message)
-                ai_response = await llm_client.simple_chat(prompt)
-                
-                # 构建完整的对话历史
-                updated_history = history + [
-                    {"role": "user", "content": request.message},
-                    {"role": "assistant", "content": ai_response}
-                ]
-                
-                # 转换回响应格式
-                response_history = [
-                    ChatMessage(role=msg["role"], content=msg["content"])
-                    for msg in updated_history
-                ]
-                
-                # 跟踪快速闲聊性能
-                response_time = time.time() - start_time
-                track_chat_performance(
-                    request_type="fast_chat_llm",
-                    response_time=response_time,
-                    llm_calls=1,
-                    is_fast_path=True,
-                    token_count=estimate_tokens(request.message + ai_response)
-                )
-                
-                # 将AI回复保存到对话管理器
-                await conversation_manager.add_message_to_conversation(
-                    conversation_id, 
-                    "assistant", 
-                    ai_response
-                )
-                
-                logger.info(f"⚡ 快速闲聊完成 (耗时: {response_time:.3f}s, LLM调用: 1次)")
-                
-                return ChatResponse(
-                    response=ai_response,
-                    history=response_history,
-                    conversation_id=conversation_id,
-                    is_academic_query=False,
-                    search_results=[],
-                    analysis_result=None,
-                    token_info={
-                        "total_tokens": estimate_tokens(request.message + ai_response),
-                        "fast_path": True,
-                        "response_time": response_time,
-                        "llm_calls": 1
-                    }
-                )
-                
-            except Exception as e:
-                logger.error(f"快速闲聊LLM调用失败: {e}")
-                # 降级到简单预定义回复
-                fallback_response = "你好！我是Paper God学术搜索助手，专门帮助您查找和分析学术文献。有什么学术问题我可以帮您解答吗？"
-                
-                updated_history = history + [
-                    {"role": "user", "content": request.message},
-                    {"role": "assistant", "content": fallback_response}
-                ]
-                
-                response_history = [
-                    ChatMessage(role=msg["role"], content=msg["content"])
-                    for msg in updated_history
-                ]
-                
-                response_time = time.time() - start_time
-                track_chat_performance(
-                    request_type="fast_chat_fallback",
-                    response_time=response_time,
-                    llm_calls=0,
-                    is_fast_path=True,
-                    token_count=estimate_tokens(request.message + fallback_response),
-                    error_occurred=True
-                )
-                
-                # 将降级回复保存到对话管理器
-                await conversation_manager.add_message_to_conversation(
-                    conversation_id, 
-                    "assistant", 
-                    fallback_response
-                )
-                
-                return ChatResponse(
-                    response=fallback_response,
-                    history=response_history,
-                    conversation_id=conversation_id,
-                    is_academic_query=False,
-                    search_results=[],
-                    analysis_result=None,
-                    token_info={
-                        "total_tokens": estimate_tokens(request.message + fallback_response),
-                        "fast_path": True,
-                        "response_time": response_time,
-                        "llm_calls": 0,
-                        "error": str(e)
-                    }
-                )
-        
-        # 提取搜索参数
-        search_params = request.search_params or {}
-        max_results = search_params.get('max_results', 20)
-        year_from = search_params.get('year_from')
-        year_to = search_params.get('year_to')
-        sources = search_params.get('sources')
-        
-        # 进入完整智能工作流（记录开始时间）
-        logger.info(f"🤖 进入完整智能工作流处理")
-        workflow_start = time.time()
-        
-        # 调用优化后的智能工作流（单次调用完成所有处理）
-        mode = (request.mode or "chat-only").lower()
-        workflow_mode = "auto-search" if mode != "chat-only" else "chat&plan"
-        
-        agent = get_intelligent_paper_search_agent()
-        final_result = await agent.search_papers(
-            query=request.message,
-            mode=workflow_mode,
-            max_results=max_results,
-            force_search=False,  # auto-search模式会自动决定是否搜索
-            year_from=year_from,
-            year_to=year_to,
-            sources=sources,
-            allow_search=True,  # 允许工作流自主决定搜索执行
-            history=history
-        )
-        
-        # 获取最终响应
-        ai_response = final_result.get('response', '')
-        is_academic = final_result.get('is_academic_query', False)
-
-        # 构建完整的对话历史
-        updated_history = history + [
-            {"role": "user", "content": request.message},
-            {"role": "assistant", "content": ai_response}
-        ]
-        
-        # 转换回响应格式
-        response_history = [
-            ChatMessage(role=msg["role"], content=msg["content"])
-            for msg in updated_history
-        ]
-        
-        # 计算token信息和性能指标
-        token_info = calculate_total_tokens(updated_history)
-        total_time = time.time() - start_time
-        workflow_time = time.time() - workflow_start
-        
-        # 添加性能监控信息
-        analysis_result = final_result.get('analysis_result')
-        has_analysis = bool(analysis_result)
-        
-        token_info.update({
-            "fast_path": False,
-            "total_response_time": total_time,
-            "workflow_time": workflow_time,
-            "llm_calls": 2 if mode != 'chat-only' and is_academic and has_analysis else 1
-        })
-        
-        logger.info(f"📊 请求完成 - 总耗时: {total_time:.3f}s, 工作流耗时: {workflow_time:.3f}s, LLM调用: {token_info['llm_calls']}次")
-        
-        # 跟踪工作流性能
-        request_type = "academic_search" if is_academic else "complex_chat"
-        track_chat_performance(
-            request_type=request_type,
-            response_time=total_time,
-            llm_calls=token_info['llm_calls'],
-            is_fast_path=False,
-            workflow_time=workflow_time,
-            token_count=token_info.get('total_tokens', 0)
-        )
-        
-        # 将AI回复保存到对话管理器
-        await conversation_manager.add_message_to_conversation(
-            conversation_id, 
-            "assistant", 
-            ai_response
-        )
-        
-        return ChatResponse(
-            response=ai_response,
-            history=response_history,
-            conversation_id=conversation_id,
-            is_academic_query=is_academic,
-            search_results=final_result.get('search_results', []),
-            analysis_result=final_result.get('analysis_result'),
-            token_info=token_info
-        )
-        
-    except Exception as e:
-        logger.error(f"聊天服务错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"聊天服务错误: {str(e)}")
+    return StreamingResponse(
+        generate_stream_response_with_conversation(
+            request.message, history, search_params, mode, conversation_id
+        ),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Content-Type": "text/event-stream",
+        }
+    )
 
 # === 对话管理API接口 ===
 
@@ -950,11 +858,11 @@ async def analytics_log_action(req: LogActionRequest):
 async def search_papers_api(req: SearchRequest):
     """优化后的搜索接口 - 优先使用预扩展关键词，避免重复LLM分析"""
     try:
-        logger.info(f"🔍 搜索请求: {req.query}")
+        logger.info(f"🔍 [搜索] 查询: {req.query[:40]}... | 数量: {req.max_results}")
         
         # 📊 性能优化：优先使用预扩展的关键词，避免重复LLM调用
         if req.expanded_keywords and req.expanded_keywords.get('hierarchical_keywords'):
-            logger.info("✅ 检测到预扩展关键词，直接执行搜索（跳过LLM分析）")
+            logger.info("✅ [搜索] 使用预扩展关键词，跳过LLM分析")
             
             try:
                 # 🚀 优先尝试优化搜索，失败时降级到原始搜索

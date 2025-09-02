@@ -1,0 +1,26 @@
+{
+  "conversation_id": "c1fb32d9-e0af-4e76-9f8a-7e203ae0ac64",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好",
+      "timestamp": "2025-09-02 15:05:11.904788",
+      "metadata": null
+    },
+    {
+      "role": "assistant",
+      "content": "你好呀！😊 很高兴能为你提供学术支持～  \n\n我可以帮你轻松搞定 **搜索文献**（中英文数据库全覆盖，精准定位研究资源）、**学术讨论**（从选题思路到论文修改，随时交流学术困惑），有需要随时告诉我哦！",
+      "timestamp": "2025-09-02 15:05:20.164637",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "你好",
+    "created_at": "2025-09-02 15:05:11.904443",
+    "updated_at": "2025-09-02 15:05:20.164746",
+    "message_count": 2,
+    "last_activity": "2025-09-02 15:05:20.164658",
+    "tags": [],
+    "is_archived": false
+  }
+}

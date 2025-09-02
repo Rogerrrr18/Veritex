@@ -1,0 +1,20 @@
+{
+  "conversation_id": "7910071a-12fd-4a44-8218-4095d65b8b32",
+  "messages": [
+    {
+      "role": "user",
+      "content": "我想学习深度学习算法",
+      "timestamp": "2025-09-02 15:31:01.773771",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "我想学习深度学习算法",
+    "created_at": "2025-09-02 15:31:01.772703",
+    "updated_at": "2025-09-02 15:31:01.773800",
+    "message_count": 1,
+    "last_activity": "2025-09-02 15:31:01.773779",
+    "tags": [],
+    "is_archived": false
+  }
+}

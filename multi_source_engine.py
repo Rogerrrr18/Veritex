@@ -1267,7 +1267,8 @@ class MultiSourceEngine:
         year_from: Optional[int] = None,
         year_to: Optional[int] = None,
         sources: Optional[List[str]] = None,
-        analysis: Optional[Dict] = None
+        analysis: Optional[Dict] = None,
+        mode: Optional[str] = None  # 新增：搜索模式
     ) -> List[Paper]:
         """并行搜索多个数据源（带筛选参数和统一布尔查询）"""
         logger.info(f"开始多源并行搜索: {query}")
@@ -1328,8 +1329,23 @@ class MultiSourceEngine:
             'pubmed': 'pubmed'
         }
         
+        # 🎯 auto-search模式特殊处理：只使用Google Scholar和arXiv各50%
+        if mode == "auto-search":
+            logger.info("🎯 [auto-search] 使用Google Scholar 50% + arXiv 50%配比")
+            
+            scholar_limit = max_results // 2  # 50%给Google Scholar
+            arxiv_limit = max_results - scholar_limit  # 剩余50%给arXiv
+            
+            sources_to_search = []
+            if self.scholarly:
+                sources_to_search.append(('scholar_dock', self.scholarly, 150.0, scholar_limit))
+            if self.arxiv:
+                sources_to_search.append(('arxiv', self.arxiv, 30.0, arxiv_limit))
+            
+            logger.info(f"📊 [auto-search] 配额分配: Google Scholar {scholar_limit}篇 + arXiv {arxiv_limit}篇")
+            
         # 如果指定了特定数据源，只使用指定的数据源
-        if sources and isinstance(sources, list) and len(sources) > 0:
+        elif sources and isinstance(sources, list) and len(sources) > 0:
             logger.info(f"🎯 使用指定数据源: {sources}")
             
             # 重新计算配额分配（针对指定数据源）
@@ -1350,11 +1366,16 @@ class MultiSourceEngine:
             
             # 为选定的数据源分配配额
             if selected_sources:
-                per_source_limit = max(5, int(max_results // len(selected_sources)))
+                # 优化配额分配：单一数据源获得全部配额，多数据源合理分配
+                if len(selected_sources) == 1:
+                    per_source_limit = max_results  # 单一数据源获得全部配额
+                    logger.info(f"📊 单一指定数据源: 分配{per_source_limit}篇全部配额")
+                else:
+                    per_source_limit = max(5, int(max_results // len(selected_sources)))
+                    logger.info(f"📊 多数据源配额分配: {len(selected_sources)}个数据源，每源{per_source_limit}篇")
+                
                 for source_name, source_api, source_timeout in selected_sources:
                     sources_to_search.append((source_name, source_api, source_timeout, per_source_limit))
-                
-                logger.info(f"📊 指定数据源配额分配: {len(selected_sources)}个数据源，每源{per_source_limit}篇")
         else:
             # 使用默认的所有可用数据源
             logger.info("🌐 使用所有可用数据源")
@@ -1540,8 +1561,8 @@ class MultiSourceEngine:
         
         final_results = traditional_results
         
-        # 🔄 动态降级策略：如果结果不足且有分析数据，尝试exact_terms补充搜索
-        if len(final_results) < max_results * 0.7 and analysis and analysis.get("hierarchical_keywords"):
+        # 🔄 动态降级策略：如果结果不足，尝试exact_terms补充搜索
+        if len(final_results) < max_results and analysis and analysis.get("hierarchical_keywords"):
             logger.warning(f"⚠️ 搜索结果不足({len(final_results)}/{max_results})，启动exact_terms补充搜索")
             
             # 使用降级查询进行补充搜索

@@ -44,30 +44,31 @@ class DoubaoAdapter(BaseLLMAdapter):
         super().__init__(config)
         self.use_official_sdk = VOLCANO_SDK_AVAILABLE
         
-        # 初始化官方SDK客户端（如果可用）
+        # 通用HTTP客户端配置（流式功能需要）
+        self.headers = {
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json"
+        }
+        # 优化HTTP客户端配置
+        timeout_config = httpx.Timeout(
+            connect=10.0, read=120.0, write=30.0, pool=10.0
+        )
+        limits_config = httpx.Limits(
+            max_keepalive_connections=15,
+            max_connections=25,
+            keepalive_expiry=30.0
+        )
+        self.client = httpx.AsyncClient(
+            timeout=timeout_config,
+            limits=limits_config,
+            http2=True
+        )
+        
+        # 初始化官方SDK客户端（如果可用，用于普通聊天）
         if self.use_official_sdk:
             self.ark_client = Ark(api_key=config.api_key)
-            print("🚀 使用火山引擎官方SDK")
+            print("🚀 使用火山引擎官方SDK（普通聊天）+ HTTP客户端（流式）")
         else:
-            # 降级到HTTP客户端
-            self.headers = {
-                "Authorization": f"Bearer {config.api_key}",
-                "Content-Type": "application/json"
-            }
-            # 优化HTTP客户端配置
-            timeout_config = httpx.Timeout(
-                connect=10.0, read=120.0, write=30.0, pool=10.0
-            )
-            limits_config = httpx.Limits(
-                max_keepalive_connections=15,
-                max_connections=25,
-                keepalive_expiry=30.0
-            )
-            self.client = httpx.AsyncClient(
-                timeout=timeout_config,
-                limits=limits_config,
-                http2=True
-            )
             print("📡 使用HTTP客户端模式")
         
         # 对话历史缓存
@@ -132,6 +133,42 @@ class DoubaoAdapter(BaseLLMAdapter):
             ])
         
         return response
+    
+    async def chat_with_history_stream(
+        self, 
+        message: str, 
+        conversation_id: str = "default",
+        system_prompt: str = None,
+        **kwargs
+    ):
+        """支持历史的多轮对话流式生成"""
+        # 构建完整的消息列表
+        messages = []
+        
+        # 添加系统提示
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        
+        # 添加历史消息
+        history = self.get_conversation_history(conversation_id)
+        messages.extend(history)
+        
+        # 添加当前用户消息
+        messages.append({"role": "user", "content": message})
+        
+        # 流式调用聊天完成
+        response_chunks = []
+        async for chunk in self.chat_completion_stream(messages, **kwargs):
+            response_chunks.append(chunk)
+            yield chunk
+        
+        # 将用户消息和AI回复添加到缓存
+        if response_chunks:
+            full_response = "".join(response_chunks)
+            self._add_to_conversation_cache(conversation_id, [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": full_response}
+            ])
     
     async def chat_completion(
         self, 

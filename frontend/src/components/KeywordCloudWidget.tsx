@@ -56,7 +56,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     maxResults: 20,
     yearFrom: '',
     yearTo: '',
-    sources: ['arxiv', 'semantic_scholar', 'scholarly'] // 默认启用指定的三个数据源
+    sources: ['scholarly'] // 默认只选择Google Scholar，避免数据源返回不足问题
   });
 
   // 颜色配置：不同层级使用不同颜色
