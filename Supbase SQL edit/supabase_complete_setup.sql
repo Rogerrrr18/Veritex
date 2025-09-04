@@ -46,7 +46,13 @@ DROP POLICY IF EXISTS "user_own_search_only" ON user_search_history;
 DROP POLICY IF EXISTS "user_own_chat_only" ON user_chat_history;
 DROP POLICY IF EXISTS "user_own_settings_only" ON user_settings;
 
+-- 对话系统策略清理
+DROP POLICY IF EXISTS "conversations_user_isolation" ON conversations;
+DROP POLICY IF EXISTS "conversation_messages_user_isolation" ON conversation_messages;
+
 -- 删除所有现有表
+DROP TABLE IF EXISTS conversation_messages CASCADE;
+DROP TABLE IF EXISTS conversations CASCADE;
 DROP TABLE IF EXISTS user_settings CASCADE;
 DROP TABLE IF EXISTS user_chat_history CASCADE;
 DROP TABLE IF EXISTS user_search_history CASCADE;
@@ -123,6 +129,56 @@ CREATE TABLE user_settings (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- 6. 对话系统表（新增）
+-- 对话主表 - 存储对话元数据
+CREATE TABLE conversations (
+    conversation_id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id VARCHAR(100) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- 对话基本信息
+    title TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    -- 对话统计
+    message_count INTEGER DEFAULT 0 CHECK (message_count >= 0),
+    
+    -- 标签和分类
+    tags TEXT[] DEFAULT '{}',
+    
+    -- 状态标识
+    is_archived BOOLEAN DEFAULT FALSE,
+    
+    -- 扩展元数据
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- 对话消息表 - 存储具体的对话消息内容
+CREATE TABLE conversation_messages (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    
+    -- 关联外键
+    conversation_id UUID NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    user_id VARCHAR(100) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- 消息内容
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    content TEXT NOT NULL,
+    
+    -- 时间戳
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    -- 消息在对话中的顺序
+    sequence_number INTEGER NOT NULL CHECK (sequence_number > 0),
+    
+    -- 消息元数据
+    message_metadata JSONB DEFAULT '{}'::jsonb,
+    
+    -- 唯一约束：每个对话中的消息序号不能重复
+    UNIQUE(conversation_id, sequence_number)
+);
+
 -- ================================
 -- 第三步：创建数据库索引（提高性能）
 -- ================================
@@ -134,6 +190,15 @@ CREATE INDEX idx_invite_codes_used ON invite_codes(used);
 -- 用户表索引
 CREATE INDEX idx_users_invite_code ON users(invite_code);
 CREATE INDEX idx_users_created_at ON users(created_at);
+
+-- 对话系统索引（新增）
+CREATE INDEX idx_conversations_user_activity ON conversations(user_id, last_activity DESC);
+CREATE INDEX idx_conversations_user_created ON conversations(user_id, created_at DESC);
+CREATE INDEX idx_conversations_user_archived ON conversations(user_id, is_archived);
+
+CREATE INDEX idx_messages_conversation_seq ON conversation_messages(conversation_id, sequence_number);
+CREATE INDEX idx_messages_user_timestamp ON conversation_messages(user_id, timestamp DESC);
+CREATE INDEX idx_messages_role_timestamp ON conversation_messages(role, timestamp DESC);
 
 -- 用户行为日志索引
 CREATE INDEX idx_user_actions_user_id ON user_actions(user_id);
@@ -162,6 +227,10 @@ ALTER TABLE user_actions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_search_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_chat_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
+
+-- 对话系统RLS启用（新增）
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversation_messages ENABLE ROW LEVEL SECURITY;
 
 -- ================================
 -- 第五步：创建安全的RLS策略
@@ -223,6 +292,25 @@ CREATE POLICY "user_settings_policy" ON user_settings
         user_id = current_setting('request.headers.x-user-id', true)
     );
 
+-- 🔒 对话系统策略（新增）
+-- 对话表RLS策略
+CREATE POLICY "conversations_user_isolation" ON conversations
+    FOR ALL USING (
+        user_id = current_setting('app.user_id', true)::text
+    )
+    WITH CHECK (
+        user_id = current_setting('app.user_id', true)::text
+    );
+
+-- 消息表RLS策略  
+CREATE POLICY "conversation_messages_user_isolation" ON conversation_messages
+    FOR ALL USING (
+        user_id = current_setting('app.user_id', true)::text
+    )
+    WITH CHECK (
+        user_id = current_setting('app.user_id', true)::text
+    );
+
 -- ================================
 -- 第六步：插入初始内测码
 -- ================================
@@ -269,8 +357,9 @@ SELECT code, notes, used FROM invite_codes ORDER BY created_at;
 -- 设置完成提示
 -- ================================
 
-SELECT '🎉 Paper God Beta2 数据库设置完成！' as status,
+SELECT '🎉 Paper God Beta3 数据库设置完成！' as status,
        '数据表创建: ✅' as tables,
        'RLS策略: ✅' as security,
        '内测码: ✅' as invite_codes,
-       '索引优化: ✅' as indexes;
+       '索引优化: ✅' as indexes,
+       '对话系统: ✅' as conversations;

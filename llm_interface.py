@@ -159,6 +159,7 @@ class UniversalLLM:
         message: str, 
         conversation_id: str = "default",
         system_prompt: str = None,
+        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ) -> Optional[str]:
         """统一多轮对话接口"""
@@ -167,6 +168,7 @@ class UniversalLLM:
                 message=message,
                 conversation_id=conversation_id,
                 system_prompt=system_prompt,
+                user_id=user_id,  # 传递用户ID
                 **kwargs
             )
         else:
@@ -178,6 +180,7 @@ class UniversalLLM:
         message: str, 
         conversation_id: str = "default",
         system_prompt: str = None,
+        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ):
         """统一多轮对话流式接口"""
@@ -186,6 +189,7 @@ class UniversalLLM:
                 message=message,
                 conversation_id=conversation_id,
                 system_prompt=system_prompt,
+                user_id=user_id,  # 传递用户ID
                 **kwargs
             ):
                 yield chunk

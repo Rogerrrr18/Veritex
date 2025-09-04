@@ -22,7 +22,15 @@ from llm_interface import get_universal_llm, get_model_config_manager
 from multi_source_engine import Paper
 from performance_monitor import track_chat_performance, get_performance_monitor
 from prompt_utils import get_chat_conversation_prompt, get_multi_turn_conversation_prompt
-from conversation_manager import get_conversation_manager
+# 启用混合对话架构，支持三层缓存和用户数据隔离
+try:
+    from hybrid_conversation_manager import get_hybrid_conversation_manager
+    HYBRID_CONVERSATION_ENABLED = True
+    logger.info("混合对话架构已加载")
+except ImportError as e:
+    logger.warning(f"混合对话架构导入失败，回退到基础管理器: {e}")
+    from conversation_manager import get_conversation_manager
+    HYBRID_CONVERSATION_ENABLED = False
 
 app = FastAPI(
     title="Paper God API - 智能对话版",
@@ -50,6 +58,8 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = []
     # 新增：对话ID支持多轮对话
     conversation_id: Optional[str] = None
+    # 用户ID - 支持多用户隔离（可选，默认使用匿名用户）
+    user_id: Optional[str] = "anonymous"  # 设为可选参数，使用默认值
     # 搜索参数（可选）
     search_params: Optional[Dict[str, Any]] = None
     # 模式：'chat-only' | 'auto-search'
@@ -92,6 +102,18 @@ class SearchRequest(BaseModel):
 class RegisterRequest(BaseModel):
     invite_code: str
     user_id: str
+
+# 对话管理相关请求模型
+class ConversationRequest(BaseModel):
+    user_id: str
+    title: Optional[str] = None
+
+class ConversationListRequest(BaseModel):
+    user_id: str
+    limit: int = 20
+    offset: int = 0
+    archived: Optional[bool] = None
+    search: Optional[str] = None
 
 class LogActionRequest(BaseModel):
     user_id: str
@@ -522,17 +544,27 @@ async def generate_stream_response_with_conversation(
     history: List[Dict[str, str]],
     search_params: Dict[str, Any],
     mode: str,
-    conversation_id: str
+    conversation_id: str,
+    user_id: str  # 新增user_id参数
 ):
     """生成流式响应并保存到对话管理器"""
-    conversation_manager = get_conversation_manager()
+    # 初始化对话管理器（支持混合架构和基础架构）
+    if HYBRID_CONVERSATION_ENABLED:
+        conversation_manager = await get_hybrid_conversation_manager()
+        get_conversation_func = lambda cid, uid: conversation_manager.get_conversation(cid, uid)
+        add_message_func = lambda cid, uid, role, content: conversation_manager.add_message_to_conversation(cid, uid, role, content)
+    else:
+        conversation_manager = get_conversation_manager()
+        get_conversation_func = lambda cid, uid: conversation_manager.get_conversation(cid)
+        add_message_func = lambda cid, uid, role, content: conversation_manager.add_message_to_conversation(cid, role, content)
+        logger.info("使用基础对话管理器（不支持用户隔离）")
     ai_response_parts = []  # 收集AI回复内容
     
     try:
         # 🔧 智能多轮对话：保持上下文同时进行意图分析
         is_multi_turn = False
         if conversation_id:
-            conversation = await conversation_manager.get_conversation(conversation_id)
+            conversation = await get_conversation_func(conversation_id, user_id)
             if conversation and len(conversation.messages) > 1:
                 is_multi_turn = True
                 logger.info(f"🔄 [多轮对话] ID: {conversation_id[:8]}... 保持上下文")
@@ -555,7 +587,8 @@ async def generate_stream_response_with_conversation(
                     system_prompt = get_multi_turn_conversation_prompt(user_query=message)
                     async for chunk in llm_client.chat_with_history_stream(
                         message=message,
-                        conversation_id=conversation_id or "default", 
+                        conversation_id=conversation_id or "default",
+                        user_id=user_id,  # 🔧 修复：传递用户ID，确保LLM获取正确的历史记录
                         system_prompt=system_prompt
                     ):
                         if chunk:
@@ -573,8 +606,9 @@ async def generate_stream_response_with_conversation(
                 # 保存完整的AI回复
                 full_response = "".join(ai_response_parts)
                 if full_response:
-                    await conversation_manager.add_message_to_conversation(
+                    await add_message_func(
                         conversation_id, 
+                        user_id,
                         "assistant", 
                         full_response
                     )
@@ -588,8 +622,9 @@ async def generate_stream_response_with_conversation(
                 fallback_response = "你好！我是Veritex智能助手，专门帮助您查找和分析学术文献。有什么学术问题我可以帮您解答吗？"
                 
                 # 保存降级回复
-                await conversation_manager.add_message_to_conversation(
+                await add_message_func(
                     conversation_id, 
+                    user_id,
                     "assistant", 
                     fallback_response
                 )
@@ -634,8 +669,9 @@ async def generate_stream_response_with_conversation(
             # 分段发送响应内容
             if ai_response:
                 # 保存AI回复
-                await conversation_manager.add_message_to_conversation(
+                await add_message_func(
                     conversation_id, 
+                    user_id,
                     "assistant", 
                     ai_response
                 )
@@ -659,35 +695,56 @@ async def chat(request: ChatRequest):
     import time
     start_time = time.time()
     
-    # 获取对话管理器
-    conversation_manager = get_conversation_manager()
+    # 确保user_id有值
+    user_id = request.user_id or "anonymous"
+    
+    # 初始化对话管理器（支持混合架构和基础架构）
+    if HYBRID_CONVERSATION_ENABLED:
+        conversation_manager = await get_hybrid_conversation_manager()
+    else:
+        conversation_manager = get_conversation_manager()
     
     # 处理对话ID
     conversation_id = request.conversation_id
     conversation = None
     
     if conversation_id:
-        # 获取现有对话
-        conversation = await conversation_manager.get_conversation(conversation_id)
+        # 获取现有对话（支持用户隔离）
+        if HYBRID_CONVERSATION_ENABLED:
+            conversation = await conversation_manager.get_conversation(conversation_id, user_id)
+        else:
+            conversation = await conversation_manager.get_conversation(conversation_id)
         if not conversation:
             logger.warning(f"对话不存在: {conversation_id}")
             conversation_id = None
     
     if not conversation:
-        # 创建新对话
-        conversation = await conversation_manager.create_conversation()
+        # 创建新对话（支持用户隔离）
+        if HYBRID_CONVERSATION_ENABLED:
+            conversation = await conversation_manager.create_conversation(user_id)
+        else:
+            conversation = await conversation_manager.create_conversation()
         conversation_id = conversation.conversation_id
         logger.info(f"创建新对话: {conversation_id}")
     
-    # 将用户消息添加到对话历史
-    await conversation_manager.add_message_to_conversation(
-        conversation_id, 
-        "user", 
-        request.message
-    )
-    
-    # 获取完整的对话历史（优先使用管理器中的历史）
-    conversation = await conversation_manager.get_conversation(conversation_id)
+    # 将用户消息添加到对话历史（支持用户隔离）
+    if HYBRID_CONVERSATION_ENABLED:
+        await conversation_manager.add_message_to_conversation(
+            conversation_id, 
+            user_id,
+            "user", 
+            request.message
+        )
+        # 获取完整的对话历史（优先使用管理器中的历史）
+        conversation = await conversation_manager.get_conversation(conversation_id, user_id)
+    else:
+        await conversation_manager.add_message_to_conversation(
+            conversation_id, 
+            "user", 
+            request.message
+        )
+        # 获取完整的对话历史（优先使用管理器中的历史）
+        conversation = await conversation_manager.get_conversation(conversation_id)
     if conversation and conversation.messages:
         # 使用对话管理器中的历史记录
         history = [{"role": msg.role, "content": msg.content} for msg in conversation.messages[:-1]]  # 排除刚添加的用户消息
@@ -703,7 +760,7 @@ async def chat(request: ChatRequest):
     
     return StreamingResponse(
         generate_stream_response_with_conversation(
-            request.message, history, search_params, mode, conversation_id
+            request.message, history, search_params, mode, conversation_id, user_id
         ),
         media_type="text/plain",
         headers={
@@ -836,22 +893,94 @@ async def get_conversation_stats():
 
 @app.post("/analytics/register")
 async def analytics_register(req: RegisterRequest):
-    """前端邀请码注册上报（轻量，无持久化）"""
+    """内测码注册行为记录 - 🔧 修复：实际保存到Supabase"""
     try:
-        logger.info(f"[analytics] register user={req.user_id} code={req.invite_code}")
-        return {"success": True}
+        logger.info(f"📝 [analytics] 注册行为: user={req.user_id} code={req.invite_code}")
+        
+        # 🔧 修复：实际保存到Supabase而不是仅记录日志
+        try:
+            from supabase_sync import get_sync_manager
+            sync_manager = get_sync_manager()
+            
+            # 设置用户上下文
+            sync_manager.set_user_context(req.user_id)
+            
+            # 记录注册行为到user_actions表
+            result = sync_manager.supabase.table('user_actions').insert({
+                'user_id': req.user_id,
+                'action': 'register',
+                'payload': {
+                    'invite_code': req.invite_code,
+                    'timestamp': datetime.now().isoformat()
+                },
+                'created_at': datetime.now().isoformat()
+            }).execute()
+            
+            if result.data:
+                logger.info(f"✅ [analytics] 注册行为已保存到Supabase: {req.user_id}")
+                return {"success": True, "message": "注册行为记录成功"}
+            else:
+                raise Exception("Supabase插入返回空数据")
+                
+        except Exception as supabase_error:
+            logger.error(f"❌ [analytics] Supabase保存失败: {supabase_error}")
+            # 降级到仅日志记录
+            logger.info(f"⚠️ [analytics] 降级到日志模式 - register user={req.user_id} code={req.invite_code}")
+            return {"success": True, "message": "注册行为记录成功（降级模式）"}
+            
     except Exception as e:
-        logger.error(f"analytics register error: {e}")
+        logger.error(f"❌ [analytics] 注册记录失败: {e}")
         return {"success": False, "error": str(e)}
 
 @app.post("/analytics/log_action")
 async def analytics_log_action(req: LogActionRequest):
-    """前端用户行为上报（轻量，无持久化）"""
+    """用户行为日志记录 - 🔧 修复：实际保存到Supabase"""
     try:
-        logger.info(f"[analytics] action user={req.user_id} type={req.action} payload={req.payload} ts={req.ts}")
-        return {"success": True}
+        logger.info(f"📝 [analytics] 用户行为: user={req.user_id} action={req.action}")
+        
+        # 🔧 修复：实际保存到Supabase而不是仅记录日志
+        try:
+            from supabase_sync import get_sync_manager
+            sync_manager = get_sync_manager()
+            
+            # 设置用户上下文
+            sync_manager.set_user_context(req.user_id)
+            
+            # 准备payload数据
+            payload_data = None
+            if req.payload:
+                try:
+                    # 如果payload是字符串，尝试解析为JSON
+                    if isinstance(req.payload, str):
+                        import json
+                        payload_data = json.loads(req.payload)
+                    else:
+                        payload_data = req.payload
+                except:
+                    payload_data = {"raw_payload": req.payload}
+            
+            # 记录用户行为到user_actions表
+            result = sync_manager.supabase.table('user_actions').insert({
+                'user_id': req.user_id,
+                'action': req.action,
+                'payload': payload_data,
+                'created_at': datetime.now().isoformat()
+            }).execute()
+            
+            if result.data:
+                logger.info(f"✅ [analytics] 用户行为已保存到Supabase: {req.user_id} -> {req.action}")
+                return {"success": True, "message": "用户行为记录成功"}
+            else:
+                raise Exception("Supabase插入返回空数据")
+                
+        except Exception as supabase_error:
+            logger.error(f"❌ [analytics] Supabase保存失败: {supabase_error}")
+            # 降级到仅日志记录
+            logger.info(f"⚠️ [analytics] 降级到日志模式 - action user={req.user_id} type={req.action} payload={req.payload} ts={req.ts}")
+            return {"success": True, "message": "用户行为记录成功（降级模式）"}
+            
     except Exception as e:
-        logger.error(f"analytics log_action error: {e}")
+        logger.error(f"❌ [analytics] 行为记录失败: {e}")
         return {"success": False, "error": str(e)}
 
 @app.post("/search_papers")

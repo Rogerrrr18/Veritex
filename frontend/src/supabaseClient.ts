@@ -136,17 +136,25 @@ export async function createUserWithInviteCode(code: string): Promise<{
 
 /**
  * 设置当前用户上下文（用于RLS策略）
+ * 🔧 修复：使用与后端SQL一致的配置项名称
  */
 export async function setCurrentUserContext(userId: string): Promise<void> {
   try {
-    console.log(`🔐 设置用户上下文: ${userId}`)
-    await supabase.rpc('set_config', {
-      setting_name: 'myapp.current_user_id',
-      setting_value: userId,
-      is_local: false
+    console.log(`🔐 [前端] 设置用户上下文: ${userId}`)
+    // 🔧 修复：调用后端定义的set_user_context函数，确保与RLS策略匹配
+    const { error } = await supabase.rpc('set_user_context', {
+      target_user_id: userId  // 使用与后端supabase_sync.py一致的参数名
     })
+    
+    if (error) {
+      console.error('❌ [前端] 用户上下文设置失败:', error)
+      throw error
+    } else {
+      console.log(`✅ [前端] 用户上下文设置成功: ${userId}`)
+    }
   } catch (error) {
-    console.error('设置用户上下文失败:', error)
+    console.error('❌ [前端] 设置用户上下文异常:', error)
+    // 不抛出异常，允许应用继续运行（降级处理）
   }
 }
 
@@ -155,38 +163,55 @@ export async function setCurrentUserContext(userId: string): Promise<void> {
  */
 export async function clearUserContext(): Promise<void> {
   try {
-    console.log('🗑️ 清除用户上下文')
-    await supabase.rpc('set_config', {
-      setting_name: 'myapp.current_user_id',
-      setting_value: '',
-      is_local: false
+    console.log('🗑️ [前端] 清除用户上下文')
+    // 🔧 修复：调用set_user_context函数并传递空字符串清除上下文
+    const { error } = await supabase.rpc('set_user_context', {
+      target_user_id: ''
     })
+    
+    if (error) {
+      console.error('❌ [前端] 清除用户上下文失败:', error)
+    } else {
+      console.log('✅ [前端] 用户上下文已清除')
+    }
   } catch (error) {
-    console.error('清除用户上下文失败:', error)
+    console.error('❌ [前端] 清除用户上下文异常:', error)
   }
 }
 
 /**
  * 更新用户最后活跃时间
+ * 🔧 增强错误处理和调试日志
  */
 export async function updateUserActivity(userId: string): Promise<void> {
   try {
+    console.log(`🔄 [前端] 更新用户活跃时间: ${userId}`)
+    
     // 先设置用户上下文
     await setCurrentUserContext(userId)
     
-    await supabase
+    const { data, error } = await supabase
       .from('users')
       .update({
         last_active: new Date().toISOString()
       })
       .eq('id', userId)
+    
+    if (error) {
+      console.error('❌ [前端] 更新用户活跃时间失败:', error)
+      throw error
+    } else {
+      console.log(`✅ [前端] 用户活跃时间已更新: ${userId}`)
+    }
   } catch (error) {
-    console.error('更新用户活跃时间失败:', error)
+    console.error('❌ [前端] 更新用户活跃时间异常:', error)
+    throw error
   }
 }
 
 /**
  * 记录用户行为日志
+ * 🔧 修复：增强错误处理、调试日志和数据验证
  */
 export async function logUserAction(
   userId: string,
@@ -194,19 +219,36 @@ export async function logUserAction(
   payload?: unknown
 ): Promise<void> {
   try {
-    // 先设置用户上下文
+    console.log(`📝 [前端] 记录用户行为: ${userId} -> ${action}`)
+    
+    // 先设置用户上下文，确保RLS策略正确工作
     await setCurrentUserContext(userId)
     
-    await supabase
+    // 准备插入数据
+    const insertData = {
+      user_id: userId,
+      action: action,
+      payload: payload ? (typeof payload === 'string' ? payload : JSON.stringify(payload)) : null,
+      created_at: new Date().toISOString()
+    }
+    
+    console.log('📊 [前端] 插入数据:', insertData)
+    
+    const { data, error } = await supabase
       .from('user_actions')
-      .insert({
-        user_id: userId,
-        action: action,
-        payload: payload ? JSON.stringify(payload) : null,
-        created_at: new Date().toISOString()
-      })
+      .insert(insertData)
+    
+    if (error) {
+      console.error('❌ [前端] 记录用户行为失败:', error)
+      console.error('❌ [前端] 插入数据详情:', insertData)
+      throw error
+    } else {
+      console.log(`✅ [前端] 用户行为已记录: ${userId} -> ${action}`)
+    }
   } catch (error) {
-    console.error('记录用户行为失败:', error)
+    console.error('❌ [前端] 记录用户行为异常:', error)
+    console.error('❌ [前端] 用户ID:', userId, '行为:', action, 'Payload:', payload)
+    throw error
   }
 }
 

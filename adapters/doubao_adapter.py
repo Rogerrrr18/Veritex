@@ -71,9 +71,51 @@ class DoubaoAdapter(BaseLLMAdapter):
         else:
             print("📡 使用HTTP客户端模式")
         
-        # 对话历史缓存
+        # 对话历史缓存（保留作为备用，主要使用数据库历史）
         self._conversation_cache: Dict[str, List[Dict[str, Any]]] = {}
         self._cache_limit = 50  # 每个对话保留最多50轮历史
+        
+        # 混合对话管理器引用（延迟初始化）
+        self._hybrid_manager = None
+    
+    async def _get_hybrid_manager(self):
+        """获取混合对话管理器实例（延迟初始化）"""
+        if self._hybrid_manager is None:
+            try:
+                from hybrid_conversation_manager import get_hybrid_conversation_manager
+                self._hybrid_manager = await get_hybrid_conversation_manager()
+            except ImportError:
+                # 降级到基础对话管理器
+                from conversation_manager import get_conversation_manager
+                self._hybrid_manager = get_conversation_manager()
+        return self._hybrid_manager
+    
+    async def _get_database_history(self, conversation_id: str, user_id: str) -> List[Dict[str, Any]]:
+        """从数据库获取完整的对话历史记录"""
+        try:
+            manager = await self._get_hybrid_manager()
+            
+            # 获取完整的对话对象
+            conversation = await manager.get_conversation(conversation_id, user_id)
+            
+            if not conversation or not conversation.messages:
+                return []
+            
+            # 转换为LLM需要的消息格式
+            history_messages = []
+            for msg in conversation.messages:
+                history_messages.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
+            
+            print(f"📚 [LLM历史] 从数据库加载 {len(history_messages)} 条历史消息 (对话ID: {conversation_id[:8]}...)")
+            return history_messages
+            
+        except Exception as e:
+            print(f"⚠️ [LLM历史] 数据库历史获取失败: {e}")
+            # 降级到适配器自己的缓存
+            return self.get_conversation_history(conversation_id)
     
     def _add_to_conversation_cache(self, conversation_id: str, messages: List[Dict[str, Any]]):
         """将消息添加到对话缓存"""
@@ -105,9 +147,10 @@ class DoubaoAdapter(BaseLLMAdapter):
         message: str, 
         conversation_id: str = "default",
         system_prompt: str = None,
+        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ) -> Optional[str]:
-        """支持历史的多轮对话"""
+        """支持历史的多轮对话 - 集成混合对话管理器的完整历史记录"""
         # 构建完整的消息列表
         messages = []
         
@@ -115,9 +158,9 @@ class DoubaoAdapter(BaseLLMAdapter):
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         
-        # 添加历史消息
-        history = self.get_conversation_history(conversation_id)
-        messages.extend(history)
+        # 🔧 修复：从混合对话管理器获取完整历史记录
+        history_messages = await self._get_database_history(conversation_id, user_id)
+        messages.extend(history_messages)
         
         # 添加当前用户消息
         messages.append({"role": "user", "content": message})
@@ -125,13 +168,7 @@ class DoubaoAdapter(BaseLLMAdapter):
         # 调用聊天完成
         response = await self.chat_completion(messages, **kwargs)
         
-        if response:
-            # 将用户消息和AI回复添加到缓存
-            self._add_to_conversation_cache(conversation_id, [
-                {"role": "user", "content": message},
-                {"role": "assistant", "content": response}
-            ])
-        
+        # 注意：不再在这里添加到适配器缓存，由混合管理器统一处理
         return response
     
     async def chat_with_history_stream(
@@ -139,9 +176,10 @@ class DoubaoAdapter(BaseLLMAdapter):
         message: str, 
         conversation_id: str = "default",
         system_prompt: str = None,
+        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ):
-        """支持历史的多轮对话流式生成"""
+        """支持历史的多轮对话流式生成 - 集成混合对话管理器的完整历史记录"""
         # 构建完整的消息列表
         messages = []
         
@@ -149,26 +187,18 @@ class DoubaoAdapter(BaseLLMAdapter):
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         
-        # 添加历史消息
-        history = self.get_conversation_history(conversation_id)
-        messages.extend(history)
+        # 🔧 修复：从混合对话管理器获取完整历史记录
+        history_messages = await self._get_database_history(conversation_id, user_id)
+        messages.extend(history_messages)
         
         # 添加当前用户消息
         messages.append({"role": "user", "content": message})
         
         # 流式调用聊天完成
-        response_chunks = []
         async for chunk in self.chat_completion_stream(messages, **kwargs):
-            response_chunks.append(chunk)
             yield chunk
         
-        # 将用户消息和AI回复添加到缓存
-        if response_chunks:
-            full_response = "".join(response_chunks)
-            self._add_to_conversation_cache(conversation_id, [
-                {"role": "user", "content": message},
-                {"role": "assistant", "content": full_response}
-            ])
+        # 注意：不再在这里添加到适配器缓存，由混合管理器统一处理
     
     async def chat_completion(
         self, 
