@@ -84,23 +84,33 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
 
     const newKeywords: KeywordItem[] = [];
 
-    // 按层级处理关键词
-    Object.entries(hierarchicalKeywords).forEach(([level, data]) => {
-      if (data && data.terms && Array.isArray(data.terms)) {
-        data.terms.forEach((term: string) => {
-          if (term && term.trim()) {
-            newKeywords.push({
-              term: term.trim(),
-              level,
-              weight: data.weight || 1.0,
-              color: levelColors[level as keyof typeof levelColors] || '#6b7280'
-            });
-          }
-        });
-      }
-    });
+    // 🔧 新增：数据验证和容错处理
+    try {
+      // 按层级处理关键词
+      Object.entries(hierarchicalKeywords).forEach(([level, data]) => {
+        if (data && typeof data === 'object' && data.terms && Array.isArray(data.terms)) {
+          data.terms.forEach((term: string) => {
+            if (term && typeof term === 'string' && term.trim()) {
+              newKeywords.push({
+                term: term.trim(),
+                level,
+                weight: typeof data.weight === 'number' ? data.weight : 1.0,
+                color: levelColors[level as keyof typeof levelColors] || '#6b7280'
+              });
+            }
+          });
+        } else {
+          console.warn(`⚠️ 关键词层级 ${level} 的数据格式异常:`, data);
+        }
+      });
 
-    setKeywords(newKeywords);
+      setKeywords(newKeywords);
+      console.log(`✅ 成功解析 ${newKeywords.length} 个关键词`);
+    } catch (error) {
+      console.error('❌ 解析关键词数据时出错:', error);
+      console.error('异常的关键词数据:', hierarchicalKeywords);
+      setKeywords([]); // 出错时清空关键词
+    }
   }, [hierarchicalKeywords]);
 
   // 添加自定义关键词

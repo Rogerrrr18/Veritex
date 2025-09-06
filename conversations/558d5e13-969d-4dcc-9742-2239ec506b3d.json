@@ -1,0 +1,20 @@
+{
+  "conversation_id": "558d5e13-969d-4dcc-9742-2239ec506b3d",
+  "messages": [
+    {
+      "role": "user",
+      "content": "机器学习在医疗诊断中的应用研究",
+      "timestamp": "2025-09-04 19:26:08.116507",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "机器学习在医疗诊断中的应用研究",
+    "created_at": "2025-09-04 19:26:08.115030",
+    "updated_at": "2025-09-04 19:26:08.116547",
+    "message_count": 1,
+    "last_activity": "2025-09-04 19:26:08.116518",
+    "tags": [],
+    "is_archived": false
+  }
+}

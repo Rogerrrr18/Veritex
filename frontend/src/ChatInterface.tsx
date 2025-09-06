@@ -179,8 +179,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const saveChatHistory = (messages: Message[], analysis: any = null) => {
     console.log('💬 保存聊天记录到用户隔离存储')
     UserStorage.setUserData(CHAT_STORAGE_KEY, JSON.stringify(messages));
-    if (analysis) {
-      UserStorage.setUserData(CHAT_ANALYSIS_KEY, JSON.stringify(analysis));
+    
+    // 🔧 优化：智能保存分析结果
+    const analysisToSave = analysis || currentAnalysis;
+    if (analysisToSave) {
+      UserStorage.setUserData(CHAT_ANALYSIS_KEY, JSON.stringify(analysisToSave));
+      console.log('📊 保存关键词分析结果');
     }
     
     // 保存完整对话会话到统一历史记录
@@ -191,13 +195,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const handleShowKeywords = (message: Message) => {
     const hk = message.hierarchicalKeywords 
       || message.searchMetadata?.analysisResult?.hierarchical_keywords 
+      || message.analysisResult?.hierarchical_keywords
       || null;
+    
     if (!hk) {
+      console.warn('⚠️ 未找到该消息的关键词数据');
       return;
     }
+    
     setCurrentAnalysis({ hierarchical_keywords: hk });
     setIsKeywordPanelCollapsed(false);
-    setKeywordPanelWidth((w) => (w < 300 ? 300 : w));
+    
+    // 🔧 优化：智能调整面板宽度，确保有足够空间显示关键词
+    setKeywordPanelWidth((currentWidth) => {
+      const minRequiredWidth = 320; // 显示关键词所需的最小宽度
+      return currentWidth < minRequiredWidth ? minRequiredWidth : currentWidth;
+    });
+    
+    console.log('📊 加载消息关键词到关键词云面板');
   };
 
   // 超过token阈值时的引导（4000 tokens）
@@ -453,7 +468,55 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     // 如果有保存的聊天记录，恢复它们
     if (savedMessages.length > 0) {
       setMessages(savedMessages);
-      setCurrentAnalysis(savedAnalysis);
+      
+      // 🔧 修复：智能恢复关键词扩展状态
+      if (savedAnalysis) {
+        // 如果有保存的分析结果，验证并使用
+        const validatedAnalysis = UserStorage.validateKeywordAnalysis(savedAnalysis);
+        if (validatedAnalysis) {
+          setCurrentAnalysis(validatedAnalysis);
+          console.log('📊 恢复保存的关键词分析结果');
+        } else {
+          console.warn('⚠️ 保存的分析结果数据异常，尝试从消息历史恢复');
+        }
+      } 
+      
+      // 如果没有有效的保存分析结果，从最后一条AI消息中恢复关键词扩展状态
+      if (!savedAnalysis || !UserStorage.validateKeywordAnalysis(savedAnalysis)) {
+        const lastMessageWithKeywords = savedMessages
+          .slice()
+          .reverse()
+          .find(m => !m.isUser && (
+            m.hierarchicalKeywords || 
+            m.searchMetadata?.analysisResult?.hierarchical_keywords ||
+            m.analysisResult?.hierarchical_keywords
+          ));
+        
+        if (lastMessageWithKeywords) {
+          const keywords = lastMessageWithKeywords.hierarchicalKeywords 
+            || lastMessageWithKeywords.searchMetadata?.analysisResult?.hierarchical_keywords
+            || lastMessageWithKeywords.analysisResult?.hierarchical_keywords;
+          
+          if (keywords) {
+            const validatedAnalysis = UserStorage.validateKeywordAnalysis({ hierarchical_keywords: keywords });
+            if (validatedAnalysis) {
+              setCurrentAnalysis(validatedAnalysis);
+              console.log('🔄 从消息历史恢复关键词扩展状态');
+            }
+          }
+        }
+      }
+      
+      // 如果有关键词数据，自动展开关键词面板
+      if (savedAnalysis?.hierarchical_keywords || 
+          savedMessages.some(m => !m.isUser && (
+            m.hierarchicalKeywords || 
+            m.searchMetadata?.analysisResult?.hierarchical_keywords ||
+            m.analysisResult?.hierarchical_keywords
+          ))) {
+        setIsKeywordPanelCollapsed(false);
+        console.log('📈 检测到关键词数据，自动展开关键词面板');
+      }
     } else {
       // 否则显示欢迎消息
       const welcomeMessage: Message = {
@@ -900,6 +963,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       if (analysisResult && analysisResult.hierarchical_keywords) {
         hierarchicalKeywords = analysisResult.hierarchical_keywords;
         setCurrentAnalysis(analysisResult);
+        
+        // 🔧 新增：如果有新的关键词扩展，自动展开关键词面板
+        if (isKeywordPanelCollapsed) {
+          setIsKeywordPanelCollapsed(false);
+          console.log('📈 检测到新的关键词扩展，自动展开关键词面板');
+        }
       }
 
       // 清理流式传输状态
@@ -1042,8 +1111,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           });
           
           // 保存分析结果以供关键词面板使用
-          if (response.hierarchical_keywords) {
+          if (response.analysis_result?.hierarchical_keywords) {
+            setCurrentAnalysis(response.analysis_result);
+            
+            // 🔧 新增：如果有新的关键词扩展，自动展开关键词面板
+            if (isKeywordPanelCollapsed) {
+              setIsKeywordPanelCollapsed(false);
+              console.log('📈 检测到新的关键词扩展，自动展开关键词面板');
+            }
+          } else if (response.hierarchical_keywords) {
             setCurrentAnalysis(response);
+            
+            // 🔧 新增：如果有新的关键词扩展，自动展开关键词面板
+            if (isKeywordPanelCollapsed) {
+              setIsKeywordPanelCollapsed(false);
+              console.log('📈 检测到新的关键词扩展，自动展开关键词面板');
+            }
           }
           
           const aiMessage: Message = {
@@ -1057,7 +1140,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           
           const finalMessages = [...newMessages, aiMessage];
           setMessages(finalMessages);
-          saveChatHistory(finalMessages, response);
+          saveChatHistory(finalMessages, response.analysis_result || response);
           
         } catch (error: any) {
           console.error('重新发送失败:', error);

@@ -1,0 +1,26 @@
+{
+  "conversation_id": "7ff4997f-cb19-49e9-b163-ad9c2acc4676",
+  "messages": [
+    {
+      "role": "user",
+      "content": "nihao",
+      "timestamp": "2025-09-04 19:51:16.040948",
+      "metadata": null
+    },
+    {
+      "role": "assistant",
+      "content": "你好呀！\n我是你的学术助手，很高兴能在这里帮到你~  \n作为学术小帮手，我可以陪你一起：  \n• **搜索文献**：快速定位你需要的学术资源，帮你梳理研究方向的关键文献  \n• **学术讨论**：无论是论文选题、实验设计还是理论疑问，都可以随时聊一聊  \n如果有具体的学术需求，比如想找某领域的文献，或者想讨论某个研究问题，随时告诉我哦~ 😊",
+      "timestamp": "2025-09-04 19:51:24.792420",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "nihao",
+    "created_at": "2025-09-04 19:51:16.040426",
+    "updated_at": "2025-09-04 19:51:24.792483",
+    "message_count": 2,
+    "last_activity": "2025-09-04 19:51:24.792431",
+    "tags": [],
+    "is_archived": false
+  }
+}

@@ -174,6 +174,48 @@ export class UserStorage {
       keys
     }
   }
+
+  /**
+   * 验证和清理关键词扩展数据
+   * @param analysis 分析结果对象
+   * @returns 清理后的分析结果或null
+   */
+  static validateKeywordAnalysis(analysis: any): any | null {
+    if (!analysis || typeof analysis !== 'object') {
+      console.warn('⚠️ 分析结果数据格式异常');
+      return null;
+    }
+
+    // 检查hierarchical_keywords结构
+    if (analysis.hierarchical_keywords && typeof analysis.hierarchical_keywords === 'object') {
+      const validLevels = ['exact_terms', 'core_synonyms', 'related_terms', 'context_terms'];
+      let hasValidKeywords = false;
+
+      for (const level of validLevels) {
+        const levelData = analysis.hierarchical_keywords[level];
+        if (levelData && Array.isArray(levelData.terms) && levelData.terms.length > 0) {
+          // 过滤掉空字符串和非字符串项
+          levelData.terms = levelData.terms.filter(term => 
+            typeof term === 'string' && term.trim().length > 0
+          );
+          
+          if (levelData.terms.length > 0) {
+            hasValidKeywords = true;
+          }
+        }
+      }
+
+      if (!hasValidKeywords) {
+        console.warn('⚠️ 未找到有效的关键词数据');
+        return null;
+      }
+
+      console.log('✅ 关键词数据验证通过');
+      return analysis;
+    }
+
+    return null;
+  }
 }
 
 /**
