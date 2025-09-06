@@ -7,57 +7,68 @@ export interface RegisterResult {
   error?: string;
 }
 
-function ensureUserId(): string {
-  const existing = localStorage.getItem('user_id');
-  if (existing) return existing;
-  const newId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  localStorage.setItem('user_id', newId);
-  return newId;
-}
-
-// 邀请码注册 - 优先使用Supabase验证，失败时降级到本地验证
+// 邀请码注册 - 完全基于Supabase验证，确保内测码与用户ID一对一映射
 export async function registerUser(inviteCode: string): Promise<RegisterResult> {
-  console.log('开始验证内测码:', inviteCode);
+  console.log('🔐 [Auth] 开始验证内测码:', inviteCode);
   
   if (!inviteCode || inviteCode.trim().length === 0) {
     return { success: false, error: '请输入内测码' };
   }
 
-  const trimmedCode = inviteCode.trim();
-  console.log('处理后的内测码:', trimmedCode);
+  const trimmedCode = inviteCode.trim().toUpperCase();
+  console.log('🔤 [Auth] 处理后的内测码:', trimmedCode);
+
+  // 验证内测码格式 - 必须是6位英文字母
+  if (!/^[A-Z]{6}$/.test(trimmedCode)) {
+    return { 
+      success: false, 
+      error: '内测码格式不正确，请输入6位英文字母' 
+    };
+  }
 
   try {
-    // 尝试通过Supabase验证内测码
-    console.log('开始Supabase验证...');
+    // 通过Supabase验证内测码并获取或创建用户
+    console.log('📡 [Auth] 开始Supabase验证...');
     const supabaseResult = await createUserWithInviteCode(trimmedCode);
-    console.log('Supabase验证结果:', supabaseResult);
+    console.log('✅ [Auth] Supabase验证结果:', supabaseResult.success ? '成功' : '失败');
     
     if (supabaseResult.success && supabaseResult.userData) {
       // Supabase验证成功，保存用户信息
-      console.log('Supabase验证成功，保存用户信息:', supabaseResult.userData.id);
-      localStorage.setItem('user_id', supabaseResult.userData.id);
+      const userId = supabaseResult.userData.id;
+      console.log('💾 [Auth] 保存用户信息到本地存储:', userId);
+      
+      localStorage.setItem('user_id', userId);
+      localStorage.setItem('invite_code', trimmedCode);
       localStorage.setItem('invite_logged_in', '1');
+      
       return { 
         success: true, 
-        userData: { id: supabaseResult.userData.id } 
+        userData: { id: userId } 
       };
     } else {
       // Supabase验证失败，返回具体错误
-      console.log('Supabase验证失败:', supabaseResult.message);
+      console.warn('❌ [Auth] Supabase验证失败:', supabaseResult.message);
       return { 
         success: false, 
         error: supabaseResult.message || '内测码验证失败' 
       };
     }
   } catch (error) {
-    console.error('Supabase验证出现异常:', error);
+    console.error('💥 [Auth] Supabase验证出现异常:', error);
     
     // 检查是否是网络错误
     if (error instanceof Error) {
       if (error.message.includes('Failed to fetch') || error.message.includes('Network')) {
         return { 
           success: false, 
-          error: '网络连接失败，请检查网络连接或稍后重试' 
+          error: '网络连接失败，请检查网络连接后重试' 
+        };
+      }
+      
+      if (error.message.includes('CORS')) {
+        return { 
+          success: false, 
+          error: 'Supabase连接配置错误，请联系管理员' 
         };
       }
       
@@ -67,15 +78,35 @@ export async function registerUser(inviteCode: string): Promise<RegisterResult> 
       };
     }
     
-    // 降级到本地验证逻辑（仅作为最后手段）
-    console.warn('降级到本地验证模式');
-    ensureUserId();
-    
+    // 不再提供本地降级模式，确保数据完整性
     return { 
       success: false, 
       error: '内测码验证系统暂时不可用，请稍后重试' 
     };
   }
+}
+
+/**
+ * 检查本地是否有有效的登录状态
+ */
+export function getStoredUserId(): string | null {
+  const userId = localStorage.getItem('user_id');
+  const isLoggedIn = localStorage.getItem('invite_logged_in');
+  
+  if (userId && isLoggedIn === '1') {
+    return userId;
+  }
+  
+  return null;
+}
+
+/**
+ * 清除本地登录状态
+ */
+export function clearStoredAuth(): void {
+  localStorage.removeItem('user_id');
+  localStorage.removeItem('invite_code');
+  localStorage.removeItem('invite_logged_in');
 }
 
 // 用户行为日志 - 优先使用Supabase，失败时降级到后端API

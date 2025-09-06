@@ -69,7 +69,88 @@ export async function validateInviteCode(code: string): Promise<{
 }
 
 /**
- * 使用内测码创建用户
+ * 基于内测码生成固定的用户ID
+ * 确保同一内测码始终对应同一用户ID
+ */
+function generateUserIdFromInviteCode(inviteCode: string): string {
+  // 使用base64编码内测码，然后截取前8位作为hash
+  const hash = btoa(inviteCode).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)
+  const suffix = inviteCode.slice(-4)
+  return `user_${hash}_${suffix}`
+}
+
+/**
+ * 检查内测码是否已有对应的用户
+ */
+export async function getUserByInviteCode(code: string): Promise<{
+  success: boolean
+  message?: string
+  userData?: UserData
+  exists: boolean
+}> {
+  try {
+    // 从内测码表获取预设的用户ID
+    const { data: inviteData, error: inviteError } = await supabase
+      .from('invite_codes')
+      .select('user_id, used, used_at')
+      .eq('code', code)
+      .single()
+
+    if (inviteError || !inviteData) {
+      return {
+        success: false,
+        message: '内测码无效',
+        exists: false
+      }
+    }
+
+    const fixedUserId = inviteData.user_id
+
+    // 检查用户是否已存在
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', fixedUserId)
+      .single()
+
+    if (userError && userError.code !== 'PGRST116') {
+      console.error('查询用户失败:', userError)
+      return {
+        success: false,
+        message: '查询用户失败',
+        exists: false
+      }
+    }
+
+    if (userData) {
+      // 用户已存在，直接返回
+      return {
+        success: true,
+        message: '欢迎回来！',
+        userData: userData,
+        exists: true
+      }
+    } else {
+      // 用户不存在，返回需要创建
+      return {
+        success: true,
+        message: '内测码有效',
+        exists: false
+      }
+    }
+  } catch (error) {
+    console.error('检查用户存在性错误:', error)
+    return {
+      success: false,
+      message: '检查失败，请稍后重试',
+      exists: false
+    }
+  }
+}
+
+/**
+ * 使用内测码创建用户或登录现有用户
+ * 🔧 修复：确保一个内测码对应一个固定的用户ID
  */
 export async function createUserWithInviteCode(code: string): Promise<{
   success: boolean
@@ -77,20 +158,55 @@ export async function createUserWithInviteCode(code: string): Promise<{
   userData?: UserData
 }> {
   try {
-    // 首先验证内测码
-    const validation = await validateInviteCode(code)
-    if (!validation.success || !validation.codeData) {
-      return validation
+    console.log('🔐 [Supabase] 开始处理内测码:', code)
+
+    // 首先检查用户是否已存在
+    const userCheck = await getUserByInviteCode(code)
+    if (!userCheck.success) {
+      return userCheck
     }
 
-    // 生成用户ID
-    const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+    if (userCheck.exists && userCheck.userData) {
+      // 用户已存在，直接返回
+      console.log('✅ [Supabase] 用户已存在，直接登录:', userCheck.userData.id)
+      return {
+        success: true,
+        message: '欢迎回来！',
+        userData: userCheck.userData
+      }
+    }
 
-    // 开始事务：创建用户并标记内测码为已使用
+    // 用户不存在，需要创建新用户
+    console.log('🆕 [Supabase] 需要创建新用户')
+
+    // 从内测码表获取预设的用户ID
+    const { data: inviteData, error: inviteError } = await supabase
+      .from('invite_codes')
+      .select('user_id, used')
+      .eq('code', code)
+      .single()
+
+    if (inviteError || !inviteData) {
+      console.error('❌ [Supabase] 获取内测码信息失败:', inviteError)
+      return {
+        success: false,
+        message: '内测码无效'
+      }
+    }
+
+    if (inviteData.used) {
+      // 内测码已被使用，但用户不存在，这是异常情况
+      console.warn('⚠️ [Supabase] 内测码已被使用但用户不存在，尝试恢复')
+    }
+
+    const fixedUserId = inviteData.user_id
+    console.log('🆔 [Supabase] 使用固定用户ID:', fixedUserId)
+
+    // 创建用户
     const { data: userData, error: userError } = await supabase
       .from('users')
       .insert({
-        id: userId,
+        id: fixedUserId,
         invite_code: code,
         created_at: new Date().toISOString()
       })
@@ -98,7 +214,26 @@ export async function createUserWithInviteCode(code: string): Promise<{
       .single()
 
     if (userError) {
-      console.error('创建用户失败:', userError)
+      console.error('❌ [Supabase] 创建用户失败:', userError)
+      
+      // 如果是重复键错误，说明用户已存在，直接查询返回
+      if (userError.code === '23505') {
+        const { data: existingUser, error: queryError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', fixedUserId)
+          .single()
+
+        if (existingUser && !queryError) {
+          console.log('✅ [Supabase] 用户已存在，返回现有用户:', existingUser.id)
+          return {
+            success: true,
+            message: '欢迎回来！',
+            userData: existingUser
+          }
+        }
+      }
+
       return {
         success: false,
         message: '创建用户失败'
@@ -110,26 +245,26 @@ export async function createUserWithInviteCode(code: string): Promise<{
       .from('invite_codes')
       .update({
         used: true,
-        used_at: new Date().toISOString(),
-        user_id: userId
+        used_at: new Date().toISOString()
       })
       .eq('code', code)
 
     if (updateError) {
-      console.error('更新内测码状态失败:', updateError)
-      // 这里可以考虑回滚用户创建，但为了简单起见先忽略
+      console.error('⚠️ [Supabase] 更新内测码状态失败:', updateError)
+      // 不影响用户创建成功
     }
 
+    console.log('✅ [Supabase] 用户创建成功:', userData.id)
     return {
       success: true,
       message: '注册成功！',
       userData: userData
     }
   } catch (error) {
-    console.error('注册用户错误:', error)
+    console.error('❌ [Supabase] 处理内测码错误:', error)
     return {
       success: false,
-      message: '注册失败，请稍后重试'
+      message: '处理失败，请稍后重试'
     }
   }
 }
