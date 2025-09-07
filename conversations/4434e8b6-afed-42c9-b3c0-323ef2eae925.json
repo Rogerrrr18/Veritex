@@ -1,0 +1,20 @@
+{
+  "conversation_id": "4434e8b6-afed-42c9-b3c0-323ef2eae925",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你知道为什么光热甲烷那干重整催化技术目前还没有工业化嘛？",
+      "timestamp": "2025-09-07 09:55:34.131890",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "你知道为什么光热甲烷那干重整催化技术目前还没有工业化嘛？",
+    "created_at": "2025-09-07 09:55:34.131128",
+    "updated_at": "2025-09-07 09:55:34.131923",
+    "message_count": 1,
+    "last_activity": "2025-09-07 09:55:34.131898",
+    "tags": [],
+    "is_archived": false
+  }
+}

@@ -1157,11 +1157,11 @@ class IntelligentPaperSearchAgent:
                     analysis=analysis
                 )
             elif hasattr(search_engine, 'search_parallel'):
-                # 传递analysis参数
-                papers = await search_engine.search_parallel(search_query, max_results, analysis=analysis)
+                # 传递年限参数和analysis参数
+                papers = await search_engine.search_parallel(search_query, max_results, analysis=analysis, year_from=year_from, year_to=year_to)
             else:
-                # 兜底：使用基础搜索接口
-                search_result = await search_engine.search_parallel(search_query, max_results, analysis=analysis)
+                # 兜底：使用基础搜索接口（传递年限参数）
+                search_result = await search_engine.search_parallel(search_query, max_results, analysis=analysis, year_from=year_from, year_to=year_to)
                 papers = search_result if isinstance(search_result, list) else search_result.get('papers', [])
             print(f"搜索完成，找到 {len(papers)} 篇论文")
             

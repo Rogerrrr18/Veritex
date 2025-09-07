@@ -223,15 +223,40 @@ class ArxivAPI:
             self.session = aiohttp.ClientSession()
         return self.session
         
-    async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """搜索arXiv预印本"""
+    async def search(self, query: str, limit: int = 20, start_year: Optional[int] = None, end_year: Optional[int] = None) -> List[Paper]:
+        """搜索arXiv预印本，支持年限筛选"""
         try:
             logger.debug(f"🔍 arXiv搜索开始: {query}")
             session = await self._get_session()
             
-            # 优化查询格式：直接使用query，去掉all:前缀
+            # 构建搜索查询，包含年限筛选
+            search_query = query
+            if start_year is not None or end_year is not None:
+                # 使用arXiv的submittedDate参数进行年限筛选
+                # 格式: submittedDate:[YYYYMMDDHHMISS TO YYYYMMDDHHMISS]
+                from datetime import datetime
+                
+                if start_year is not None:
+                    start_date = f"{start_year}0101000000"
+                else:
+                    start_date = "19910101000000"  # arXiv启动年份
+                    
+                if end_year is not None:
+                    end_date = f"{end_year}1231235959"
+                else:
+                    current_year = datetime.now().year
+                    end_date = f"{current_year}1231235959"
+                
+                # 将年限筛选添加到查询中
+                date_filter = f" AND submittedDate:[{start_date} TO {end_date}]"
+                search_query = query + date_filter
+                
+                logger.info(f"🗓️ arXiv启用年限筛选: {start_year}-{end_year}")
+                logger.debug(f"📋 arXiv年限筛选查询: {search_query}")
+            
+            # 优化查询格式：直接使用search_query
             params = {
-                'search_query': query,
+                'search_query': search_query,
                 'start': 0,
                 'max_results': limit,
                 'sortBy': 'relevance',
@@ -710,14 +735,17 @@ class ScholarDockAPI:
         self.spider = None
         logger.info("🚀 ScholarDock API初始化")
     
-    async def search(self, query: str, limit: int = 20) -> List[Paper]:
-        """使用ScholarDock技术搜索Google Scholar"""
+    async def search(self, query: str, limit: int = 20, start_year: Optional[int] = None, end_year: Optional[int] = None) -> List[Paper]:
+        """使用ScholarDock技术搜索Google Scholar，支持年限筛选"""
         try:
-            logger.info(f"🔍 ScholarDock开始搜索: {query}")
+            if start_year is not None or end_year is not None:
+                logger.info(f"🔍 ScholarDock开始搜索: {query} (年限: {start_year}-{end_year})")
+            else:
+                logger.info(f"🔍 ScholarDock开始搜索: {query}")
             
-            # 创建并使用ScholarDock爬虫
+            # 创建并使用ScholarDock爬虫，传递年限参数
             async with ScholarDockSpider() as spider:
-                scholar_papers = await spider.search(query, limit)
+                scholar_papers = await spider.search(query, limit, start_year=start_year, end_year=end_year)
             
             # 转换为标准Paper对象
             papers = []
@@ -1062,9 +1090,9 @@ class MultiSourceEngine:
         if disabled_sources:
             logger.info(f"🔴 禁用数据源 ({len(disabled_sources)}): {', '.join(disabled_sources)}")
     
-    async def search_parallel(self, query: str, max_results: int = 20, analysis: Optional[Dict] = None) -> List[Paper]:
-        """并行搜索多个数据源（支持统一布尔查询）"""
-        return await self.search_parallel_with_filters(query, max_results, analysis=analysis)
+    async def search_parallel(self, query: str, max_results: int = 20, analysis: Optional[Dict] = None, year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[Paper]:
+        """并行搜索多个数据源（支持统一布尔查询和年限筛选）"""
+        return await self.search_parallel_with_filters(query, max_results, year_from=year_from, year_to=year_to, analysis=analysis)
     
     def _build_unified_boolean_query(self, query: str, analysis: Optional[Dict] = None, use_fallback: bool = False) -> Dict[str, str]:
         """构建统一的4层权重映射布尔查询，适配不同搜索源"""
@@ -1400,9 +1428,32 @@ class MultiSourceEngine:
             source_query = unified_queries.get(source_name, query)
             logger.debug(f"{source_name}使用查询: {source_query}")
             
-            task = asyncio.create_task(
-                asyncio.wait_for(source_api.search(source_query, source_limit), timeout=source_timeout)
-            )
+            # 🔧 修复：根据不同搜索源传递年限参数
+            if source_name == 'scholar_dock' and hasattr(source_api, 'search'):
+                # ScholarDock支持年限筛选参数
+                if year_from is not None or year_to is not None:
+                    logger.info(f"🗓️ ScholarDock启用年限筛选: {year_from}-{year_to}")
+                task = asyncio.create_task(
+                    asyncio.wait_for(
+                        source_api.search(source_query, source_limit, start_year=year_from, end_year=year_to), 
+                        timeout=source_timeout
+                    )
+                )
+            elif source_name == 'arxiv' and hasattr(source_api, 'search'):
+                # arXiv支持年限筛选参数
+                if year_from is not None or year_to is not None:
+                    logger.info(f"🗓️ arXiv启用年限筛选: {year_from}-{year_to}")
+                task = asyncio.create_task(
+                    asyncio.wait_for(
+                        source_api.search(source_query, source_limit, start_year=year_from, end_year=year_to), 
+                        timeout=source_timeout
+                    )
+                )
+            else:
+                # 其他搜索源暂时保持原有调用方式
+                task = asyncio.create_task(
+                    asyncio.wait_for(source_api.search(source_query, source_limit), timeout=source_timeout)
+                )
             tasks.append(task)
         
         # 执行搜索
@@ -1503,12 +1554,32 @@ class MultiSourceEngine:
                             compensation_source_names.append(source_name)
                             # 补偿搜索也使用统一的布尔查询
                             source_query = unified_queries.get(source_name, query)
-                            task = asyncio.create_task(
-                                asyncio.wait_for(
-                                    source_api.search(source_query, compensation_per_source), 
-                                    timeout=source_timeout
+                            
+                            # 🔧 修复：补偿搜索中也支持年限参数
+                            if source_name == 'scholar_dock' and hasattr(source_api, 'search'):
+                                # ScholarDock补偿搜索支持年限筛选参数
+                                task = asyncio.create_task(
+                                    asyncio.wait_for(
+                                        source_api.search(source_query, compensation_per_source, start_year=year_from, end_year=year_to), 
+                                        timeout=source_timeout
+                                    )
                                 )
-                            )
+                            elif source_name == 'arxiv' and hasattr(source_api, 'search'):
+                                # arXiv补偿搜索支持年限筛选参数
+                                task = asyncio.create_task(
+                                    asyncio.wait_for(
+                                        source_api.search(source_query, compensation_per_source, start_year=year_from, end_year=year_to), 
+                                        timeout=source_timeout
+                                    )
+                                )
+                            else:
+                                # 其他搜索源保持原有调用方式
+                                task = asyncio.create_task(
+                                    asyncio.wait_for(
+                                        source_api.search(source_query, compensation_per_source), 
+                                        timeout=source_timeout
+                                    )
+                                )
                             compensation_tasks.append(task)
                             logger.debug(f"📈 {source_name}补偿搜索：额外{compensation_per_source}篇")
                 
@@ -1692,9 +1763,28 @@ class MultiSourceEngine:
                 fallback_query = fallback_unified_queries.get(source_name, original_query)
                 
                 logger.debug(f"🔍 {source_name}补充搜索: {fallback_query}")
-                task = asyncio.create_task(
-                    asyncio.wait_for(source_api.search(fallback_query, per_source_limit), timeout=timeout)
-                )
+                # 🔧 修复：fallback搜索中也支持年限参数
+                if source_name == 'scholar_dock' and hasattr(source_api, 'search'):
+                    # ScholarDock补充搜索支持年限筛选参数
+                    task = asyncio.create_task(
+                        asyncio.wait_for(
+                            source_api.search(fallback_query, per_source_limit, start_year=year_from, end_year=year_to), 
+                            timeout=timeout
+                        )
+                    )
+                elif source_name == 'arxiv' and hasattr(source_api, 'search'):
+                    # arXiv补充搜索支持年限筛选参数
+                    task = asyncio.create_task(
+                        asyncio.wait_for(
+                            source_api.search(fallback_query, per_source_limit, start_year=year_from, end_year=year_to), 
+                            timeout=timeout
+                        )
+                    )
+                else:
+                    # 其他搜索源保持原有调用方式
+                    task = asyncio.create_task(
+                        asyncio.wait_for(source_api.search(fallback_query, per_source_limit), timeout=timeout)
+                    )
                 fallback_tasks.append(task)
             
             # 执行并收集结果
