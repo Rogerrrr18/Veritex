@@ -25,7 +25,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 # prompt_manager已删除，使用简化的prompt_utils
-from llm_intent_classifier import get_intent_classifier
+# 移除意图分类器导入 - 改为直接模式路由
 
 from llm_interface import get_llm_for_langgraph
 from langchain_workflows.state_schemas import PaperSearchState, create_initial_state
@@ -33,7 +33,7 @@ from langchain_workflows.state_schemas import PaperSearchState, create_initial_s
 class IntelligentPaperSearchAgent:
     """
     智能学术搜索Agent - 集成现有多源搜索引擎
-    工作流：START → 意图分析 → 关键词扩展 → 搜索执行 → 结果处理 → END
+    工作流：START → 模式路由 → 关键词扩展 → 搜索执行 → 结果处理 → END
     """
     
     def __init__(self, enable_memory: bool = True):
@@ -45,9 +45,8 @@ class IntelligentPaperSearchAgent:
         # 使用统一LLM接口
         self.llm = get_llm_for_langgraph()
         
-        # 使用优化的LLM意图分类器
-        self.intent_classifier = get_intent_classifier()
-        logger.info("🚀 [工作流] 智能Agent初始化完成")
+        # 移除意图分类器 - 改为直接模式路由
+        logger.info("🚀 [工作流] 智能Agent初始化完成（模式直接路由）")
         
         self.checkpointer = MemorySaver() if enable_memory else None
         self.graph = self._build_graph()
@@ -85,10 +84,7 @@ class IntelligentPaperSearchAgent:
         """构建LangGraph工作流"""
         workflow = StateGraph(PaperSearchState)
         
-        # 添加核心节点
-        workflow.add_node("intent_analysis", self.intent_analysis_node)
-        
-        # 三个意图专门处理节点
+        # 添加核心节点（移除意图分析节点）
         workflow.add_node("chat_conversation", self.chat_conversation_node)
         workflow.add_node("literature_search", self.literature_search_node) 
         workflow.add_node("academic_discussion", self.academic_discussion_node)
@@ -97,13 +93,10 @@ class IntelligentPaperSearchAgent:
         workflow.add_node("search_execution", self.search_execution_node)
         workflow.add_node("result_formatting", self.result_formatting_node)
         
-        # 定义流程路径
-        workflow.add_edge(START, "intent_analysis")
-        
-        # 根据意图分析结果分发到对应节点
+        # 定义流程路径 - 直接从START根据用户模式路由
         workflow.add_conditional_edges(
-            "intent_analysis",
-            self.route_by_intent,
+            START,
+            self.route_by_mode,
             {
                 "chat_conversation": "chat_conversation",
                 "literature_search": "literature_search", 
@@ -139,65 +132,58 @@ class IntelligentPaperSearchAgent:
         
         return workflow.compile(checkpointer=self.checkpointer)
     
-    async def intent_analysis_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """意图分析节点 - Embedding + LLM精排版本"""
-        try:
-            query = state.get("query", "")
-            user_message = state.get("messages", [])[-1].content if state.get("messages") else query
-            
-            print(f"开始分析用户请求: {user_message}")
-            
-            # 使用Embedding + LLM精排分类器
-            intent_result = await self.intent_classifier.classify_intent(user_message)
-            print(f"意图分类结果: {intent_result.intent} (置信度: {intent_result.confidence:.3f})")
-            
-            # 将意图结果保存到state中供后续节点使用
-            return {
-                "current_step": "intent_analyzed",
-                "is_completed": False,
-                "intent_result": {
-                    "intent": intent_result.intent,
-                    "confidence": float(intent_result.confidence),  # 转换为Python float
-                    "method": intent_result.method,
-                    "reasoning": intent_result.reasoning or ""
-                },
-                "analysis_result": None,
-                "is_academic_query": intent_result.intent in ["查文献", "学术探讨"],
-                "need_search_strategy": intent_result.intent == "查文献"
-            }
-                
-        except Exception as e:
-            error_msg = f"意图分析失败: {str(e)}"
-            print(f"错误: {error_msg}")
-            # 局部导入AIMessage
-            from langchain_core.messages import AIMessage
-            return {
-                "error_message": error_msg,
-                "current_step": "failed",
-                "is_completed": False,
-                "messages": [AIMessage(content=f"系统错误：{error_msg}")]
-            }
-    
-    def route_by_intent(self, state: PaperSearchState) -> str:
-        """根据意图分析结果路由到对应的处理节点"""
-        intent_result = state.get("intent_result")
+    def route_by_mode(self, state: PaperSearchState) -> str:
+        """直接根据用户模式选择路由，移除复杂的意图分析"""
+        mode = state.get("mode", "auto-search")
+        user_message = state.get("user_message", "")
         
-        if not intent_result:
-            print("未找到意图分析结果，默认进入对话模式")
+        print(f"模式路由：mode={mode}, message={user_message[:40]}...")
+        
+        # 快速闲聊预筛选（保留现有逻辑，避免浪费资源）
+        quick_intent = self._quick_chat_filter(user_message)
+        if quick_intent == "闲聊":
+            print("快速识别为闲聊，路由到对话节点")
             return "chat_conversation"
         
-        intent = intent_result.get("intent", "闲聊")
-        print(f"路由决策：意图 '{intent}' → 对应处理节点")
-        
-        if intent == "闲聊":
-            return "chat_conversation"
-        elif intent == "查文献":
+        # 直接根据用户选择的模式路由
+        if mode == "auto-search":
+            print("Auto-search模式 → 直接进入文献搜索")
             return "literature_search"
-        elif intent == "学术探讨":
+        else:  # chat&plan 模式
+            print("Chat&Plan模式 → 直接进入学术探讨")
             return "academic_discussion"
-        else:
-            print(f"未知意图 '{intent}'，默认进入对话模式")
-            return "chat_conversation"
+    
+    def _quick_chat_filter(self, message: str) -> Optional[str]:
+        """快速闲聊预筛选 - 避免明显的闲聊进入复杂工作流"""
+        message_lower = message.lower().strip()
+        
+        # 明显的问候语和感谢语
+        greeting_patterns = [
+            "你好", "hello", "hi", "嗨", "哈喽",
+            "谢谢", "thank", "感谢",
+            "再见", "bye", "拜拜", "88",
+            "早上好", "下午好", "晚上好", "晚安"
+        ]
+        
+        # 明显的系统使用咨询
+        system_patterns = [
+            "怎么用", "如何使用", "使用方法", "操作指南",
+            "这是什么", "你是谁", "什么功能", "能做什么"
+        ]
+        
+        # 短消息通常是闲聊
+        if len(message.strip()) <= 10:
+            for pattern in greeting_patterns:
+                if pattern in message_lower:
+                    return "闲聊"
+        
+        # 检查各种闲聊模式
+        all_casual_patterns = greeting_patterns + system_patterns
+        for pattern in all_casual_patterns:
+            if pattern in message_lower:
+                return "闲聊"
+        
+        return None  # 无法快速判断为闲聊
     
     async def chat_conversation_node(self, state: PaperSearchState) -> Dict[str, Any]:
         """优化的闲聊对话处理节点 - 减少LLM调用"""
@@ -1596,7 +1582,7 @@ class IntelligentPaperSearchAgent:
             
             print(f"保持原有学术分析内容，搜索到 {len(search_results)} 个结果")
             
-            # 🔑 重要修改：不覆盖intent_analysis_node生成的详细学术指导
+            # 🔑 重要修改：保持原有的详细学术指导内容
             # 保持原有的详细分析内容，让用户看到完整的专业解读
             existing_messages = state.get("messages", [])
             if existing_messages:
