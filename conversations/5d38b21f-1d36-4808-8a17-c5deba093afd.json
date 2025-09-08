@@ -1,0 +1,20 @@
+{
+  "conversation_id": "5d38b21f-1d36-4808-8a17-c5deba093afd",
+  "messages": [
+    {
+      "role": "user",
+      "content": "我想了解关于机器学习的研究",
+      "timestamp": "2025-09-07 21:54:43.823772",
+      "metadata": null
+    }
+  ],
+  "metadata": {
+    "title": "我想了解关于机器学习的研究",
+    "created_at": "2025-09-07 21:54:43.821251",
+    "updated_at": "2025-09-07 21:54:43.823820",
+    "message_count": 1,
+    "last_activity": "2025-09-07 21:54:43.823785",
+    "tags": [],
+    "is_archived": false
+  }
+}

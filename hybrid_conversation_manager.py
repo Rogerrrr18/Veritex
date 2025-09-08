@@ -66,9 +66,9 @@ class HybridConversationManager:
             # 初始化Supabase同步
             if self.enable_supabase:
                 try:
-                    self._sync_manager = get_sync_manager()
+                    self._sync_manager = await get_sync_manager()
                     # 测试云端连接
-                    if await self._sync_manager.check_cloud_connection():
+                    if self._sync_manager.is_available:
                         logger.info("Supabase云端同步初始化完成")
                     else:
                         logger.warning("Supabase连接测试失败，将使用本地模式")
@@ -122,7 +122,7 @@ class HybridConversationManager:
             
             # 同步到云端（如果启用）
             if self.enable_supabase and self._sync_manager:
-                asyncio.create_task(self._sync_manager.sync_conversation_to_cloud(conversation, user_id))
+                asyncio.create_task(self._sync_manager.save_conversation(conversation, user_id))
             
             logger.debug(f"对话创建成功: {conversation_id} (用户: {user_id})")
             return conversation
@@ -146,7 +146,7 @@ class HybridConversationManager:
             
             # 第二层：Supabase云端存储
             if self.enable_supabase and self._sync_manager:
-                conversation = await self._sync_manager.fetch_conversation_from_cloud(conversation_id, user_id)
+                conversation = await self._sync_manager.load_conversation(conversation_id, user_id)
                 if conversation:
                     self.stats['cache_hits']['cloud'] += 1
                     # 回写到本地缓存层
@@ -226,7 +226,7 @@ class HybridConversationManager:
             # 🔧 修复：确保Supabase同步始终被触发
             if self.enable_supabase and self._sync_manager:
                 logger.debug(f"🚀 [Supabase] 开始同步对话: {conversation.conversation_id[:8]}...")
-                task = self._sync_manager.sync_conversation_to_cloud(conversation, user_id)
+                task = self._sync_manager.save_conversation(conversation, user_id)
                 tasks.append(task)
                 task_names.append("Supabase同步")
             
@@ -273,7 +273,7 @@ class HybridConversationManager:
             # 优先从云端获取最新数据
             if self.enable_supabase and self._sync_manager:
                 try:
-                    summaries = await self._sync_manager.list_cloud_conversations(
+                    summaries = await self._sync_manager.list_conversations(
                         user_id=user_id,
                         limit=limit,
                         offset=offset
@@ -334,7 +334,7 @@ class HybridConversationManager:
             
             # 云端删除
             if self.enable_supabase and self._sync_manager:
-                tasks.append(self._sync_manager.delete_conversation_from_cloud(conversation_id, user_id))
+                tasks.append(self._sync_manager.delete_conversation(conversation_id, user_id))
             
             # JSON备用删除
             if self.fallback_to_json and self._json_manager:

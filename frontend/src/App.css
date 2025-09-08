@@ -1765,7 +1765,98 @@ body[data-theme='dark'] {
   }
 }
 
+/* ==================== Markdown列表修复样式 - 终极版本 ==================== */
+
+/* 使用最高优先级选择器强制Markdown列表项正确分行显示 */
+div.markdown-container ul,
+div.markdown-container ol,
+.markdown-container ul,
+.markdown-container ol {
+  display: block !important;
+  margin-bottom: 10px !important;
+  margin-top: 8px !important;
+  padding-left: 24px !important;
+  list-style-position: outside !important;
+  overflow: visible !important;
+}
+
+div.markdown-container ul {
+  list-style-type: disc !important;
+}
+
+div.markdown-container ol {
+  list-style-type: decimal !important;
+}
+
+/* 超高优先级列表项样式 */
+div.markdown-container li,
+.markdown-container li,
+div[class*="markdown"] li,
+[class*="markdown"] li {
+  display: list-item !important;
+  margin-bottom: 4px !important;
+  margin-top: 2px !important;
+  line-height: 1.6 !important;
+  clear: both !important;
+  width: 100% !important;
+  min-height: 1.6em !important;
+  word-wrap: break-word !important;
+  white-space: normal !important;
+  list-style: inherit !important;
+  padding-left: 4px !important;
+  float: none !important;
+  position: static !important;
+  box-sizing: border-box !important;
+}
+
+/* 确保列表项内容不会合并 - 使用伪元素强制换行 */
+div.markdown-container li:before,
+.markdown-container li:before {
+  content: '' !important;
+  display: none !important;
+}
+
+div.markdown-container li:after,
+.markdown-container li:after {
+  content: '' !important;
+  display: block !important;
+  clear: both !important;
+  height: 0 !important;
+  width: 100% !important;
+}
+
+/* 针对ReactMarkdown特定的样式重写 */
+div[style*="position: relative"] ul li,
+div[style*="overflow: visible"] ul li {
+  display: list-item !important;
+  margin-bottom: 8px !important;
+  width: auto !important;
+}
+
+/* 覆盖可能的全局重置样式 */
+* ul li,
+* ol li {
+  list-style: inherit;
+}
+
+.markdown-container * ul li,
+.markdown-container * ol li {
+  display: list-item !important;
+  margin: 4px 0 8px 0 !important;
+}
+
 /* ==================== 聊天界面样式 ==================== */
+
+/* 二级标题：比一级标题略向右缩进，且无项目符号 */
+.markdown-container h1 {
+  margin-left: 0 !important;
+}
+.markdown-container h2 {
+  margin-left: 12px !important; /* 位置保持不变 */
+  font-weight: 700 !important;
+  font-size: 14px !important; /* 比 h1 小一号 */
+  margin-bottom: 8px !important; /* 与段落一致的下间距 */
+}
 
 /* 打字指示器动画 */
 .typing-indicator {

@@ -4,6 +4,72 @@ import ReactMarkdown from 'react-markdown';
 import { apiCall, API_CONFIG } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
 import TokenProgress from './components/TokenProgress';
+// 统一把来自上游的“• ”行首圆点转换为 Markdown 列表，以避免被当作普通段落合并
+function preprocessMarkdown(input: string): string {
+  if (!input) return input;
+
+  const lines = input.split(/\r?\n/);
+  const out: string[] = [];
+  let inBulletBlock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const isBullet = /^\s*•\s+/.test(raw);
+
+    // 0) 直接把“• 标题：”或“• **标题：**”这一类行视为二级标题
+    if (isBullet) {
+      const dotHeadingBold = /^\s*•\s+\*\*(.*?)\*\*：\s*$/.exec(raw);
+      const dotHeadingPlain = /^\s*•\s+(.*?)：\s*$/.exec(raw);
+      const dotHeading = dotHeadingBold ? dotHeadingBold[1] : (dotHeadingPlain ? dotHeadingPlain[1] : null);
+      if (dotHeading) {
+        if (out.length > 0 && out[out.length - 1].trim() !== '') out.push('');
+        out.push(`## ${dotHeading}`);
+        out.push('');
+        inBulletBlock = false;
+        continue;
+      }
+    }
+
+    // 1) 将以 "- 标题：" 或 "- **标题：**" 组成的“列表标题行”转换为 H2
+    const mdDashBullet = /^\s*-\s+(.*)$/; // 规范 markdown 列表
+    if (mdDashBullet.test(raw)) {
+      const content = raw.replace(/^\s*-\s+/, '').trim();
+      const headingMatchPlain = /^(.*?)：\s*$/.exec(content);
+      const headingMatchBold = /^\*\*(.*?)\*\*：\s*$/.exec(content);
+      const headingText = headingMatchBold ? headingMatchBold[1] : (headingMatchPlain ? headingMatchPlain[1] : null);
+      if (headingText) {
+        // 列表标题 → 二级标题
+        if (out.length > 0 && out[out.length - 1].trim() !== '') out.push('');
+        out.push(`## ${headingText}`);
+        out.push('');
+        inBulletBlock = false;
+        continue;
+      }
+    }
+
+    if (isBullet) {
+      // 列表块前保证有一个空行，帮助 markdown 正确断段
+      if (!inBulletBlock && out.length > 0 && out[out.length - 1].trim() !== '') {
+        out.push('');
+      }
+      inBulletBlock = true;
+      out.push(raw.replace(/^\s*•\s+/, '- '));
+      continue;
+    }
+
+    // 普通行离开列表块时，在块后补一行空行
+    if (inBulletBlock && raw.trim() !== '') {
+      if (out.length > 0 && out[out.length - 1].trim() !== '') {
+        out.push('');
+      }
+      inBulletBlock = false;
+    }
+
+    out.push(raw);
+  }
+
+  return out.join('\n');
+}
 import { useGlobal } from './contexts/GlobalContext';
 // 定义历史记录相关的类型
 interface HistoryItem {
@@ -178,7 +244,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   // 保存聊天记录到用户隔离存储（会话级别）
   const saveChatHistory = (messages: Message[], analysis: any = null) => {
     console.log('💬 保存聊天记录到用户隔离存储')
-    UserStorage.setUserData(CHAT_STORAGE_KEY, JSON.stringify(messages));
+    
+    // 🔧 修复：确保完整保存消息数据，包括搜索结果字段
+    const messagesToSave = messages.map(message => {
+      const messageData = {
+        ...message, // 保留所有原始字段
+        searchResults: message.searchResults || undefined,
+        searchMetadata: message.searchMetadata || undefined,
+        analysisResult: message.analysisResult || undefined,
+        hierarchicalKeywords: message.hierarchicalKeywords || undefined
+      };
+      
+      // 调试日志：检查搜索结果是否被保存
+      if (message.searchResults && message.searchResults.length > 0) {
+        console.log(`📝 [保存] 消息 ${message.id} 包含 ${message.searchResults.length} 个搜索结果`);
+      }
+      
+      return messageData;
+    });
+    
+    UserStorage.setUserData(CHAT_STORAGE_KEY, JSON.stringify(messagesToSave));
     
     // 🔧 优化：智能保存分析结果
     const analysisToSave = analysis || currentAnalysis;
@@ -395,20 +480,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         let hasRepairs = false;
         
         messages = messages.map((message) => {
-          // 检查搜索结果相关的消息是否完整
-          if (!message.isUser && message.text && message.text.includes('为您找到了') && !message.searchResults) {
-            console.log(`⚠️ 发现消息 ${message.id} 缺少搜索结果数据，尝试从搜索历史恢复...`)
+          // 🔧 修复：检查report按钮相关数据的完整性
+          const hasSearchText = message.text && message.text.includes('为您找到了');
+          const hasSearchResults = message.searchResults && message.searchResults.length > 0;
+          
+          if (hasSearchText && !hasSearchResults) {
+            console.log(`⚠️ [修复] 消息 ${message.id} 包含搜索内容但缺少搜索结果数据`);
             
-            // 尝试从搜索历史中恢复数据
+            // 尝试从搜索历史中恢复数据 - 使用更宽松的时间匹配
             try {
               const searchHistory = JSON.parse(UserStorage.getUserData(USER_DATA_KEYS.SEARCH_HISTORY) || '[]');
-              // 根据时间戳匹配最近的搜索记录
-              const matchingSearch = searchHistory.find((search: any) => 
-                Math.abs(search.timestamp - message.timestamp) < 60000 // 1分钟内的搜索
-              );
               
-              if (matchingSearch) {
-                console.log(`✅ 从搜索历史恢复了消息 ${message.id} 的搜索结果`)
+              // 🔧 改进的匹配策略：按时间戳距离排序，选择最近的匹配项
+              const potentialMatches = searchHistory
+                .map((search: any) => ({
+                  ...search,
+                  timeDiff: Math.abs(search.timestamp - message.timestamp)
+                }))
+                .filter((search: any) => search.timeDiff < 300000) // 5分钟内的搜索
+                .sort((a: any, b: any) => a.timeDiff - b.timeDiff);
+              
+              if (potentialMatches.length > 0) {
+                const matchingSearch = potentialMatches[0];
+                console.log(`✅ [修复] 从搜索历史恢复了消息 ${message.id} 的搜索结果 (${matchingSearch.papers?.length || 0}篇)`);
+                
                 message.searchResults = matchingSearch.papers || [];
                 message.searchMetadata = {
                   originalQuery: matchingSearch.originalQuery || '',
@@ -417,10 +512,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                   analysisResult: matchingSearch.analysisResult || null
                 };
                 hasRepairs = true;
+              } else {
+                console.warn(`❌ [修复失败] 未找到消息 ${message.id} 的匹配搜索记录`);
               }
             } catch (repairError) {
               console.warn('搜索结果数据恢复失败:', repairError);
             }
+          }
+          
+          // 调试日志：报告消息的搜索结果状态
+          if (message.searchResults && message.searchResults.length > 0) {
+            console.log(`📊 [恢复] 消息 ${message.id} 有 ${message.searchResults.length} 个搜索结果 → Report按钮可用`);
           }
           
           return message;
@@ -787,6 +889,73 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // 🔧 强制修复Markdown列表显示的DOM操作
+  useEffect(() => {
+    const fixMarkdownLists = () => {
+      // 查找所有.markdown-container中的列表项
+      const containers = document.querySelectorAll('.markdown-container');
+      containers.forEach(container => {
+        const listItems = container.querySelectorAll('li');
+        listItems.forEach((li: Element) => {
+          const element = li as HTMLElement;
+          // 强制应用正确的样式
+          element.style.setProperty('display', 'list-item', 'important');
+          element.style.setProperty('margin-bottom', '8px', 'important');
+          element.style.setProperty('margin-top', '4px', 'important');
+          element.style.setProperty('clear', 'both', 'important');
+          element.style.setProperty('width', '100%', 'important');
+          element.style.setProperty('min-height', '1.6em', 'important');
+          element.style.setProperty('line-height', '1.6', 'important');
+          element.style.setProperty('list-style', 'inherit', 'important');
+          element.style.setProperty('white-space', 'normal', 'important');
+          element.style.setProperty('float', 'none', 'important');
+          element.style.setProperty('position', 'static', 'important');
+        });
+        
+        // 确保ul/ol容器样式正确
+        const lists = container.querySelectorAll('ul, ol');
+        lists.forEach((list: Element) => {
+          const element = list as HTMLElement;
+          element.style.setProperty('display', 'block', 'important');
+          element.style.setProperty('list-style-position', 'outside', 'important');
+          element.style.setProperty('margin-bottom', '16px', 'important');
+          element.style.setProperty('padding-left', '24px', 'important');
+        });
+      });
+    };
+
+    // 初始修复
+    fixMarkdownLists();
+    
+    // 监听DOM变化，当有新消息时重新修复
+    const observer = new MutationObserver((mutations) => {
+      let needsFix = false;
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+          mutation.addedNodes.forEach((node) => {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const element = node as Element;
+              if (element.querySelector?.('.markdown-container') || element.classList?.contains('markdown-container')) {
+                needsFix = true;
+              }
+            }
+          });
+        }
+      });
+      
+      if (needsFix) {
+        setTimeout(fixMarkdownLists, 100); // 延迟执行确保DOM完全渲染
+      }
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    return () => observer.disconnect();
+  }, []);
 
   // 处理拖拽调整宽度
   useEffect(() => {
@@ -2021,18 +2190,62 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                     )
                   ) : (
                   <div style={{ position: 'relative' }}>
-                    <ReactMarkdown
-                      components={{
-                        // 自定义组件样式，适配主题
-                        h1: ({ children }) => <h1 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '18px', marginBottom: '12px' }}>{children}</h1>,
-                        h2: ({ children }) => <h2 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '16px', marginBottom: '10px' }}>{children}</h2>,
-                        h3: ({ children }) => <h3 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '15px', marginBottom: '8px' }}>{children}</h3>,
-                        p: ({ children }) => <p style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
-                        strong: ({ children }) => <strong style={{ color: theme === 'dark' ? '#fff' : '#111827', fontWeight: '600' }}>{children}</strong>,
-                        em: ({ children }) => <em style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', fontStyle: 'italic' }}>{children}</em>,
-                        ul: ({ children }) => <ul style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '12px', listStyleType: 'disc' }}>{children}</ul>,
-                        ol: ({ children }) => <ol style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', paddingLeft: '20px', marginBottom: '12px', listStyleType: 'decimal' }}>{children}</ol>,
-                        li: ({ children }) => <li style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6', paddingLeft: '4px' }}>{children}</li>,
+                    <div 
+                      className="markdown-container"
+                      style={{ 
+                        /* Markdown容器样式重置，确保列表正确渲染 */
+                        overflow: 'visible',
+                        wordBreak: 'break-word',
+                        overflowWrap: 'break-word'
+                      }}
+                    >
+                      <ReactMarkdown
+                        components={{
+                          // 自定义组件样式，适配主题
+                          h1: ({ children }) => <h1 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '16px', marginBottom: '12px' }}>{children}</h1>,
+                          h2: ({ children }) => <h2 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '14px', marginBottom: '8px' }}>{children}</h2>,
+                          h3: ({ children }) => <h3 style={{ color: theme === 'dark' ? '#e5e5e5' : '#1f2937', fontSize: '15px', marginBottom: '8px' }}>{children}</h3>,
+                          p: ({ children }) => <p style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', marginBottom: '8px', lineHeight: '1.6' }}>{children}</p>,
+                          strong: ({ children }) => <strong style={{ color: theme === 'dark' ? '#fff' : '#111827', fontWeight: '600' }}>{children}</strong>,
+                          em: ({ children }) => <em style={{ color: theme === 'dark' ? '#e5e5e5' : '#374151', fontStyle: 'italic' }}>{children}</em>,
+                          ul: ({ children }) => (
+                            <ul style={{ 
+                              color: theme === 'dark' ? '#e5e5e5' : '#374151', 
+                              paddingLeft: '24px', 
+                              marginBottom: '16px', 
+                              marginTop: '8px',
+                              listStyleType: 'disc',
+                              display: 'block',
+                              listStylePosition: 'outside'
+                            }}>{children}</ul>
+                          ),
+                          ol: ({ children }) => (
+                            <ol style={{ 
+                              color: theme === 'dark' ? '#e5e5e5' : '#374151', 
+                              paddingLeft: '24px', 
+                              marginBottom: '16px', 
+                              marginTop: '8px',
+                              listStyleType: 'decimal',
+                              display: 'block',
+                              listStylePosition: 'outside'
+                            }}>{children}</ol>
+                          ),
+                          li: ({ children }) => (
+                            <li style={{ 
+                              color: theme === 'dark' ? '#e5e5e5' : '#374151', 
+                              marginBottom: '8px !important', 
+                              marginTop: '4px !important',
+                              lineHeight: '1.6', 
+                              paddingLeft: '4px',
+                              display: 'list-item !important',
+                              listStyle: 'inherit',
+                              clear: 'both',
+                              width: '100%',
+                              minHeight: '1.6em',
+                              wordWrap: 'break-word',
+                              whiteSpace: 'normal'
+                            }}>{children}</li>
+                          ),
                         code: ({ children }) => (
                           <code style={{
                             backgroundColor: theme === 'dark' ? '#333' : '#ebe7d6',
@@ -2066,8 +2279,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                         )
                     }}
                   >
-                    {message.text}
-                  </ReactMarkdown>
+                    {preprocessMarkdown(message.text)}
+                      </ReactMarkdown>
+                    </div>
                   </div>
                 )}
 
@@ -2155,15 +2369,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                       const hasSearchResults = message.searchResults && message.searchResults.length > 0;
                       const shouldShow = llmMode === 'auto-search' && hasSearchResults;
                       
-                      // 调试信息（仅在开发环境）
+                      // 🔧 增强调试信息
+                      const debugInfo = {
+                        messageId: message.id,
+                        llmMode,
+                        hasSearchResults,
+                        searchResultsCount: message.searchResults?.length || 0,
+                        hasSearchMetadata: !!message.searchMetadata,
+                        shouldShow,
+                        messageText: message.text?.substring(0, 50) + '...',
+                        hasSearchText: message.text?.includes('为您找到了') || false
+                      };
+                      
+                      // 开发环境详细日志
                       if (process.env.NODE_ENV === 'development' && !message.isUser) {
-                        console.log(`View Report按钮显示检查 [${message.id}]:`, {
-                          llmMode,
-                          hasSearchResults,
-                          searchResultsLength: message.searchResults?.length || 0,
-                          shouldShow,
-                          messageText: message.text.substring(0, 50) + '...'
-                        });
+                        console.log(`🔍 [Report按钮检查] 消息 ${message.id}:`, debugInfo);
+                        
+                        // 警告：有搜索文本但无搜索结果
+                        if (debugInfo.hasSearchText && !debugInfo.hasSearchResults) {
+                          console.warn(`⚠️ [Report按钮] 消息 ${message.id} 有搜索文本但无搜索结果数据，可能需要数据修复`);
+                        }
                       }
                       
                       return shouldShow;
@@ -2171,6 +2396,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                       <button
                         className="hover-button-report"
                         onClick={() => {
+                          console.log(`🚀 [点击Report] 消息 ${message.id} → 跳转到报告页面`);
                           navigate('/report', {
                             state: {
                               papers: message.searchResults,
