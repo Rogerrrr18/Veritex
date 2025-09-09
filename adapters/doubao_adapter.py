@@ -82,12 +82,11 @@ class DoubaoAdapter(BaseLLMAdapter):
         """获取混合对话管理器实例（延迟初始化）"""
         if self._hybrid_manager is None:
             try:
-                from hybrid_conversation_manager import get_hybrid_conversation_manager
-                self._hybrid_manager = await get_hybrid_conversation_manager()
-            except ImportError:
-                # 降级到基础对话管理器
                 from conversation_manager import get_conversation_manager
-                self._hybrid_manager = get_conversation_manager()
+                self._hybrid_manager = await get_conversation_manager()
+            except ImportError:
+                logger.error("统一对话管理器导入失败")
+                self._hybrid_manager = None
         return self._hybrid_manager
     
     async def _get_database_history(self, conversation_id: str, user_id: str) -> List[Dict[str, Any]]:

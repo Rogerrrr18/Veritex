@@ -6,9 +6,9 @@ Paper God Beta3 - Supabase同步管理器
 import os
 import logging
 import asyncio
+import json
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-import json
 
 # Supabase客户端
 try:
@@ -56,41 +56,81 @@ class SupabaseSyncManager:
     async def save_conversation(self, conversation: Conversation, user_id: str) -> bool:
         """保存对话到Supabase（支持用户隔离）"""
         if not self.is_available:
+            logger.warning(f"🔇 [Supabase保存] 服务不可用，跳过保存 {conversation.conversation_id[:8]}...")
             return False
         
         try:
+            # 🔧 调试：设置用户上下文
+            context_set = self.set_user_context(user_id)
+            if not context_set:
+                logger.warning(f"⚠️ [Supabase保存] 用户上下文设置失败: {user_id}")
+            else:
+                logger.debug(f"✅ [Supabase保存] 用户上下文设置成功: {user_id}")
+            
+            # 创建JSON序列化安全的对话数据
+            def serialize_datetime(obj):
+                """自定义datetime序列化器"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+            
+            # 🔧 修复：简化数据结构，移除复杂的metadata嵌套
             conversation_data = {
                 "conversation_id": conversation.conversation_id,
                 "user_id": user_id,  # 用户隔离字段
-                "title": conversation.metadata.title,
+                "title": conversation.metadata.title or f"对话 {datetime.now().strftime('%m-%d %H:%M')}",
                 "created_at": conversation.metadata.created_at.isoformat(),
                 "updated_at": conversation.metadata.updated_at.isoformat(),
                 "last_activity": conversation.metadata.last_activity.isoformat(),
                 "message_count": conversation.metadata.message_count,
-                "tags": conversation.metadata.tags,
-                "is_archived": conversation.metadata.is_archived,
-                "conversation_data": conversation.dict()  # 完整对话数据
+                "tags": conversation.metadata.tags or [],
+                "is_archived": conversation.metadata.is_archived or False,
+                "metadata": {}  # 简化为空对象
             }
             
-            # 使用upsert确保幂等性
+            logger.debug(f"📝 [Supabase保存] 准备保存数据: 对话={conversation.conversation_id[:8]}... 用户={user_id}")
+            
+            # 🔧 修复：使用复合主键进行upsert
             result = self.supabase.table("conversations").upsert(
                 conversation_data,
-                on_conflict="conversation_id,user_id"
+                on_conflict="conversation_id,user_id"  # 匹配复合唯一约束
             ).execute()
             
-            logger.debug(f"对话保存成功: {conversation.conversation_id} (用户: {user_id})")
-            return True
+            # 🔧 调试：检查返回结果
+            if result.data:
+                logger.info(f"✅ [Supabase保存] 对话保存成功: {conversation.conversation_id[:8]}... (用户: {user_id})")
+                logger.debug(f"📊 [Supabase保存] 返回数据: {len(result.data)} 条记录")
+                return True
+            else:
+                logger.error(f"❌ [Supabase保存] 返回数据为空: {conversation.conversation_id[:8]}...")
+                return False
             
         except Exception as e:
-            logger.error(f"Supabase保存失败 {conversation.conversation_id}: {e}")
+            logger.error(f"❌ [Supabase保存] 失败 {conversation.conversation_id[:8]}...: {str(e)}")
+            logger.debug(f"🔧 [Supabase保存] 详细错误: {type(e).__name__}: {e}")
+            
+            # 🔧 特殊错误处理
+            if "constraint" in str(e).lower():
+                logger.error(f"🔧 [Supabase保存] 约束错误，可能需要检查数据库结构")
+            elif "rls" in str(e).lower():
+                logger.error(f"🔧 [Supabase保存] RLS策略错误，可能用户上下文设置失败")
+            
             return False
     
     async def load_conversation(self, conversation_id: str, user_id: str) -> Optional[Conversation]:
         """从Supabase加载对话（用户隔离）"""
         if not self.is_available:
+            logger.warning(f"🔇 [Supabase加载] 服务不可用，跳过加载 {conversation_id[:8]}...")
             return None
         
         try:
+            # 🔧 调试：设置用户上下文
+            context_set = self.set_user_context(user_id)
+            if not context_set:
+                logger.warning(f"⚠️ [Supabase加载] 用户上下文设置失败: {user_id}")
+            
+            logger.debug(f"📖 [Supabase加载] 查询对话: {conversation_id[:8]}... (用户: {user_id})")
+            
             result = self.supabase.table("conversations").select("*").eq(
                 "conversation_id", conversation_id
             ).eq(
@@ -98,20 +138,37 @@ class SupabaseSyncManager:
             ).single().execute()
             
             if not result.data:
+                logger.debug(f"📭 [Supabase加载] 对话不存在: {conversation_id[:8]}... (用户: {user_id})")
                 return None
             
-            # 从conversation_data字段恢复完整对话对象
-            conversation_dict = result.data.get("conversation_data", {})
-            if not conversation_dict:
-                logger.error(f"对话数据为空: {conversation_id}")
-                return None
+            # 🔧 修复：从简化的数据结构重建对话对象
+            row_data = result.data
             
-            conversation = Conversation.parse_obj(conversation_dict)
-            logger.debug(f"对话加载成功: {conversation_id} (用户: {user_id})")
+            # 重建对话元数据
+            from models.conversation import ConversationMetadata
+            metadata = ConversationMetadata(
+                title=row_data.get("title", ""),
+                created_at=datetime.fromisoformat(row_data["created_at"]),
+                updated_at=datetime.fromisoformat(row_data["updated_at"]),
+                last_activity=datetime.fromisoformat(row_data["last_activity"]),
+                message_count=row_data.get("message_count", 0),
+                tags=row_data.get("tags", []),
+                is_archived=row_data.get("is_archived", False)
+            )
+            
+            # 重建对话对象（暂时不加载消息，提高性能）
+            conversation = Conversation(
+                conversation_id=row_data["conversation_id"],
+                messages=[],  # 消息按需加载
+                metadata=metadata
+            )
+            
+            logger.debug(f"✅ [Supabase加载] 对话加载成功: {conversation_id[:8]}... (用户: {user_id})")
             return conversation
             
         except Exception as e:
-            logger.debug(f"Supabase加载失败 {conversation_id} (用户: {user_id}): {e}")
+            logger.debug(f"📭 [Supabase加载] 加载失败 {conversation_id[:8]}... (用户: {user_id}): {str(e)}")
+            logger.debug(f"🔧 [Supabase加载] 详细错误: {type(e).__name__}: {e}")
             return None
     
     async def list_conversations(self, user_id: str, limit: int = 20, offset: int = 0) -> List[ConversationSummary]:
@@ -242,20 +299,44 @@ class SupabaseSyncManager:
     def set_user_context(self, user_id: str) -> bool:
         """设置用户上下文以支持RLS策略"""
         if not self.is_available:
-            logger.warning("Supabase不可用，跳过用户上下文设置")
+            logger.warning(f"🔇 [用户上下文] Supabase不可用，跳过用户上下文设置: {user_id}")
             return False
         
         try:
+            logger.debug(f"🔧 [用户上下文] 设置用户上下文: {user_id}")
+            
             # 调用数据库函数设置用户上下文
             result = self.supabase.rpc('set_user_context', {
                 'target_user_id': user_id
             }).execute()
             
-            logger.debug(f"用户上下文设置成功: {user_id}")
-            return True
+            # 🔧 调试：检查RPC调用结果
+            if result:
+                logger.debug(f"✅ [用户上下文] RPC调用成功: {user_id}")
+                logger.debug(f"📊 [用户上下文] RPC返回: {result}")
+                
+                # 验证上下文是否真正设置成功
+                try:
+                    verify_result = self.supabase.rpc('current_setting', {
+                        'setting_name': 'app.current_user_id'
+                    }).execute()
+                    logger.debug(f"🔍 [用户上下文] 验证结果: {verify_result}")
+                except Exception as verify_error:
+                    logger.debug(f"⚠️ [用户上下文] 无法验证上下文设置: {verify_error}")
+                
+                return True
+            else:
+                logger.warning(f"⚠️ [用户上下文] RPC调用返回空结果: {user_id}")
+                return False
             
         except Exception as e:
-            logger.error(f"设置用户上下文失败 (用户: {user_id}): {e}")
+            logger.error(f"❌ [用户上下文] 设置失败 (用户: {user_id}): {str(e)}")
+            logger.debug(f"🔧 [用户上下文] 详细错误: {type(e).__name__}: {e}")
+            
+            # 🔧 特殊错误处理
+            if "function" in str(e).lower() and "does not exist" in str(e).lower():
+                logger.error(f"🔧 [用户上下文] set_user_context函数不存在，请检查SQL配置")
+            
             return False
 
 

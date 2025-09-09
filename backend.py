@@ -22,15 +22,14 @@ from llm_interface import get_universal_llm, get_model_config_manager
 from multi_source_engine import Paper
 from performance_monitor import track_chat_performance, get_performance_monitor
 from prompt_utils import get_chat_conversation_prompt, get_multi_turn_conversation_prompt
-# 启用混合对话架构，支持三层缓存和用户数据隔离
+# 统一对话管理器
 try:
-    from hybrid_conversation_manager import get_hybrid_conversation_manager
-    HYBRID_CONVERSATION_ENABLED = True
-    logger.info("混合对话架构已加载")
-except ImportError as e:
-    logger.warning(f"混合对话架构导入失败，回退到基础管理器: {e}")
     from conversation_manager import get_conversation_manager
-    HYBRID_CONVERSATION_ENABLED = False
+    CONVERSATION_MANAGER_ENABLED = True
+    logger.info("统一对话管理器已加载")
+except ImportError as e:
+    logger.error(f"对话管理器导入失败: {e}")
+    CONVERSATION_MANAGER_ENABLED = False
 
 app = FastAPI(
     title="Paper God API - 智能对话版",
@@ -548,16 +547,15 @@ async def generate_stream_response_with_conversation(
     user_id: str  # 新增user_id参数
 ):
     """生成流式响应并保存到对话管理器"""
-    # 初始化对话管理器（支持混合架构和基础架构）
-    if HYBRID_CONVERSATION_ENABLED:
-        conversation_manager = await get_hybrid_conversation_manager()
+    # 初始化统一对话管理器
+    if CONVERSATION_MANAGER_ENABLED:
+        conversation_manager = await get_conversation_manager()
         get_conversation_func = lambda cid, uid: conversation_manager.get_conversation(cid, uid)
         add_message_func = lambda cid, uid, role, content: conversation_manager.add_message_to_conversation(cid, uid, role, content)
     else:
-        conversation_manager = get_conversation_manager()
-        get_conversation_func = lambda cid, uid: conversation_manager.get_conversation(cid)
-        add_message_func = lambda cid, uid, role, content: conversation_manager.add_message_to_conversation(cid, role, content)
-        logger.info("使用基础对话管理器（不支持用户隔离）")
+        logger.error("对话管理器未启用，无法保存对话")
+        return
+    
     ai_response_parts = []  # 收集AI回复内容
     
     try:
@@ -698,11 +696,11 @@ async def chat(request: ChatRequest):
     # 确保user_id有值
     user_id = request.user_id or "anonymous"
     
-    # 初始化对话管理器（支持混合架构和基础架构）
-    if HYBRID_CONVERSATION_ENABLED:
-        conversation_manager = await get_hybrid_conversation_manager()
+    # 初始化统一对话管理器
+    if CONVERSATION_MANAGER_ENABLED:
+        conversation_manager = await get_conversation_manager()
     else:
-        conversation_manager = get_conversation_manager()
+        raise HTTPException(status_code=500, detail="对话管理器未启用")
     
     # 处理对话ID
     conversation_id = request.conversation_id
@@ -710,41 +708,26 @@ async def chat(request: ChatRequest):
     
     if conversation_id:
         # 获取现有对话（支持用户隔离）
-        if HYBRID_CONVERSATION_ENABLED:
-            conversation = await conversation_manager.get_conversation(conversation_id, user_id)
-        else:
-            conversation = await conversation_manager.get_conversation(conversation_id)
+        conversation = await conversation_manager.get_conversation(conversation_id, user_id)
         if not conversation:
             logger.warning(f"对话不存在: {conversation_id}")
             conversation_id = None
     
     if not conversation:
         # 创建新对话（支持用户隔离）
-        if HYBRID_CONVERSATION_ENABLED:
-            conversation = await conversation_manager.create_conversation(user_id)
-        else:
-            conversation = await conversation_manager.create_conversation()
+        conversation = await conversation_manager.create_conversation(user_id)
         conversation_id = conversation.conversation_id
         logger.info(f"创建新对话: {conversation_id}")
     
     # 将用户消息添加到对话历史（支持用户隔离）
-    if HYBRID_CONVERSATION_ENABLED:
-        await conversation_manager.add_message_to_conversation(
-            conversation_id, 
-            user_id,
-            "user", 
-            request.message
-        )
-        # 获取完整的对话历史（优先使用管理器中的历史）
-        conversation = await conversation_manager.get_conversation(conversation_id, user_id)
-    else:
-        await conversation_manager.add_message_to_conversation(
-            conversation_id, 
-            "user", 
-            request.message
-        )
-        # 获取完整的对话历史（优先使用管理器中的历史）
-        conversation = await conversation_manager.get_conversation(conversation_id)
+    await conversation_manager.add_message_to_conversation(
+        conversation_id, 
+        user_id,
+        "user", 
+        request.message
+    )
+    # 获取完整的对话历史（优先使用管理器中的历史）
+    conversation = await conversation_manager.get_conversation(conversation_id, user_id)
     if conversation and conversation.messages:
         # 使用对话管理器中的历史记录
         history = [{"role": msg.role, "content": msg.content} for msg in conversation.messages[:-1]]  # 排除刚添加的用户消息
@@ -900,7 +883,7 @@ async def analytics_register(req: RegisterRequest):
         # 🔧 修复：实际保存到Supabase而不是仅记录日志
         try:
             from supabase_sync import get_sync_manager
-            sync_manager = get_sync_manager()
+            sync_manager = await get_sync_manager()
             
             # 设置用户上下文
             sync_manager.set_user_context(req.user_id)
@@ -941,7 +924,7 @@ async def analytics_log_action(req: LogActionRequest):
         # 🔧 修复：实际保存到Supabase而不是仅记录日志
         try:
             from supabase_sync import get_sync_manager
-            sync_manager = get_sync_manager()
+            sync_manager = await get_sync_manager()
             
             # 设置用户上下文
             sync_manager.set_user_context(req.user_id)
