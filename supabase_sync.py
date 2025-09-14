@@ -369,11 +369,25 @@ class SupabaseSyncManager:
                 "last_active": datetime.now().isoformat()
             }
             
-            # 🔐 所有用户都必须有有效的内测码才能创建
-            # 不再支持匿名用户，确保用户准入机制的安全性
-            logger.warning(f"⚠️ [用户创建] 用户不存在且无法自动创建: {user_id}")
-            logger.info("💡 [用户创建] 请确保用户已通过内测码在前端完成注册")
-            return False
+            # 🔧 修复：允许自动创建用户（开发阶段）
+            # 用户应该已经通过前端内测码验证，这里只是确保数据库记录存在
+            try:
+                create_result = self.supabase.table("users").insert(user_data).execute()
+                if create_result.data:
+                    logger.info(f"✅ [用户创建] 用户创建成功: {user_id}")
+                    return True
+                else:
+                    logger.error(f"❌ [用户创建] 创建失败，返回数据为空: {user_id}")
+                    return False
+            except Exception as create_error:
+                create_error_str = str(create_error)
+                # 如果是重复键错误，说明用户已存在（并发创建场景）
+                if "duplicate key" in create_error_str.lower() or "unique constraint" in create_error_str.lower() or "23505" in create_error_str:
+                    logger.info(f"✅ [用户创建] 用户已存在（并发创建）: {user_id}")
+                    return True
+                else:
+                    logger.error(f"❌ [用户创建] 创建用户失败 {user_id}: {create_error_str}")
+                    return False
                 
         except Exception as e:
             error_str = str(e)
@@ -409,11 +423,19 @@ async def init_sync_manager() -> SupabaseSyncManager:
 
 # 数据库表结构SQL（用于初始化）
 SUPABASE_SCHEMA = """
+-- 用户表（支持内测码验证的用户）
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_active TIMESTAMPTZ DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
 -- 对话表（支持RLS用户隔离）
 CREATE TABLE IF NOT EXISTS conversations (
     id BIGSERIAL PRIMARY KEY,
     conversation_id UUID NOT NULL,
-    user_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -421,25 +443,50 @@ CREATE TABLE IF NOT EXISTS conversations (
     message_count INTEGER DEFAULT 0,
     tags TEXT[] DEFAULT '{}',
     is_archived BOOLEAN DEFAULT FALSE,
-    conversation_data JSONB NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
     
     -- 复合唯一约束
     UNIQUE(conversation_id, user_id)
 );
 
 -- 创建索引优化查询性能
+CREATE INDEX IF NOT EXISTS idx_users_last_active ON users(last_active DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_last_activity ON conversations(last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_active ON conversations(user_id, is_archived, last_activity DESC);
 
 -- 启用RLS（行级安全）
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
 
--- RLS策略：用户只能访问自己的数据
-CREATE POLICY IF NOT EXISTS "用户只能访问自己的对话" ON conversations
-    FOR ALL USING (auth.jwt() ->> 'sub' = user_id);
+-- 用户上下文设置函数
+CREATE OR REPLACE FUNCTION set_user_context(target_user_id TEXT)
+RETURNS void AS $$
+BEGIN
+    PERFORM set_config('app.current_user_id', target_user_id, false);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 允许匿名用户使用临时user_id（开发阶段）
-CREATE POLICY IF NOT EXISTS "允许匿名用户访问" ON conversations
+-- 获取当前用户上下文函数
+CREATE OR REPLACE FUNCTION get_current_user_id()
+RETURNS TEXT AS $$
+BEGIN
+    RETURN current_setting('app.current_user_id', true);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 🔧 简化的RLS策略（开发阶段，允许所有操作）
+-- 生产环境应该使用更严格的策略
+CREATE POLICY IF NOT EXISTS "开发阶段_允许所有用户操作" ON users
     FOR ALL USING (true);
+
+CREATE POLICY IF NOT EXISTS "开发阶段_允许所有对话操作" ON conversations
+    FOR ALL USING (true);
+
+-- 注释掉的生产环境RLS策略（供参考）
+-- CREATE POLICY "生产_用户只能访问自己的数据" ON users
+--     FOR ALL USING (auth.jwt() ->> 'sub' = id OR get_current_user_id() = id);
+-- 
+-- CREATE POLICY "生产_用户只能访问自己的对话" ON conversations
+--     FOR ALL USING (auth.jwt() ->> 'sub' = user_id OR get_current_user_id() = user_id);
 """

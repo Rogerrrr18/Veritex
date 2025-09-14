@@ -293,22 +293,44 @@ class ConversationManager:
             return {}
     
     async def _save_to_supabase(self, conversation: Conversation, user_id: str):
-        """异步保存到Supabase（带错误处理）"""
+        """异步保存到Supabase（带增强的错误处理和降级机制）"""
         try:
-            if self._sync_manager:
-                # 设置用户上下文
-                self._sync_manager.set_user_context(user_id)
+            if not self._sync_manager or not self._sync_manager.is_available:
+                logger.debug(f"📴 [降级] Supabase不可用，跳过云端保存: {conversation.conversation_id[:8]}...")
+                return
                 
-                success = await self._sync_manager.save_conversation(conversation, user_id)
-                if success:
-                    self.stats['supabase_saves'] += 1
-                    logger.debug(f"Supabase保存成功: {conversation.conversation_id[:8]}...")
-                else:
-                    logger.warning(f"Supabase保存失败: {conversation.conversation_id[:8]}...")
+            # 设置用户上下文（如果失败则记录但不阻塞）
+            try:
+                context_set = self._sync_manager.set_user_context(user_id)
+                if not context_set:
+                    logger.warning(f"⚠️ [降级] 用户上下文设置失败，但继续尝试保存: {user_id}")
+            except Exception as context_error:
+                logger.warning(f"⚠️ [降级] 用户上下文设置异常，但继续尝试保存: {context_error}")
+                
+            # 尝试保存到Supabase
+            success = await self._sync_manager.save_conversation(conversation, user_id)
+            if success:
+                self.stats['supabase_saves'] += 1
+                logger.debug(f"✅ [云端] Supabase保存成功: {conversation.conversation_id[:8]}...")
+            else:
+                logger.warning(f"⚠️ [降级] Supabase保存失败，但内存缓存正常: {conversation.conversation_id[:8]}...")
+                # 🔧 增强：即使Supabase保存失败，系统也能正常工作（内存缓存作为主要存储）
                     
         except Exception as e:
-            logger.error(f"Supabase保存异常: {e}")
+            error_msg = str(e)
+            logger.warning(f"⚠️ [降级] Supabase保存异常: {error_msg}")
             self.stats['errors'] += 1
+            
+            # 🔧 增强：根据错误类型给出不同的降级策略
+            if "rls" in error_msg.lower() or "policy" in error_msg.lower():
+                logger.info("💡 [降级] RLS策略问题，建议检查用户权限配置，但系统继续正常运行")
+            elif "constraint" in error_msg.lower() or "foreign key" in error_msg.lower():
+                logger.info("💡 [降级] 数据约束问题，建议检查用户表完整性，但系统继续正常运行")
+            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                logger.info("💡 [降级] 网络连接问题，数据已缓存到内存，稍后会重试同步")
+            
+            # 🎯 关键：无论Supabase如何失败，都不影响核心聊天功能
+            logger.info(f"🏃 [系统] 聊天功能正常，数据已保存到内存缓存，对话可继续进行")
     
     def _list_from_memory_cache(self, user_id: str, limit: int, offset: int) -> List[ConversationSummary]:
         """从内存缓存生成对话列表（降级功能）"""
