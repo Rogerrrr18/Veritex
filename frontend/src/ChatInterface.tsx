@@ -4,6 +4,13 @@ import ReactMarkdown from 'react-markdown';
 import { apiCall, API_CONFIG } from './config';
 import KeywordCloudWidget from './components/KeywordCloudWidget';
 import TokenProgress from './components/TokenProgress';
+import { UserStorage, DataMigration, USER_DATA_KEYS, GLOBAL_DATA_KEYS } from './utils/userStorage';
+import { calculateTokenUsage, MAX_TOKENS } from './utils/tokenCounter';
+
+// 获取当前用户ID的辅助函数
+const getCurrentUserId = (): string | null => {
+  return localStorage.getItem('user_id');
+};
 // 统一把来自上游的“• ”行首圆点转换为 Markdown 列表，以避免被当作普通段落合并
 function preprocessMarkdown(input: string): string {
   if (!input) return input;
@@ -96,8 +103,6 @@ interface ChatHistory {
   messages: any[];
   lastActivity: number;
 }
-import { UserStorage, DataMigration, USER_DATA_KEYS, GLOBAL_DATA_KEYS } from './utils/userStorage';
-import { calculateTokenUsage, MAX_TOKENS } from './utils/tokenCounter';
 
 interface Message {
   id: string;
@@ -1020,6 +1025,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
 
   // 处理流式响应
   const handleStreamingResponse = async (userMessage: Message, newMessages: Message[]) => {
+    // 🔧 用户验证：确保用户已登录
+    const userId = getCurrentUserId();
+    if (!userId) {
+      console.error('❌ 用户未登录，无法发送消息');
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        text: '请先使用内测码登录后再发送消息。',
+        isUser: false,
+        timestamp: Date.now()
+      }]);
+      setStreamingMessageId(null);
+      return;
+    }
+
     // 重置流式传输状态
     setStreamingText('');
     
@@ -1030,6 +1049,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
 
     const payload = {
       message: userMessage.text,
+      user_id: userId, // 🔧 必填字段：添加用户ID
       history: mappedHistory,
       conversation_id: conversationId, // 包含对话ID
       mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search',
@@ -1051,16 +1071,34 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     setMessages(messagesWithAssistant);
 
     try {
+      // 🔧 增强：添加请求超时和重试机制
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+      
       const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.CHAT}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
+        signal: controller.signal  // 🔧 添加取消信号
       });
+      
+      clearTimeout(timeoutId); // 清除超时定时器
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        // 🔧 增强错误处理：不同的HTTP状态码给出不同提示
+        let errorMessage = `HTTP error! status: ${response.status}`;
+        if (response.status === 502) {
+          errorMessage = '服务器网关错误，请稍后重试或联系管理员';
+        } else if (response.status === 503) {
+          errorMessage = '服务器正在维护中，请稍后重试';
+        } else if (response.status === 422) {
+          errorMessage = '请求数据格式错误，请检查登录状态';
+        } else if (response.status === 403) {
+          errorMessage = '访问被禁止，请检查内测码或重新登录';
+        }
+        throw new Error(errorMessage);
       }
 
       const reader = response.body?.getReader();
@@ -1176,13 +1214,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
     } catch (error) {
       console.error('流式传输错误:', error);
       
+      // 🔧 增强错误处理：根据错误类型给出不同提示
+      let errorMessage = '抱歉，发生了错误';
+      
+      if (error.name === 'AbortError') {
+        errorMessage = '请求超时，请检查网络连接或稍后重试';
+      } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        errorMessage = '网络连接失败，请检查网络连接或稍后重试';
+      } else if (error.message.includes('ECONNREFUSED')) {
+        errorMessage = '无法连接到服务器，请检查服务器状态或联系管理员';
+      } else if (error.message) {
+        errorMessage += `：${error.message}`;
+      }
+      
       // 错误情况下更新消息
-      const errorMessage = {
+      const errorMessageObj = {
         ...assistantMessage,
-        text: `抱歉，发生了错误：${error instanceof Error ? error.message : '未知错误'}`
+        text: errorMessage
       };
       
-      const errorMessages = [...newMessages, errorMessage];
+      const errorMessages = [...newMessages, errorMessageObj];
       setMessages(errorMessages);
       saveChatHistory(errorMessages, currentAnalysis);
     }
@@ -1269,12 +1320,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         
         // 重新发送消息以获取新的AI回复
         try {
+          // 🔧 用户验证：确保用户已登录
+          const userId = getCurrentUserId();
+          if (!userId) {
+            console.error('❌ 用户未登录，无法重新发送消息');
+            alert('请先使用内测码登录后再操作。');
+            return;
+          }
+
           const mappedHistory = newMessages.map(m => ({
             role: m.isUser ? 'user' : 'assistant',
             content: m.text
           }));
           const response = await apiCall(API_CONFIG.ENDPOINTS.CHAT, {
             message: editedMessage.text,
+            user_id: userId, // 🔧 必填字段：添加用户ID
             history: mappedHistory,
             mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search'
           });

@@ -60,6 +60,9 @@ class SupabaseSyncManager:
             return False
         
         try:
+            # 🔧 修复：确保用户存在（解决外键约束问题）
+            await self._ensure_user_exists(user_id)
+            
             # 🔧 调试：设置用户上下文
             context_set = self.set_user_context(user_id)
             if not context_set:
@@ -124,6 +127,9 @@ class SupabaseSyncManager:
             return None
         
         try:
+            # 🔧 修复：确保用户存在（解决外键约束问题）
+            await self._ensure_user_exists(user_id)
+            
             # 🔧 调试：设置用户上下文
             context_set = self.set_user_context(user_id)
             if not context_set:
@@ -337,6 +343,48 @@ class SupabaseSyncManager:
             if "function" in str(e).lower() and "does not exist" in str(e).lower():
                 logger.error(f"🔧 [用户上下文] set_user_context函数不存在，请检查SQL配置")
             
+            return False
+    
+    async def _ensure_user_exists(self, user_id: str) -> bool:
+        """确保用户在数据库中存在（解决外键约束问题）"""
+        if not self.is_available:
+            return False
+        
+        try:
+            logger.debug(f"🔍 [用户检查] 检查用户是否存在: {user_id}")
+            
+            # 检查用户是否已存在
+            result = self.supabase.table("users").select("id").eq("id", user_id).execute()
+            
+            if result.data and len(result.data) > 0:
+                logger.debug(f"✅ [用户检查] 用户已存在: {user_id}")
+                return True
+            
+            # 用户不存在，创建新用户
+            logger.info(f"🆕 [用户创建] 创建新用户: {user_id}")
+            
+            user_data = {
+                "id": user_id,
+                "created_at": datetime.now().isoformat(),
+                "last_active": datetime.now().isoformat()
+            }
+            
+            # 🔐 所有用户都必须有有效的内测码才能创建
+            # 不再支持匿名用户，确保用户准入机制的安全性
+            logger.warning(f"⚠️ [用户创建] 用户不存在且无法自动创建: {user_id}")
+            logger.info("💡 [用户创建] 请确保用户已通过内测码在前端完成注册")
+            return False
+                
+        except Exception as e:
+            error_str = str(e)
+            logger.debug(f"🔧 [用户检查] 详细错误: {type(e).__name__}: {e}")
+            
+            # 如果是重复键错误，说明用户已存在（并发创建场景）
+            if "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower() or "23505" in error_str:
+                logger.info(f"✅ [用户检查] 用户已存在（并发创建）: {user_id}")
+                return True
+            
+            logger.error(f"❌ [用户检查] 检查/创建用户失败 {user_id}: {error_str}")
             return False
 
 

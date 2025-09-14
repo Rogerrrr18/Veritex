@@ -144,9 +144,9 @@ class DoubaoAdapter(BaseLLMAdapter):
     async def chat_with_history(
         self, 
         message: str, 
+        user_id: str,  # 必填参数，基于内测码验证
         conversation_id: str = "default",
         system_prompt: str = None,
-        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ) -> Optional[str]:
         """支持历史的多轮对话 - 集成混合对话管理器的完整历史记录"""
@@ -173,9 +173,9 @@ class DoubaoAdapter(BaseLLMAdapter):
     async def chat_with_history_stream(
         self, 
         message: str, 
+        user_id: str,  # 必填参数，基于内测码验证
         conversation_id: str = "default",
         system_prompt: str = None,
-        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ):
         """支持历史的多轮对话流式生成 - 集成混合对话管理器的完整历史记录"""

@@ -8,7 +8,7 @@ uvicorn[standard]>=0.27.0
 
 # 异步HTTP客户端
 aiohttp>=3.9.5
-httpx>=0.27.0
+httpx[socks]>=0.27.0
 
 # LangGraph和LangChain生态
 langgraph>=0.2.0

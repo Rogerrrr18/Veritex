@@ -72,7 +72,7 @@ export async function validateInviteCode(code: string): Promise<{
  * 基于内测码生成固定的用户ID
  * 确保同一内测码始终对应同一用户ID
  */
-function generateUserIdFromInviteCode(inviteCode: string): string {
+export function generateUserIdFromInviteCode(inviteCode: string): string {
   // 使用base64编码内测码，然后截取前8位作为hash
   const hash = btoa(inviteCode).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)
   const suffix = inviteCode.slice(-4)
@@ -325,7 +325,7 @@ export async function updateUserActivity(userId: string): Promise<void> {
     // 先设置用户上下文
     await setCurrentUserContext(userId)
     
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('users')
       .update({
         last_active: new Date().toISOString()
@@ -369,7 +369,7 @@ export async function logUserAction(
     
     console.log('📊 [前端] 插入数据:', insertData)
     
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('user_actions')
       .insert(insertData)
     

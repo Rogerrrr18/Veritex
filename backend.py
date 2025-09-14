@@ -57,8 +57,8 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = []
     # 新增：对话ID支持多轮对话
     conversation_id: Optional[str] = None
-    # 用户ID - 支持多用户隔离（可选，默认使用匿名用户）
-    user_id: Optional[str] = "anonymous"  # 设为可选参数，使用默认值
+    # 用户ID - 支持多用户隔离（必填，基于内测码验证）
+    user_id: str  # 必填参数，通过内测码验证获得
     # 搜索参数（可选）
     search_params: Optional[Dict[str, Any]] = None
     # 模式：'chat-only' | 'auto-search'
@@ -300,6 +300,32 @@ def calculate_total_tokens(history: List[Dict[str, Any]]) -> Dict[str, Any]:
         "average_tokens_per_message": total_tokens / message_count if message_count > 0 else 0,
         "estimated_cost_usd": total_tokens * 0.000002  # 估算成本，实际根据模型定价调整
     }
+
+
+# === 用户验证函数 ===
+async def validate_user_exists(user_id: str) -> bool:
+    """验证用户是否存在于数据库中"""
+    try:
+        from supabase_sync import get_sync_manager
+        sync_manager = await get_sync_manager()
+        
+        if not sync_manager.is_available:
+            logger.warning(f"🔇 [用户验证] Supabase不可用，跳过用户验证: {user_id}")
+            return True  # 当Supabase不可用时，不阻止操作
+        
+        # 检查用户是否存在
+        result = sync_manager.supabase.table("users").select("id").eq("id", user_id).execute()
+        
+        if result.data and len(result.data) > 0:
+            logger.debug(f"✅ [用户验证] 用户存在: {user_id}")
+            return True
+        else:
+            logger.warning(f"❌ [用户验证] 用户不存在: {user_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ [用户验证] 验证失败: {user_id} - {e}")
+        return False
 
 
 # === 关键词扩展接口 ===
@@ -585,8 +611,8 @@ async def generate_stream_response_with_conversation(
                     system_prompt = get_multi_turn_conversation_prompt(user_query=message)
                     async for chunk in llm_client.chat_with_history_stream(
                         message=message,
-                        conversation_id=conversation_id or "default",
                         user_id=user_id,  # 🔧 修复：传递用户ID，确保LLM获取正确的历史记录
+                        conversation_id=conversation_id or "default",
                         system_prompt=system_prompt
                     ):
                         if chunk:
@@ -693,8 +719,21 @@ async def chat(request: ChatRequest):
     import time
     start_time = time.time()
     
-    # 确保user_id有值
-    user_id = request.user_id or "anonymous"
+    # 🔐 用户ID验证（基于内测码准入机制）
+    user_id = request.user_id
+    if not user_id or user_id.strip() == "":
+        raise HTTPException(
+            status_code=401, 
+            detail="未提供有效的用户ID，请使用内测码重新注册"
+        )
+    
+    # 🔐 验证用户是否存在于数据库中
+    user_exists = await validate_user_exists(user_id)
+    if not user_exists:
+        raise HTTPException(
+            status_code=403,
+            detail="用户不存在或未通过内测码验证，请重新注册"
+        )
     
     # 初始化统一对话管理器
     if CONVERSATION_MANAGER_ENABLED:

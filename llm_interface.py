@@ -157,18 +157,18 @@ class UniversalLLM:
     async def chat_with_history(
         self, 
         message: str, 
+        user_id: str,  # 必填参数，基于内测码验证
         conversation_id: str = "default",
         system_prompt: str = None,
-        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ) -> Optional[str]:
         """统一多轮对话接口"""
         if hasattr(self.adapter, 'chat_with_history'):
             return await self.adapter.chat_with_history(
                 message=message,
+                user_id=user_id,  # 传递用户ID
                 conversation_id=conversation_id,
                 system_prompt=system_prompt,
-                user_id=user_id,  # 传递用户ID
                 **kwargs
             )
         else:
@@ -178,18 +178,18 @@ class UniversalLLM:
     async def chat_with_history_stream(
         self, 
         message: str, 
+        user_id: str,  # 必填参数，基于内测码验证
         conversation_id: str = "default",
         system_prompt: str = None,
-        user_id: str = "anonymous",  # 新增用户ID参数
         **kwargs
     ):
         """统一多轮对话流式接口"""
         if hasattr(self.adapter, 'chat_with_history_stream'):
             async for chunk in self.adapter.chat_with_history_stream(
                 message=message,
+                user_id=user_id,  # 传递用户ID
                 conversation_id=conversation_id,
                 system_prompt=system_prompt,
-                user_id=user_id,  # 传递用户ID
                 **kwargs
             ):
                 yield chunk

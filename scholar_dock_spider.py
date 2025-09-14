@@ -74,6 +74,11 @@ class ScholarDockSpider:
         self.max_retries = 3
         self.timeout = 30
         
+        # 🔧 新增：搜索超时配置
+        self.search_timeout = 45  # 单次搜索最大超时45秒
+        self.captcha_timeout = 60  # CAPTCHA等待最大60秒（从5分钟减少到1分钟）
+        self.max_pages_before_timeout = 3  # 最多搜索3页就超时检查
+        
         self.session = None
         self.driver = None
         
@@ -123,7 +128,7 @@ class ScholarDockSpider:
         """简化布尔查询，使其适合Google Scholar"""
         try:
             # 如果查询过长或过于复杂，提取核心关键词
-            if len(query) > 200 or query.count('(') > 3:
+            if len(query) > 150 or query.count('(') > 2:  # 🔧 降低复杂度阈值，更早触发简化
                 logger.info(f"🔧 简化复杂查询: {len(query)} 字符 -> 核心关键词")
                 
                 # 提取引号内的主要关键词
@@ -415,8 +420,8 @@ class ScholarDockSpider:
                 logger.warning("🚨 检测到CAPTCHA，请在打开的浏览器中手动解决")
                 logger.info("💡 解决CAPTCHA后，程序将自动继续...")
                 
-                # 等待用户解决CAPTCHA（最多等待5分钟）
-                wait = WebDriverWait(self.driver, 300)
+                # 等待用户解决CAPTCHA（最多等待1分钟，避免长时间阻塞）
+                wait = WebDriverWait(self.driver, self.captcha_timeout)
                 try:
                     # 等待页面变化，表示CAPTCHA已解决
                     wait.until(lambda driver: not any(
@@ -425,7 +430,9 @@ class ScholarDockSpider:
                     ))
                     logger.info("✅ CAPTCHA已解决，继续搜索")
                 except Exception:
-                    logger.error("⏰ CAPTCHA解决超时，跳过此页面")
+                    logger.error(f"⏰ CAPTCHA解决超时（{self.captcha_timeout}秒），跳过此页面")
+                    # 🔧 增强：记录CAPTCHA超时，便于后续优化
+                    logger.warning("💡 建议切换到其他数据源或稍后重试")
                     return None
                 
                 # 重新获取内容
@@ -540,9 +547,22 @@ class ScholarDockSpider:
         
         logger.info(f"🔍 ScholarDock搜索开始: {query} (目标: {limit}条)")
         
+        # 🔧 新增：整体搜索超时机制
+        search_start_time = asyncio.get_event_loop().time()
+        
         # 按10条一页进行搜索
         for start_idx in range(0, limit, 10):
             try:
+                # 🔧 检查超时
+                current_time = asyncio.get_event_loop().time()
+                if current_time - search_start_time > self.search_timeout:
+                    logger.warning(f"⏰ 搜索超时({self.search_timeout}秒)，返回已获得的 {len(papers)} 篇论文")
+                    break
+                
+                # 🔧 检查页数限制，避免无限等待
+                if start_idx >= self.max_pages_before_timeout * 10:
+                    logger.info(f"📊 已搜索 {self.max_pages_before_timeout} 页，为避免被限制停止搜索")
+                    break
                 url = self._create_search_url(query, start_idx, start_year, end_year)
                 logger.info(f"📖 获取第{start_idx//10 + 1}页: {url}")
                 

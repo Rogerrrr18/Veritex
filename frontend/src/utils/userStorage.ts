@@ -195,8 +195,8 @@ export class UserStorage {
         const levelData = analysis.hierarchical_keywords[level];
         if (levelData && Array.isArray(levelData.terms) && levelData.terms.length > 0) {
           // 过滤掉空字符串和非字符串项
-          levelData.terms = levelData.terms.filter(term => 
-            typeof term === 'string' && term.trim().length > 0
+          levelData.terms = levelData.terms.filter((term: unknown) => 
+            typeof term === 'string' && (term as string).trim().length > 0
           );
           
           if (levelData.terms.length > 0) {

@@ -1515,7 +1515,7 @@ class MultiSourceEngine:
             
             logger.warning(f"🔄 主力搜索源未达预期：获得{scholar_dock_papers}篇，预期{scholar_limit}篇，缺口{missing_quota}篇")
             
-            # 优先尝试镜像搜索来补偿ScholarDock的缺失
+            # 🔧 优先尝试镜像搜索来补偿ScholarDock的缺失（超时控制）
             if 'scholar_dock' in captcha_errors and self.scholar_mirror and missing_quota > 0:
                 logger.info(f"🔍 启动镜像搜索来补偿Google Scholar限制，尝试获取{missing_quota}篇论文")
                 try:
@@ -1523,7 +1523,7 @@ class MultiSourceEngine:
                     mirror_query = unified_queries.get('scholar_dock', query)
                     mirror_papers = await asyncio.wait_for(
                         self.scholar_mirror.search(mirror_query, missing_quota), 
-                        timeout=60.0
+                        timeout=45.0  # 🔧 减少镜像搜索超时，避免二次阻塞
                     )
                     if mirror_papers:
                         all_papers.extend(mirror_papers)
@@ -1531,6 +1531,8 @@ class MultiSourceEngine:
                         missing_quota = max(0, missing_quota - len(mirror_papers))
                     else:
                         logger.warning("⚠️ 镜像搜索未获得结果")
+                except asyncio.TimeoutError:
+                    logger.warning("⚠️ 镜像搜索超时，跳过并继续使用其他数据源")
                 except Exception as e:
                     logger.warning(f"⚠️ 镜像搜索失败: {e}")
             
