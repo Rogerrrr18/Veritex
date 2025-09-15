@@ -1216,15 +1216,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       
       // 🔧 增强错误处理：根据错误类型给出不同提示
       let errorMessage = '抱歉，发生了错误';
+      const err = error as any;
       
-      if (error.name === 'AbortError') {
+      if (err.name === 'AbortError') {
         errorMessage = '请求超时，请检查网络连接或稍后重试';
-      } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+      } else if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
         errorMessage = '网络连接失败，请检查网络连接或稍后重试';
-      } else if (error.message.includes('ECONNREFUSED')) {
+      } else if (err.message?.includes('ECONNREFUSED')) {
         errorMessage = '无法连接到服务器，请检查服务器状态或联系管理员';
-      } else if (error.message) {
-        errorMessage += `：${error.message}`;
+      } else if (err.message) {
+        errorMessage += `：${err.message}`;
       }
       
       // 错误情况下更新消息

@@ -9,6 +9,7 @@ import time
 import re
 import asyncio
 import logging
+import os
 from typing import List, Optional, Dict, Any
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -85,6 +86,20 @@ class ScholarDockSpider:
     async def __aenter__(self):
         """异步上下文管理器入口"""
         self.session = requests.Session()
+        
+        # 🔧 配置代理支持
+        http_proxy = os.getenv('HTTP_PROXY')
+        https_proxy = os.getenv('HTTPS_PROXY')
+        if http_proxy or https_proxy:
+            proxies = {}
+            if http_proxy:
+                proxies['http'] = http_proxy
+                logger.info(f"🌐 HTTP代理已配置: {http_proxy}")
+            if https_proxy:
+                proxies['https'] = https_proxy
+                logger.info(f"🔒 HTTPS代理已配置: {https_proxy}")
+            self.session.proxies.update(proxies)
+        
         # 设置请求头，模拟真实浏览器
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',

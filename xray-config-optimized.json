@@ -1,0 +1,68 @@
+{
+  "log": {
+    "loglevel": "info"
+  },
+  "inbounds": [
+    {
+      "port": 1080,
+      "listen": "0.0.0.0",
+      "protocol": "socks",
+      "settings": {
+        "udp": true
+      }
+    },
+    {
+      "port": 8118,
+      "listen": "0.0.0.0", 
+      "protocol": "http"
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "trojan",
+      "settings": {
+        "servers": [{
+          "address": "d1.catcat321.com",
+          "port": 49749,
+          "password": "fc68f508-2b67-43a3-802c-42aa636aafab"
+        }]
+      },
+      "streamSettings": {
+        "security": "tls",
+        "tlsSettings": {
+          "allowInsecure": true,
+          "serverName": "iepl.sgx2.cat.bilibili.com",
+          "alpn": ["h2", "http/1.1"],
+          "fingerprint": "chrome"
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "domain": [
+          "supabase.co",
+          "volces.com",
+          "localhost"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "google.com",
+          "scholar.google.com",
+          "arxiv.org"
+        ],
+        "outboundTag": "proxy"
+      }
+    ]
+  }
+}

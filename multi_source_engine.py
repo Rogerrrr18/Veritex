@@ -105,7 +105,22 @@ class SemanticScholarAPI:
                 'User-Agent': 'PaperGod/1.0 (Academic Research Tool)',
                 'Accept': 'application/json'
             }
-            self.session = aiohttp.ClientSession(headers=headers)
+            
+            # 🔧 配置代理支持
+            connector = None
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            if http_proxy or https_proxy:
+                proxy_url = https_proxy or http_proxy  # 优先使用HTTPS代理
+                logger.info(f"🌐 SemanticScholar使用代理: {proxy_url}")
+                connector = aiohttp.TCPConnector()
+                self.session = aiohttp.ClientSession(
+                    headers=headers, 
+                    connector=connector,
+                    trust_env=True  # 信任环境变量中的代理设置
+                )
+            else:
+                self.session = aiohttp.ClientSession(headers=headers)
         return self.session
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
@@ -220,7 +235,19 @@ class ArxivAPI:
         
     async def _get_session(self):
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            # 🔧 配置代理支持
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            if http_proxy or https_proxy:
+                proxy_url = https_proxy or http_proxy
+                logger.info(f"🌐 arXiv使用代理: {proxy_url}")
+                connector = aiohttp.TCPConnector()
+                self.session = aiohttp.ClientSession(
+                    connector=connector,
+                    trust_env=True
+                )
+            else:
+                self.session = aiohttp.ClientSession()
         return self.session
         
     async def search(self, query: str, limit: int = 20, start_year: Optional[int] = None, end_year: Optional[int] = None) -> List[Paper]:
@@ -779,7 +806,19 @@ class CrossrefAPI:
         
     async def _get_session(self):
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            # 🔧 配置代理支持
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            if http_proxy or https_proxy:
+                proxy_url = https_proxy or http_proxy
+                logger.info(f"🌐 Crossref使用代理: {proxy_url}")
+                connector = aiohttp.TCPConnector()
+                self.session = aiohttp.ClientSession(
+                    connector=connector,
+                    trust_env=True
+                )
+            else:
+                self.session = aiohttp.ClientSession()
         return self.session
         
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
@@ -906,7 +945,19 @@ class PubMedAPI:
         
     async def _get_session(self):
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            # 🔧 配置代理支持
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            if http_proxy or https_proxy:
+                proxy_url = https_proxy or http_proxy
+                logger.info(f"🌐 PubMed使用代理: {proxy_url}")
+                connector = aiohttp.TCPConnector()
+                self.session = aiohttp.ClientSession(
+                    connector=connector,
+                    trust_env=True
+                )
+            else:
+                self.session = aiohttp.ClientSession()
         return self.session
     
     async def search(self, query: str, limit: int = 20) -> List[Paper]:
