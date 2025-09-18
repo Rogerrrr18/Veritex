@@ -105,7 +105,7 @@ export const api = {
   expandKeywords: (query: string) =>
     apiCall(API_CONFIG.ENDPOINTS.EXPAND_KEYWORDS, { query }),
     
-  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true, yearFrom?: string, yearTo?: string, expandedKeywords?: any, sources?: string[]) =>
+  searchPapers: (query: string, maxResults: number = 20, enableExpansion: boolean = true, yearFrom?: string, yearTo?: string, expandedKeywords?: any, sources?: string[], useChinese?: boolean) =>
     apiCall(API_CONFIG.ENDPOINTS.SEARCH_PAPERS, { 
       query, 
       max_results: maxResults, 
@@ -113,7 +113,8 @@ export const api = {
       year_from: yearFrom ? parseInt(yearFrom) : undefined,
       year_to: yearTo ? parseInt(yearTo) : undefined,
       expanded_keywords: expandedKeywords,
-      sources: sources && sources.length > 0 ? sources : undefined
+      sources: sources && sources.length > 0 ? sources : undefined,
+      use_chinese: useChinese || false  // 🔑 新增：中文搜索模式参数
     }),
     
   multiSourceSearch: (query: string, maxResults: number = 50, sources?: string[]) =>

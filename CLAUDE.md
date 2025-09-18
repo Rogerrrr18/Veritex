@@ -32,7 +32,6 @@ Veritex betaV3是一个现代化的AI驱动学术文献搜索系统，采用Fast
 #### 🔍 搜索引擎层
 - **`multi_source_engine.py`** - 多源搜索协调器
 - **`scholar_dock_spider.py`** - ScholarDock爬虫（主力）
-- **`scholar_mirror_api.py`** - 学术镜像API
 
 #### 🤖 LLM接口层
 - **`llm_interface.py`** - 统一LLM管理器

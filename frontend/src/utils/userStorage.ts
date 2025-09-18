@@ -294,7 +294,8 @@ export const USER_DATA_KEYS = {
   SEARCH_HISTORY: 'paper_god_search_history',
   CHAT_HISTORY_UNIFIED: 'paper_god_chat_history',
   UNIFIED_HISTORY: 'paper_god_unified_history',
-  USER_SETTINGS: 'paper_god_user_settings'
+  USER_SETTINGS: 'paper_god_user_settings',
+  KEYWORD_CLOUD: 'keyword_cloud_data' // 🔑 关键词云数据存储键
 } as const
 
 // 全局共享数据键名（所有租户共享）

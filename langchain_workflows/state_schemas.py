@@ -44,6 +44,7 @@ class PaperSearchState(TypedDict):
     year_from: Optional[int]  # 年份筛选
     year_to: Optional[int]
     sources: Optional[List[str]]  # 数据源筛选
+    use_chinese: Optional[bool]  # 🔑 新增：是否使用中文搜索模式
     
     # 错误处理
     error_message: Optional[str]
@@ -58,7 +59,8 @@ def create_initial_state(
     allow_search: bool = True,
     year_from: Optional[int] = None,
     year_to: Optional[int] = None,
-    sources: Optional[List[str]] = None
+    sources: Optional[List[str]] = None,
+    use_chinese: Optional[bool] = False  # 🔑 新增：中文搜索模式参数
 ) -> PaperSearchState:
     """
     创建初始状态
@@ -86,6 +88,7 @@ def create_initial_state(
         year_from=year_from,
         year_to=year_to,
         sources=sources,
+        use_chinese=use_chinese,  # 🔑 新增：中文搜索模式
         current_step="initialized",
         is_completed=False,
         intent_result=None,

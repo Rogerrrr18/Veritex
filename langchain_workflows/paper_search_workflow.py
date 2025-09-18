@@ -380,9 +380,10 @@ class IntelligentPaperSearchAgent:
                         "cache_hit": True  # 标记缓存命中
                     }
             
-            # 使用完整的文献搜索prompt（支持模式化说明）
+            # 使用完整的文献搜索prompt（支持模式化说明和中文搜索）
             from prompt_utils import get_literature_search_prompt
-            prompt = get_literature_search_prompt(user_message, mode=mode)
+            sources = state.get("sources", [])
+            prompt = get_literature_search_prompt(user_message, mode=mode, sources=sources)
             
             # 调用LLM进行关键词扩展和搜索分析（使用学术搜索超时配置）
             import os
@@ -469,9 +470,10 @@ class IntelligentPaperSearchAgent:
             mode = state.get("mode", "auto-search")
             print(f"学术探讨处理: {user_message} (模式: {mode})")
             
-            # 使用简化的prompt工具函数
+            # 使用简化的prompt工具函数（支持中文搜索模式）
             from prompt_utils import get_academic_discussion_prompt
-            prompt = get_academic_discussion_prompt(user_message, mode=mode)
+            sources = state.get("sources", [])
+            prompt = get_academic_discussion_prompt(user_message, mode=mode, sources=sources)
             
             # 并行处理：LLM学术讨论 + 搜索引擎预热
             print("🚀 开始并行LLM学术讨论分析 + 搜索引擎预热")
@@ -1154,7 +1156,8 @@ class IntelligentPaperSearchAgent:
                     year_from=year_from,
                     year_to=year_to,
                     sources=sources,
-                    analysis=analysis
+                    analysis=analysis,
+                    use_chinese=state.get('use_chinese', False)  # 🔑 新增：传递中文搜索模式
                 )
             elif hasattr(search_engine, 'search_parallel'):
                 # 传递年限参数和analysis参数
@@ -1697,7 +1700,7 @@ class IntelligentPaperSearchAgent:
         
         return unique_terms
     
-    async def search_papers(self, query: str, max_results: int = 20, thread_id: str = None, mode: str = "auto-search", force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    async def search_papers(self, query: str, max_results: int = 20, thread_id: str = None, mode: str = "auto-search", force_search: bool = False, year_from: Optional[int] = None, year_to: Optional[int] = None, sources: Optional[List[str]] = None, allow_search: bool = True, history: Optional[List[Dict[str, str]]] = None, use_chinese: Optional[bool] = False) -> Dict[str, Any]:
         """主要搜索接口"""
         if thread_id is None:
             thread_id = f"thread_{uuid.uuid4().hex[:8]}"
@@ -1711,7 +1714,8 @@ class IntelligentPaperSearchAgent:
             allow_search=allow_search,
             year_from=year_from,
             year_to=year_to,
-            sources=sources
+            sources=sources,
+            use_chinese=use_chinese  # 🔑 新增：传递中文搜索模式参数
         )
 
         # 注入历史对话（最近20条）

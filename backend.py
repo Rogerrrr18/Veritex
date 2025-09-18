@@ -96,6 +96,8 @@ class SearchRequest(BaseModel):
     sources: Optional[List[str]] = None  # 指定数据源
     # 新增：预扩展的关键词（从关键词扩展步骤获得）
     expanded_keywords: Optional[Dict[str, Any]] = None
+    # 新增：是否使用中文搜索模式
+    use_chinese: Optional[bool] = False
 
 # 轻量埋点与注册请求模型
 class RegisterRequest(BaseModel):
@@ -547,7 +549,8 @@ async def generate_stream_response(
                         analysis_result=final_result.get('analysis_result'),
                         year_from=year_from,
                         year_to=year_to,
-                        sources=['scholar_dock', 'arxiv']  # 明确指定数据源
+                        # 关键修复：尊重前端传入的数据源选择（如只选Google Scholar）
+                        sources=sources
                     )
                     
                     # 发送搜索完成事件
@@ -1060,7 +1063,8 @@ async def search_papers_api(req: SearchRequest):
                         year_from=req.year_from,
                         year_to=req.year_to,
                         sources=req.sources,
-                        analysis=analysis_data
+                        analysis=analysis_data,
+                        use_chinese=req.use_chinese  # 🔑 新增：传递中文搜索模式参数
                     )
                 except Exception as search_error:
                     logger.error(f"❌ 搜索执行失败: {search_error}")

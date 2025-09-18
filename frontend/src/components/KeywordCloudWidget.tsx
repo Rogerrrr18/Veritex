@@ -5,19 +5,23 @@ import { UserStorage, USER_DATA_KEYS } from '../utils/userStorage';
 
 interface HierarchicalKeywords {
   exact_terms?: {
-    terms: string[];
+    chinese?: string[];
+    english?: string[];
     weight: number;
   };
   core_synonyms?: {
-    terms: string[];
+    chinese?: string[];
+    english?: string[];
     weight: number;
   };
   related_terms?: {
-    terms: string[];
+    chinese?: string[];
+    english?: string[];
     weight: number;
   };
   context_terms?: {
-    terms: string[];
+    chinese?: string[];
+    english?: string[];
     weight: number;
   };
 }
@@ -34,6 +38,7 @@ interface SearchSettings {
   yearFrom: string;
   yearTo: string;
   sources: string[];
+  useChinese?: boolean; // 新增：是否使用中文模式
 }
 
 interface KeywordItem {
@@ -52,12 +57,89 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   const [keywords, setKeywords] = useState<KeywordItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [newKeyword, setNewKeyword] = useState('');
-  const [searchSettings, setSearchSettings] = useState<SearchSettings>({
-    maxResults: 20,
-    yearFrom: '',
-    yearTo: '',
-    sources: ['scholarly'] // 默认只选择Google Scholar，避免数据源返回不足问题
+  
+  // 🔑 关键词云数据持久化状态
+  const [keywordCloudData, setKeywordCloudData] = useState<{
+    hierarchicalKeywords: HierarchicalKeywords | null;
+    expandedKeywords: KeywordItem[];
+    originalQuery?: string;
+  } | null>(() => {
+    // 尝试从存储中恢复关键词云数据
+    try {
+      const savedData = UserStorage.getUserData(USER_DATA_KEYS.KEYWORD_CLOUD);
+      if (savedData) {
+        const parsed = JSON.parse(savedData);
+        console.log('🔍 页面初始化-恢复关键词云数据:', parsed);
+        console.log('🔍 数据包含层级:', Object.keys(parsed.hierarchicalKeywords || {}));
+        return parsed;
+      } else {
+        console.log('📭 页面初始化-未找到存储的关键词云数据');
+      }
+    } catch (error) {
+      console.warn('⚠️ 恢复关键词云数据失败:', error);
+    }
+    return null;
   });
+  
+  const [displayChinese, setDisplayChinese] = useState(() => {
+    // 恢复语言偏好
+    const savedLanguage = UserStorage.getUserData('language_preference');
+    const isChinese = savedLanguage === 'chinese';
+    console.log('🔍 KeywordCloudWidget初始化:', { savedLanguage, isChinese, hierarchicalKeywords: !!hierarchicalKeywords, hasStoredData: !!keywordCloudData });
+    return isChinese;
+  }); // 新增：控制显示中文还是英文，支持持久化
+  const [searchSettings, setSearchSettings] = useState<SearchSettings>(() => {
+    // 优先恢复已保存的用户搜索设置
+    try {
+      const saved = UserStorage.getUserData(USER_DATA_KEYS.USER_SETTINGS);
+      const savedLanguage = UserStorage.getUserData('language_preference');
+      const isChinese = savedLanguage === 'chinese';
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          maxResults: Number(parsed.maxResults) || 20,
+          yearFrom: typeof parsed.yearFrom === 'string' ? parsed.yearFrom : (parsed.yearFrom ? String(parsed.yearFrom) : ''),
+          yearTo: typeof parsed.yearTo === 'string' ? parsed.yearTo : (parsed.yearTo ? String(parsed.yearTo) : ''),
+          sources: Array.isArray(parsed.sources) && parsed.sources.length > 0 ? parsed.sources : ['scholarly'],
+          useChinese: typeof parsed.useChinese === 'boolean' ? parsed.useChinese : isChinese
+        }
+      }
+      return {
+        maxResults: 20,
+        yearFrom: '',
+        yearTo: '',
+        sources: ['scholarly'], // 默认只选择Google Scholar
+        useChinese: isChinese
+      };
+    } catch {
+      // 降级到默认配置
+      const savedLanguage = UserStorage.getUserData('language_preference');
+      const isChinese = savedLanguage === 'chinese';
+      return {
+        maxResults: 20,
+        yearFrom: '',
+        yearTo: '',
+        sources: ['scholarly'],
+        useChinese: isChinese
+      };
+    }
+  });
+
+  // 持久化搜索设置，供聊天模式读取
+  useEffect(() => {
+    try {
+      const toSave = {
+        maxResults: searchSettings.maxResults,
+        yearFrom: searchSettings.yearFrom,
+        yearTo: searchSettings.yearTo,
+        sources: searchSettings.sources,
+        useChinese: searchSettings.useChinese
+      };
+      UserStorage.setUserData(USER_DATA_KEYS.USER_SETTINGS, JSON.stringify(toSave));
+    } catch (e) {
+      console.warn('⚠️ 保存搜索设置失败:', e);
+    }
+  }, [searchSettings]);
 
   // 颜色配置：不同层级使用不同颜色
   const levelColors = {
@@ -75,61 +157,152 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     context_terms: 'Context Terms'
   };
 
+  // 🔑 保存关键词云数据到存储
+  const saveKeywordCloudData = (data: {
+    hierarchicalKeywords: HierarchicalKeywords | null;
+    expandedKeywords: KeywordItem[];
+    originalQuery?: string;
+  }) => {
+    try {
+      UserStorage.setUserData(USER_DATA_KEYS.KEYWORD_CLOUD, JSON.stringify(data));
+      setKeywordCloudData(data);
+      console.log('💾 关键词云数据已保存:', data);
+    } catch (error) {
+      console.warn('⚠️ 保存关键词云数据失败:', error);
+    }
+  };
+  
+  // 🗑️ 清除关键词云数据
+  const clearKeywordCloudData = () => {
+    console.log('🗑️ 用户手动清除关键词云数据');
+    UserStorage.removeUserData(USER_DATA_KEYS.KEYWORD_CLOUD);
+    setKeywordCloudData(null);
+    setKeywords([]);
+    console.log('✅ 关键词云数据已清除完毕');
+  };
+
+  // 🔄 优先使用存储的数据，其次使用传入的数据
+  const activeHierarchicalKeywords = hierarchicalKeywords || keywordCloudData?.hierarchicalKeywords;
+  const activeOriginalQuery = (hierarchicalKeywords ? undefined : keywordCloudData?.originalQuery) || '';
+
   // 解析层次化关键词数据
   useEffect(() => {
-    if (!hierarchicalKeywords) {
+    const currentHierarchicalKeywords = activeHierarchicalKeywords;
+    
+    // 🔧 优化数据来源检测和日志记录
+    if (hierarchicalKeywords) {
+      console.log('🔍 使用新传入的关键词数据:', hierarchicalKeywords);
+    } else if (keywordCloudData?.hierarchicalKeywords) {
+      console.log('🔄 使用存储的关键词数据:', keywordCloudData.hierarchicalKeywords);
+    } else {
+      console.log('❌ 没有可用的关键词数据 - 显示空状态');
+      setKeywords([]);
+      return;
+    }
+    
+    if (!currentHierarchicalKeywords) {
+      console.log('❌ 当前活跃关键词数据为空');
       setKeywords([]);
       return;
     }
 
     const newKeywords: KeywordItem[] = [];
 
-    // 🔧 新增：数据验证和容错处理
+    // 🔧 新增：支持双语关键词解析
     try {
-      // 按层级处理关键词
-      Object.entries(hierarchicalKeywords).forEach(([level, data]) => {
-        if (data && typeof data === 'object' && data.terms && Array.isArray(data.terms)) {
-          data.terms.forEach((term: string) => {
-            if (term && typeof term === 'string' && term.trim()) {
-              newKeywords.push({
-                term: term.trim(),
-                level,
-                weight: typeof data.weight === 'number' ? data.weight : 1.0,
-                color: levelColors[level as keyof typeof levelColors] || '#6b7280'
-              });
-            }
-          });
+      // 按层级处理关键词 - 使用当前活跃的关键词数据
+      Object.entries(currentHierarchicalKeywords).forEach(([level, data]) => {
+        if (data && typeof data === 'object') {
+          // 根据displayChinese状态选择显示的语言
+          const termsToDisplay = displayChinese 
+            ? (data.chinese || data.english || [])  // 中文模式：优先中文，降级英文
+            : (data.english || data.chinese || []); // 英文模式：优先英文，降级中文
+          
+          if (Array.isArray(termsToDisplay)) {
+            termsToDisplay.forEach((term: string) => {
+              if (term && typeof term === 'string' && term.trim()) {
+                newKeywords.push({
+                  term: term.trim(),
+                  level,
+                  weight: typeof data.weight === 'number' ? data.weight : 1.0,
+                  color: levelColors[level as keyof typeof levelColors] || '#6b7280'
+                });
+              }
+            });
+          }
         } else {
           console.warn(`⚠️ 关键词层级 ${level} 的数据格式异常:`, data);
         }
       });
 
       setKeywords(newKeywords);
-      console.log(`✅ 成功解析 ${newKeywords.length} 个关键词`);
+      console.log(`✅ 成功解析 ${newKeywords.length} 个关键词 (${displayChinese ? '中文' : '英文'}模式)`);
+      
+      // 🔑 只有当有新传入的数据时才保存到存储（避免重复保存）
+      if (hierarchicalKeywords) {
+        console.log('💾 检测到新的关键词数据，保存到存储');
+        saveKeywordCloudData({
+          hierarchicalKeywords,
+          expandedKeywords: newKeywords,
+          originalQuery: activeOriginalQuery
+        });
+      } else if (keywordCloudData && newKeywords.length > 0) {
+        // 如果是从存储恢复的数据，确保当前显示的关键词与存储保持同步
+        console.log('🔄 从存储恢复数据，更新显示的关键词');
+        const updatedData = {
+          ...keywordCloudData,
+          expandedKeywords: newKeywords
+        };
+        setKeywordCloudData(updatedData);
+        // 静默更新存储（不打印保存日志）
+        try {
+          UserStorage.setUserData(USER_DATA_KEYS.KEYWORD_CLOUD, JSON.stringify(updatedData));
+        } catch (error) {
+          console.warn('⚠️ 更新关键词显示数据失败:', error);
+        }
+      }
     } catch (error) {
       console.error('❌ 解析关键词数据时出错:', error);
-      console.error('异常的关键词数据:', hierarchicalKeywords);
+      console.error('异常的关键词数据:', currentHierarchicalKeywords);
       setKeywords([]); // 出错时清空关键词
     }
-  }, [hierarchicalKeywords]);
+  }, [hierarchicalKeywords, keywordCloudData, displayChinese, activeHierarchicalKeywords, activeOriginalQuery]); // 优化依赖项
 
   // 添加自定义关键词
   const addCustomKeyword = () => {
     if (newKeyword.trim()) {
-      setKeywords(prev => [...prev, {
+      const newKeywordItem = {
         term: newKeyword.trim(),
         level: 'custom',
         weight: 1.0,
         color: '#6366f1',
         editable: true
-      }]);
+      };
+      
+      const updatedKeywords = [...keywords, newKeywordItem];
+      setKeywords(updatedKeywords);
       setNewKeyword('');
+      
+      // 🔑 保存更新后的关键词云数据
+      saveKeywordCloudData({
+        hierarchicalKeywords: activeHierarchicalKeywords,
+        expandedKeywords: updatedKeywords,
+        originalQuery: activeOriginalQuery
+      });
     }
   };
 
   // 删除关键词
   const removeKeyword = (index: number) => {
-    setKeywords(prev => prev.filter((_, i) => i !== index));
+    const updatedKeywords = keywords.filter((_, i) => i !== index);
+    setKeywords(updatedKeywords);
+    
+    // 🔑 保存更新后的关键词云数据
+    saveKeywordCloudData({
+      hierarchicalKeywords: activeHierarchicalKeywords,
+      expandedKeywords: updatedKeywords,
+      originalQuery: activeOriginalQuery
+    });
   };
 
   // 执行搜索
@@ -145,28 +318,33 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       // 构建搜索查询
       const searchQuery = keywords.map(k => k.term).join(' OR ');
 
-      // 🔑 关键优化：构建预扩展关键词，避免重复LLM分析
+      // 🔑 关键优化：构建预扩展关键词，支持双语模式
       const preExpandedKeywords = {
         hierarchical_keywords: {
           exact_terms: {
-            terms: keywords.filter(k => k.level === 'exact_terms').map(k => k.term),
+            chinese: keywords.filter(k => k.level === 'exact_terms').map(k => k.term),
+            english: keywords.filter(k => k.level === 'exact_terms').map(k => k.term),
             weight: 1.0
           },
           core_synonyms: {
-            terms: keywords.filter(k => k.level === 'core_synonyms').map(k => k.term),
+            chinese: keywords.filter(k => k.level === 'core_synonyms').map(k => k.term),
+            english: keywords.filter(k => k.level === 'core_synonyms').map(k => k.term),
             weight: 0.9
           },
           related_terms: {
-            terms: keywords.filter(k => k.level === 'related_terms').map(k => k.term),
+            chinese: keywords.filter(k => k.level === 'related_terms').map(k => k.term),
+            english: keywords.filter(k => k.level === 'related_terms').map(k => k.term),
             weight: 0.5
           },
           context_terms: {
-            terms: keywords.filter(k => k.level === 'context_terms').map(k => k.term),
+            chinese: keywords.filter(k => k.level === 'context_terms').map(k => k.term),
+            english: keywords.filter(k => k.level === 'context_terms').map(k => k.term),
             weight: 0.4
           }
         },
         domain: 'academic_research',
-        core_concepts: keywords.map(k => k.term)
+        core_concepts: keywords.map(k => k.term),
+        useChinese: searchSettings.useChinese // 🔑 添加中文模式标识
       };
 
       console.log('🚀 使用预扩展关键词执行搜索，避免重复LLM分析');
@@ -180,7 +358,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         searchSettings.yearFrom, 
         searchSettings.yearTo,
         preExpandedKeywords,  // 🔑 传递预扩展关键词
-        searchSettings.sources // 🔑 传递数据源选择
+        searchSettings.sources, // 🔑 传递数据源选择
+        searchSettings.useChinese // 🔑 新增：传递中文搜索模式参数
       );
       
       // 处理搜索结果
@@ -374,16 +553,79 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               </div>
             </div>
             
-            {/* 数据源选择 - 独立选择按钮 */}
+            {/* 数据源选择 - 带右上角语言开关的面板 */}
             <div>
-              <label style={{ 
-                display: 'block', 
-                fontSize: '12px', 
-                color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
-                marginBottom: '6px' 
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '6px'
               }}>
-                Data Sources
-              </label>
+                <label style={{ 
+                  fontSize: '12px', 
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                  margin: 0
+                }}>
+                  Data Sources
+                </label>
+                
+                {/* 现代开关样式的语言切换 */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{
+                    fontSize: '10px',
+                    color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                    fontWeight: '500'
+                  }}>
+                    En
+                  </span>
+                  <div 
+                    onClick={() => {
+                      const newDisplayChinese = !displayChinese;
+                      setDisplayChinese(newDisplayChinese);
+                      setSearchSettings(prev => ({
+                        ...prev,
+                        useChinese: newDisplayChinese
+                      }));
+                      // 保存语言偏好到持久化存储
+                      UserStorage.setUserData('language_preference', newDisplayChinese ? 'chinese' : 'english');
+                    }}
+                    style={{
+                      width: '32px',
+                      height: '16px',
+                      borderRadius: '8px',
+                      backgroundColor: displayChinese ? '#10b981' : '#f59e0b', // 中文绿色，英文黄色
+                      cursor: 'pointer',
+                      position: 'relative',
+                      transition: 'all 0.2s ease',
+                      border: '1px solid ' + (displayChinese ? '#10b981' : '#f59e0b') // 边框颜色也相应调整
+                    }}
+                    title={displayChinese ? '切换到英文关键词模式' : '切换到中文关键词模式'}
+                  >
+                    <div style={{
+                      width: '12px',
+                      height: '12px',
+                      borderRadius: '6px',
+                      backgroundColor: '#ffffff',
+                      position: 'absolute',
+                      top: '1px',
+                      left: displayChinese ? '17px' : '1px',
+                      transition: 'all 0.2s ease',
+                      boxShadow: '0 1px 2px rgba(0, 0, 0, 0.2)'
+                    }} />
+                  </div>
+                  <span style={{
+                    fontSize: '10px',
+                    color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                    fontWeight: '500'
+                  }}>
+                    中
+                  </span>
+                </div>
+              </div>
               <div style={{ 
                 display: 'flex', 
                 gap: '8px',
@@ -391,14 +633,16 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
               }}>
                 {/* Google Scholar 按钮 */}
                 <button
-                  onClick={() => setSearchSettings(prev => ({
-                    ...prev,
-                    sources: ['scholarly'] // 只选择Google Scholar
-                  }))}
+                  onClick={() => {
+                    setSearchSettings(prev => ({
+                      ...prev,
+                      sources: ['scholarly'] // 只选择Google Scholar
+                    }));
+                  }}
                   style={{
                     padding: '8px 16px',
                     borderRadius: '6px',
-                    border: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly') 
+                    border: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
                       ? '2px solid #10b981' : '1px solid #333',
                     backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
                       ? 'rgba(16, 185, 129, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
@@ -440,15 +684,18 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 </button>
               </div>
               
-              {/* 显示当前选择的数据源 */}
+              {/* 显示当前选择的数据源和模式 */}
               <div style={{
                 marginTop: '6px',
                 fontSize: '11px',
                 color: theme === 'dark' ? '#666' : '#9ca3af'
               }}>
-                {searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly') && 'Google Scholar selected'}
-                {searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv') && 'arXiv selected'}
-                {searchSettings.sources.length !== 1 && `${searchSettings.sources.length} sources selected`}
+                {searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly') ? 
+                  `Google Scholar selected ${displayChinese ? '(中文模式)' : '(English mode)'}` :
+                  searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv') ?
+                    `arXiv selected ${displayChinese ? '(中文模式)' : '(English mode)'}` :
+                    `${searchSettings.sources.length} sources selected ${displayChinese ? '(中文模式)' : '(English mode)'}`
+                }
               </div>
             </div>
           </div>
@@ -590,45 +837,115 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             </div>
           </div>
           
-          {/* 数据源选择 - 独立选择按钮 */}
+          {/* 数据源选择 - 带右上角语言开关的面板 */}
           <div>
-            <label style={{ 
-              display: 'block', 
-              fontSize: '12px', 
-              color: theme === 'dark' ? '#a1a1aa' : '#6b7280', 
-              marginBottom: '6px' 
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '6px'
             }}>
-              Data Sources
-            </label>
+              <label style={{ 
+                fontSize: '12px', 
+                color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                margin: 0
+              }}>
+                Data Sources
+              </label>
+              
+              {/* 现代开关样式的语言切换 */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span style={{
+                  fontSize: '10px',
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                  fontWeight: '500'
+                }}>
+                  En
+                </span>
+                <div 
+                  onClick={() => {
+                    const newDisplayChinese = !displayChinese;
+                    console.log('🔄 语言切换:', displayChinese, '->', newDisplayChinese);
+                    setDisplayChinese(newDisplayChinese);
+                    setSearchSettings(prev => ({
+                      ...prev,
+                      useChinese: newDisplayChinese
+                    }));
+                    // 保存语言偏好到持久化存储
+                    UserStorage.setUserData('language_preference', newDisplayChinese ? 'chinese' : 'english');
+                  }}
+                  style={{
+                    width: '32px',
+                    height: '16px',
+                    borderRadius: '8px',
+                    backgroundColor: displayChinese ? '#10b981' : '#f59e0b', // 中文绿色，英文黄色
+                    cursor: 'pointer',
+                    position: 'relative',
+                    transition: 'all 0.2s ease',
+                    border: '1px solid ' + (displayChinese ? '#10b981' : '#f59e0b'), // 边框颜色也相应调整
+                    // 添加调试样式，确保可见性
+                    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+                    minWidth: '32px', // 确保最小宽度
+                    minHeight: '16px' // 确保最小高度
+                  }}
+                  title={displayChinese ? '切换到英文关键词模式' : '切换到中文关键词模式'}
+                >
+                  <div style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '6px',
+                    backgroundColor: '#ffffff',
+                    position: 'absolute',
+                    top: '1px',
+                    left: displayChinese ? '17px' : '1px',
+                    transition: 'all 0.2s ease',
+                    boxShadow: '0 1px 2px rgba(0, 0, 0, 0.2)'
+                  }} />
+                </div>
+                <span style={{
+                  fontSize: '10px',
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                  fontWeight: '500'
+                }}>
+                  中
+                </span>
+              </div>
+            </div>
             <div style={{ 
               display: 'flex', 
               gap: '8px',
               flexWrap: 'wrap'
             }}>
-              {/* Google Scholar 按钮 */}
-              <button
-                onClick={() => setSearchSettings(prev => ({
-                  ...prev,
-                  sources: ['scholarly'] // 只选择Google Scholar
-                }))}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '6px',
-                  border: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly') 
-                    ? '2px solid #10b981' : '1px solid #333',
-                  backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
-                    ? 'rgba(16, 185, 129, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
-                  color: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
-                    ? '#10b981' : (theme === 'dark' ? '#fff' : '#1f2937'),
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  outline: 'none',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                Google Scholar
-              </button>
+                {/* Google Scholar 按钮 */}
+                <button
+                  onClick={() => {
+                    setSearchSettings(prev => ({
+                      ...prev,
+                      sources: ['scholarly'] // 只选择Google Scholar
+                    }));
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    border: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
+                      ? '2px solid #10b981' : '1px solid #333',
+                    backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
+                      ? 'rgba(16, 185, 129, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                    color: searchSettings.sources.length === 1 && searchSettings.sources.includes('scholarly')
+                      ? '#10b981' : (theme === 'dark' ? '#fff' : '#1f2937'),
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    outline: 'none',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  Google Scholar
+                </button>
               
               {/* arXiv 按钮 */}
               <button
@@ -639,7 +956,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 style={{
                   padding: '8px 16px',
                   borderRadius: '6px',
-                  border: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv') 
+                  border: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv')
                     ? '2px solid #f59e0b' : '1px solid #333',
                   backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv')
                     ? 'rgba(245, 158, 11, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
@@ -670,19 +987,51 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         <div style={{
           marginBottom: '16px',
           paddingBottom: '12px',
-          borderBottom: theme === 'dark' ? '1px solid #333' : '1px solid #e5e2d9'
+          borderBottom: theme === 'dark' ? '1px solid #333' : '1px solid #e5e2d9',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
         }}>
-          <h4 style={{ 
-            margin: '0 0 4px 0', 
-            fontSize: '16px', 
-            color: theme === 'dark' ? '#fff' : '#1f2937',
-            fontWeight: '600'
-          }}>
-            Keywords Cloud
-          </h4>
-          <div style={{ fontSize: '12px', color: theme === 'dark' ? '#a1a1aa' : '#6b7280' }}>
-            {keywords.length} keywords • Click to remove
+          <div>
+            <h4 style={{ 
+              margin: '0 0 4px 0', 
+              fontSize: '16px', 
+              color: theme === 'dark' ? '#fff' : '#1f2937',
+              fontWeight: '600'
+            }}>
+              Keywords Cloud
+            </h4>
+            <div style={{ fontSize: '12px', color: theme === 'dark' ? '#a1a1aa' : '#6b7280' }}>
+              {keywords.length} keywords • Click to remove
+            </div>
           </div>
+          
+          {/* 清除按钮 */}
+          {keywords.length > 0 && (
+            <button
+              onClick={clearKeywordCloudData}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                border: '1px solid #ef4444',
+                borderRadius: '6px',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                color: '#ef4444',
+                cursor: 'pointer',
+                fontWeight: '500',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.2)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+              }}
+              title="清除所有关键词云数据"
+            >
+              Clear All
+            </button>
+          )}
         </div>
 
         {/* 关键词显示区域 */}
@@ -788,13 +1137,23 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                         onClick={() => {
                           const newTerm = prompt(`添加新的${levelNames[level as keyof typeof levelNames]}关键词:`);
                           if (newTerm && newTerm.trim()) {
-                            setKeywords(prev => [...prev, {
+                            const newKeywordItem = {
                               term: newTerm.trim(),
                               level: level,
                               weight: 1.0,
                               color: levelColors[level as keyof typeof levelColors],
                               editable: true
-                            }]);
+                            };
+                            
+                            const updatedKeywords = [...keywords, newKeywordItem];
+                            setKeywords(updatedKeywords);
+                            
+                            // 🔑 保存更新后的关键词云数据
+                            saveKeywordCloudData({
+                              hierarchicalKeywords: activeHierarchicalKeywords,
+                              expandedKeywords: updatedKeywords,
+                              originalQuery: activeOriginalQuery
+                            });
                           }
                         }}
                         style={{

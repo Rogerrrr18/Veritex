@@ -15,7 +15,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from scholar_mirror_api import ScholarMirrorAPI
 from scholar_dock_spider import ScholarDockSpider, ScholarDockPaper
 
 # 加载环境变量
@@ -1090,18 +1089,16 @@ class MultiSourceEngine:
         
         # Google Scholar访问 - 只使用ScholarDock
         if GOOGLE_SCHOLAR_ENABLED and SCHOLAR_DOCK_ENABLED:
-            self.scholarly = ScholarDockAPI()
+            self.scholar_dock = ScholarDockAPI()
             logger.info("🚀 使用ScholarDock高效爬虫引擎")
-            # 新增：镜像API作为备用方案
-            self.scholar_mirror = ScholarMirrorAPI()
         else:
-            self.scholarly = None
-            self.scholar_mirror = None
+            self.scholar_dock = None
             logger.info("🚫 Google Scholar已禁用，使用稳定数据源")
         
         self.semantic_scholar = SemanticScholarAPI() if SEMANTIC_SCHOLAR_ENABLED else None
         self.crossref = CrossrefAPI() if CROSSREF_ENABLED else None
         self.pubmed = PubMedAPI() if PUBMED_ENABLED else None
+        
         
         
         # 显示启用的数据源
@@ -1113,10 +1110,8 @@ class MultiSourceEngine:
         else:
             disabled_sources.append("arXiv")
             
-        if self.scholarly:
+        if self.scholar_dock:
             enabled_sources.append("ScholarDock高效爬虫")
-            if self.scholar_mirror:
-                enabled_sources.append("Google Scholar镜像 (备用)")
         else:
             disabled_sources.append("Google Scholar")
             
@@ -1135,6 +1130,7 @@ class MultiSourceEngine:
         else:
             disabled_sources.append("PubMed")
         
+        
             
         logger.info(f"✅ 多源搜索引擎初始化完成")
         logger.info(f"🟢 启用数据源 ({len(enabled_sources)}): {', '.join(enabled_sources)}")
@@ -1145,13 +1141,14 @@ class MultiSourceEngine:
         """并行搜索多个数据源（支持统一布尔查询和年限筛选）"""
         return await self.search_parallel_with_filters(query, max_results, year_from=year_from, year_to=year_to, analysis=analysis)
     
-    def _build_unified_boolean_query(self, query: str, analysis: Optional[Dict] = None, use_fallback: bool = False) -> Dict[str, str]:
-        """构建统一的4层权重映射布尔查询，适配不同搜索源"""
+    def _build_unified_boolean_query(self, query: str, analysis: Optional[Dict] = None, use_fallback: bool = False, use_chinese: bool = False) -> Dict[str, str]:
+        """构建统一的4层权重映射布尔查询，适配不同搜索源，支持双语模式"""
         unified_queries = {}
         
         # 构建4层权重映射的布尔查询
-        boolean_query = self._build_hierarchical_boolean_query(query, analysis, use_fallback)
-        logger.info(f"构建4层权重布尔查询: {boolean_query}")
+        boolean_query = self._build_hierarchical_boolean_query(query, analysis, use_fallback, use_chinese)
+        language_mode = "中文" if use_chinese else "英文"
+        logger.info(f"构建4层权重布尔查询({language_mode}): {boolean_query}")
         
         # 为每个搜索源适配查询格式
         unified_queries['scholar_dock'] = boolean_query  # ScholarDock处理复杂查询
@@ -1162,8 +1159,8 @@ class MultiSourceEngine:
         
         return unified_queries
     
-    def _build_hierarchical_boolean_query(self, query: str, analysis: Optional[Dict] = None, use_fallback: bool = False) -> str:
-        """构建4层权重映射的布尔查询
+    def _build_hierarchical_boolean_query(self, query: str, analysis: Optional[Dict] = None, use_fallback: bool = False, use_chinese: bool = False) -> str:
+        """构建4层权重映射的布尔查询，支持双语关键词智能选择
         
         布尔结构：
         (exact_terms) AND 
@@ -1171,55 +1168,78 @@ class MultiSourceEngine:
         (related_terms OR context_terms)
         
         如果use_fallback=True，则只使用exact_terms进行补充搜索
+        如果use_chinese=True，优先使用中文关键词
+        如果use_chinese=False，使用简化的英文查询策略
         """
         try:
+            # 🔧 修复：当use_chinese=False时，使用简化策略，避免过于复杂的查询
+            if not use_chinese and analysis and analysis.get("hierarchical_keywords"):
+                logger.info("🎯 Eng模式：使用简化英文查询策略")
+                hierarchical_keywords = analysis["hierarchical_keywords"]
+                
+                # 只使用exact_terms，避免查询过于复杂
+                exact_terms_data = hierarchical_keywords.get("exact_terms", {})
+                exact_terms = exact_terms_data.get("english") or exact_terms_data.get("terms", [])
+                
+                if exact_terms and len(exact_terms) > 0:
+                    # 最多使用前3个最重要的术语，避免查询过长
+                    key_terms = exact_terms[:3]
+                    simplified_query = ' OR '.join([f'"{term}"' for term in key_terms])
+                    logger.info(f"🔧 Eng模式简化查询: {simplified_query}")
+                    return simplified_query
+                else:
+                    # 降级到原始查询
+                    logger.info("🔧 Eng模式降级到原始查询")
+                    return query
+            
             # 如果是降级搜索，只使用exact_terms
             if use_fallback and analysis and analysis.get("hierarchical_keywords"):
-                exact_terms = analysis["hierarchical_keywords"].get("exact_terms", {}).get("terms", [])
+                exact_terms_data = analysis["hierarchical_keywords"].get("exact_terms", {})
+                # 支持双语关键词选择
+                if use_chinese and exact_terms_data.get("chinese"):
+                    exact_terms = exact_terms_data["chinese"]
+                elif exact_terms_data.get("english"):
+                    exact_terms = exact_terms_data["english"]
+                else:
+                    exact_terms = exact_terms_data.get("terms", [])  # 兼容旧格式
+                
                 if exact_terms:
                     # 简单的精确术语查询
                     fallback_query = ' OR '.join([f'"{term}"' for term in exact_terms])
-                    logger.info(f"🔄 使用降级查询(exact_terms): {fallback_query}")
+                    language_mode = "中文" if use_chinese else "英文"
+                    logger.info(f"🔄 使用降级查询(exact_terms-{language_mode}): {fallback_query}")
                     return fallback_query
                 else:
                     logger.warning("⚠️ 没有exact_terms可用于降级查询，使用原查询")
                     return query
             
-            # 如果有LLM分析结果，构建4层权重布尔查询
-            if analysis and analysis.get("hierarchical_keywords"):
+            # 如果有LLM分析结果，构建4层权重布尔查询（仅用于中文模式）
+            if use_chinese and analysis and analysis.get("hierarchical_keywords"):
                 hierarchical_keywords = analysis["hierarchical_keywords"]
                 
-                # 提取各层关键词
-                exact_terms = hierarchical_keywords.get("exact_terms", {}).get("terms", [])
-                core_synonyms = hierarchical_keywords.get("core_synonyms", {}).get("terms", [])
-                related_terms = hierarchical_keywords.get("related_terms", {}).get("terms", [])
-                context_terms = hierarchical_keywords.get("context_terms", {}).get("terms", [])
-                
-                # 构建布尔查询各部分
+                # 提取各层关键词，支持双语选择
                 query_parts = []
+                language_mode = "中文" if use_chinese else "英文"
                 
-                # 第1层：exact_terms（必须匹配）
-                if exact_terms:
-                    exact_part = '(' + ' OR '.join([f'"{term}"' for term in exact_terms]) + ')'
-                    query_parts.append(exact_part)
-                
-                # 第2层：core_synonyms OR exact_terms（高权重同义词）
-                if core_synonyms:
-                    synonym_terms = core_synonyms + exact_terms  # 包含精确术语
-                    synonym_part = '(' + ' OR '.join([f'"{term}"' for term in synonym_terms]) + ')'
-                    query_parts.append(synonym_part)
-                
-                # 第3层：related_terms OR context_terms（相关扩展）
-                related_context_terms = related_terms + context_terms
-                if related_context_terms:
-                    related_part = '(' + ' OR '.join([f'"{term}"' for term in related_context_terms]) + ')'
-                    query_parts.append(related_part)
+                for category in ["exact_terms", "core_synonyms", "related_terms", "context_terms"]:
+                    if category in hierarchical_keywords:
+                        category_data = hierarchical_keywords[category]
+                        
+                        # 智能选择语言：优先使用指定语言，降级使用另一种语言
+                        if use_chinese:
+                            terms = category_data.get("chinese") or category_data.get("english") or category_data.get("terms", [])
+                        else:
+                            terms = category_data.get("english") or category_data.get("chinese") or category_data.get("terms", [])
+                        
+                        if terms:
+                            part = '(' + ' OR '.join([f'"{term}"' for term in terms]) + ')'
+                            query_parts.append(part)
+                            logger.debug(f"📊 {category}({language_mode}): {len(terms)}个关键词")
                 
                 # 用AND连接各层
                 if query_parts:
                     hierarchical_query = ' AND '.join(query_parts)
-                    logger.info(f"✅ 构建4层权重布尔查询成功")
-                    logger.debug(f"📊 查询层次: exact({len(exact_terms)}) + synonyms({len(core_synonyms)}) + related({len(related_terms)}) + context({len(context_terms)})")
+                    logger.info(f"✅ 构建4层权重布尔查询成功 ({language_mode}模式)")
                     return hierarchical_query
                 else:
                     logger.warning("⚠️ 无法从层次关键词构建查询，使用原查询")
@@ -1338,7 +1358,125 @@ class MultiSourceEngine:
         except Exception as e:
             logger.warning(f"PubMed查询适配失败: {e}")
             return boolean_query.replace('"', '')
+    
 
+    async def search_chinese_papers(self, query: str, target_count: int = 20) -> List[Paper]:
+        """专门的中文论文搜索方法，确保获取足够的中文论文"""
+        logger.info(f"🈶 开始中文论文专项搜索: {query} (目标: {target_count}篇)")
+        
+        all_papers = []
+        
+        # 策略1: 使用ScholarDock的智能分批搜索避免CAPTCHA
+        if self.scholar_dock:
+            try:
+                logger.info("🔍 策略1: ScholarDock智能分批搜索")
+                all_papers = await self._intelligent_batch_search(query, target_count)
+            except Exception as e:
+                logger.warning(f"ScholarDock智能搜索失败: {e}")
+        
+        
+        # 过滤和优先排序中文论文
+        chinese_papers = []
+        english_papers = []
+        
+        for paper in all_papers:
+            if self._is_chinese_paper(paper):
+                chinese_papers.append(paper)
+            else:
+                english_papers.append(paper)
+        
+        # 优先返回中文论文，不足时补充英文论文
+        final_papers = chinese_papers + english_papers
+        final_papers = final_papers[:target_count]
+        
+        chinese_count = len(chinese_papers[:target_count])
+        logger.info(f"📊 中文搜索完成: 共{len(final_papers)}篇，中文论文{chinese_count}篇 ({chinese_count/len(final_papers)*100:.1f}%)")
+        
+        return final_papers
+    
+    async def _intelligent_batch_search(self, query: str, target_count: int) -> List[Paper]:
+        """智能分批搜索策略，避免CAPTCHA限制"""
+        all_papers = []
+        search_variants = [
+            query,  # 原始查询
+            f"{query} 研究",  # 添加"研究"
+            f"{query} 算法",  # 添加"算法"
+            f"{query} 技术",  # 添加"技术"
+            f"{query} 应用"   # 添加"应用"
+        ]
+        
+        for i, variant_query in enumerate(search_variants):
+            if len(all_papers) >= target_count:
+                break
+                
+            try:
+                logger.info(f"🔍 批次{i+1}: 搜索变体查询 '{variant_query}'")
+                
+                async with ScholarDockSpider() as spider:
+                    # 每次搜索较少数量，减少CAPTCHA风险
+                    batch_papers = await spider.search(variant_query, limit=15)
+                    
+                # 去重并添加新论文
+                new_papers = []
+                for scholar_paper in batch_papers:
+                    # 简单去重：检查标题相似度
+                    is_duplicate = any(
+                        self._is_similar_title(scholar_paper.title, existing.title) 
+                        for existing in all_papers
+                    )
+                    if not is_duplicate:
+                        try:
+                            paper = convert_scholar_dock_paper(scholar_paper)
+                            new_papers.append(paper)
+                        except Exception as e:
+                            logger.warning(f"转换论文失败: {e}")
+                            continue
+                
+                all_papers.extend(new_papers)
+                logger.info(f"📄 批次{i+1}获得{len(new_papers)}篇新论文 (总计: {len(all_papers)}篇)")
+                
+                # 如果达到目标，提前结束
+                if len(all_papers) >= target_count:
+                    logger.info(f"🎯 已达到目标论文数: {len(all_papers)}")
+                    break
+                
+                # 批次间延迟，避免频率限制
+                if i < len(search_variants) - 1:
+                    delay = 30 + i * 10  # 递增延迟时间
+                    logger.info(f"⏳ 批次间延迟 {delay} 秒")
+                    await asyncio.sleep(delay)
+                    
+            except Exception as e:
+                logger.warning(f"批次{i+1}搜索失败: {e}")
+                continue
+        
+        return all_papers
+    
+    def _is_similar_title(self, title1: str, title2: str, threshold: float = 0.8) -> bool:
+        """简单的标题相似度检测，用于去重"""
+        # 移除标点符号和空格，转换为小写
+        import re
+        clean1 = re.sub(r'[^\w\u4e00-\u9fff]', '', title1.lower())
+        clean2 = re.sub(r'[^\w\u4e00-\u9fff]', '', title2.lower())
+        
+        # 如果一个标题包含在另一个中，且长度相似，认为相似
+        if clean1 in clean2 or clean2 in clean1:
+            len_ratio = min(len(clean1), len(clean2)) / max(len(clean1), len(clean2))
+            return len_ratio > threshold
+        
+        return False
+    
+    def _is_chinese_paper(self, paper: Paper) -> bool:
+        """判断是否为中文论文"""
+        import re
+        chinese_pattern = re.compile(r'[\u4e00-\u9fff]')
+        
+        # 检查标题和作者是否包含中文
+        title_has_chinese = bool(chinese_pattern.search(paper.title))
+        authors_has_chinese = any(chinese_pattern.search(author) for author in paper.authors)
+        
+        return title_has_chinese or authors_has_chinese
+    
     async def search_parallel_with_filters(
         self, 
         query: str, 
@@ -1347,14 +1485,17 @@ class MultiSourceEngine:
         year_to: Optional[int] = None,
         sources: Optional[List[str]] = None,
         analysis: Optional[Dict] = None,
-        mode: Optional[str] = None  # 新增：搜索模式
+        mode: Optional[str] = None,  # 搜索模式
+        use_chinese: Optional[bool] = False  # 新增：是否使用中文模式
     ) -> List[Paper]:
         """并行搜索多个数据源（带筛选参数和统一布尔查询）"""
         logger.info(f"开始多源并行搜索: {query}")
         
+        
         # 构建统一的布尔查询
-        unified_queries = self._build_unified_boolean_query(query, analysis)
-        logger.info(f"构建统一布尔查询完成，适配{len(unified_queries)}个搜索源")
+        unified_queries = self._build_unified_boolean_query(query, analysis, use_fallback=False, use_chinese=use_chinese)
+        language_mode = "中文" if use_chinese else "英文"
+        logger.info(f"构建统一布尔查询完成，适配{len(unified_queries)}个搜索源 ({language_mode}模式)")
         
         # 优先级排序：稳定数据源优先，Google Scholar作为补充
         stable_sources = [
@@ -1368,8 +1509,11 @@ class MultiSourceEngine:
         active_stable_sources = len(active_stable_sources_list)
         
         # Google Scholar作为补充数据源
-        has_scholar = self.scholarly is not None
+        has_scholar = self.scholar_dock is not None
         active_sources = active_stable_sources + (1 if has_scholar else 0)
+        
+        # 检测中文查询以优化搜索策略
+        chinese_query_detected = self._detect_chinese_query(query)
         
         # 修复搜索篇数分配逻辑：ScholarDock作为主力搜索源应获得更大配额
         if has_scholar and active_stable_sources > 0:
@@ -1382,7 +1526,7 @@ class MultiSourceEngine:
             stable_per_source = 0
             scholar_limit = max_results
         elif not has_scholar and active_stable_sources > 0:
-            # 只有稳定数据源时
+            # 只有稳定数据源时，平均分配
             stable_per_source = max(10, int(max_results // active_stable_sources))
             scholar_limit = 0
         else:
@@ -1400,7 +1544,7 @@ class MultiSourceEngine:
         
         # 数据源名称映射（前端标识符 -> 内部标识符）
         source_mapping = {
-            'scholarly': 'scholar_dock',
+            'scholarly': 'scholar_dock',  # 向后兼容：前端仍使用'scholarly'
             'scholar_dock': 'scholar_dock',
             'arxiv': 'arxiv',
             'semantic_scholar': 'semantic_scholar', 
@@ -1408,23 +1552,10 @@ class MultiSourceEngine:
             'pubmed': 'pubmed'
         }
         
-        # 🎯 auto-search模式特殊处理：只使用Google Scholar和arXiv各50%
-        if mode == "auto-search":
-            logger.info("🎯 [auto-search] 使用Google Scholar 50% + arXiv 50%配比")
-            
-            scholar_limit = max_results // 2  # 50%给Google Scholar
-            arxiv_limit = max_results - scholar_limit  # 剩余50%给arXiv
-            
-            sources_to_search = []
-            if self.scholarly:
-                sources_to_search.append(('scholar_dock', self.scholarly, 150.0, scholar_limit))
-            if self.arxiv:
-                sources_to_search.append(('arxiv', self.arxiv, 30.0, arxiv_limit))
-            
-            logger.info(f"📊 [auto-search] 配额分配: Google Scholar {scholar_limit}篇 + arXiv {arxiv_limit}篇")
-            
-        # 如果指定了特定数据源，只使用指定的数据源
-        elif sources and isinstance(sources, list) and len(sources) > 0:
+        # 优先处理：如果前端显式指定了数据源，严格只使用这些数据源
+        # 说明：此前 auto-search 分支会覆盖 sources 的选择，导致混入其他数据源
+        # 为满足“用户选择 Google Scholar 时，结果全部来自 Scholar”的需求，这里提升优先级
+        if sources and isinstance(sources, list) and len(sources) > 0:
             logger.info(f"🎯 使用指定数据源: {sources}")
             
             # 重新计算配额分配（针对指定数据源）
@@ -1432,8 +1563,8 @@ class MultiSourceEngine:
             for source_id in sources:
                 internal_name = source_mapping.get(source_id, source_id)
                 
-                if internal_name == 'scholar_dock' and self.scholarly:
-                    selected_sources.append(('scholar_dock', self.scholarly, 150.0))
+                if internal_name == 'scholar_dock' and self.scholar_dock:
+                    selected_sources.append(('scholar_dock', self.scholar_dock, 300.0))  # 提升到5分钟超时
                 elif internal_name == 'arxiv' and self.arxiv:
                     selected_sources.append(('arxiv', self.arxiv, 30.0))
                 elif internal_name == 'semantic_scholar' and self.semantic_scholar:
@@ -1445,7 +1576,6 @@ class MultiSourceEngine:
             
             # 为选定的数据源分配配额
             if selected_sources:
-                # 优化配额分配：单一数据源获得全部配额，多数据源合理分配
                 if len(selected_sources) == 1:
                     per_source_limit = max_results  # 单一数据源获得全部配额
                     logger.info(f"📊 单一指定数据源: 分配{per_source_limit}篇全部配额")
@@ -1455,11 +1585,24 @@ class MultiSourceEngine:
                 
                 for source_name, source_api, source_timeout in selected_sources:
                     sources_to_search.append((source_name, source_api, source_timeout, per_source_limit))
+        # 🎯 auto-search模式特殊处理：只使用Google Scholar和arXiv各50%
+        elif mode == "auto-search":
+            logger.info("🎯 [auto-search] 使用Google Scholar 50% + arXiv 50%配比")
+            
+            scholar_limit = max_results // 2  # 50%给Google Scholar
+            arxiv_limit = max_results - scholar_limit  # 剩余50%给arXiv
+            
+            sources_to_search = []
+            if self.scholar_dock:
+                sources_to_search.append(('scholar_dock', self.scholar_dock, 300.0, scholar_limit))  # 提升到5分钟，支持ScholarDock的长延迟策略
+            if self.arxiv:
+                sources_to_search.append(('arxiv', self.arxiv, 30.0, arxiv_limit))
+            
+            logger.info(f"📊 [auto-search] 配额分配: Google Scholar {scholar_limit}篇 + arXiv {arxiv_limit}篇")
         else:
             # 使用默认的所有可用数据源
             logger.info("🌐 使用所有可用数据源")
             
-            # 稳定数据源（优先级高）
             if self.semantic_scholar:
                 sources_to_search.append(('semantic_scholar', self.semantic_scholar, 30.0, stable_per_source))
             if self.arxiv:
@@ -1468,10 +1611,10 @@ class MultiSourceEngine:
                 sources_to_search.append(('crossref', self.crossref, 30.0, stable_per_source))
             if self.pubmed:
                 sources_to_search.append(('pubmed', self.pubmed, 30.0, stable_per_source))
-                
+            # 稳定数据源（优先级高）
             # ScholarDock（主力搜索源，优先级高）
-            if self.scholarly:
-                sources_to_search.insert(0, ('scholar_dock', self.scholarly, 150.0, scholar_limit))  # 增加超时到150秒
+            if self.scholar_dock:
+                sources_to_search.insert(0, ('scholar_dock', self.scholar_dock, 300.0, scholar_limit))  # 提升到5分钟，支持长延迟和CAPTCHA处理
         
         for source_name, source_api, source_timeout, source_limit in sources_to_search:
             source_names.append(source_name)
@@ -1558,83 +1701,78 @@ class MultiSourceEngine:
                             if isinstance(result, list) and i < len(source_names) 
                             and source_names[i] == 'scholar_dock')
         
+        # 🔧 优化：更智能的补偿搜索策略
         need_compensation = False
-        if 'scholar_dock' in captcha_errors or (scholar_success and scholar_dock_papers < scholar_limit * 0.3):
-            # 主力源失败或获得的论文数量严重不足（少于预期的30%）
+        if 'scholar_dock' in captcha_errors or (scholar_success and scholar_dock_papers < scholar_limit * 0.2):
+            # 降低触发阈值到20%，更早启动补偿搜索
             need_compensation = True
             missing_quota = scholar_limit - scholar_dock_papers
             
             logger.warning(f"🔄 主力搜索源未达预期：获得{scholar_dock_papers}篇，预期{scholar_limit}篇，缺口{missing_quota}篇")
             
-            # 🔧 优先尝试镜像搜索来补偿ScholarDock的缺失（超时控制）
-            if 'scholar_dock' in captcha_errors and self.scholar_mirror and missing_quota > 0:
-                logger.info(f"🔍 启动镜像搜索来补偿Google Scholar限制，尝试获取{missing_quota}篇论文")
-                try:
-                    # 镜像搜索也使用统一的布尔查询
-                    mirror_query = unified_queries.get('scholar_dock', query)
-                    mirror_papers = await asyncio.wait_for(
-                        self.scholar_mirror.search(mirror_query, missing_quota), 
-                        timeout=45.0  # 🔧 减少镜像搜索超时，避免二次阻塞
-                    )
-                    if mirror_papers:
-                        all_papers.extend(mirror_papers)
-                        logger.info(f"✅ 镜像搜索成功，额外获得 {len(mirror_papers)} 篇论文")
-                        missing_quota = max(0, missing_quota - len(mirror_papers))
-                    else:
-                        logger.warning("⚠️ 镜像搜索未获得结果")
-                except asyncio.TimeoutError:
-                    logger.warning("⚠️ 镜像搜索超时，跳过并继续使用其他数据源")
-                except Exception as e:
-                    logger.warning(f"⚠️ 镜像搜索失败: {e}")
-            
             if stable_success_count > 0 and missing_quota > 0:
-                # 启动补偿搜索：将缺失的配额分配给可用的辅助源
-                logger.info(f"🚀 启动补偿搜索：将{missing_quota}篇配额分配给{stable_success_count}个可用数据源")
+                # 🚀 增强补偿搜索：优先分配给arXiv，因为它不容易被限制
+                logger.info(f"🚀 启动增强补偿搜索：将{missing_quota}篇配额智能分配给{stable_success_count}个可用数据源")
                 
-                compensation_per_source = max(5, missing_quota // stable_success_count)
+                # 智能分配补偿配额：arXiv优先，其他源均分
                 compensation_tasks = []
                 compensation_source_names = []
                 
-                # 为成功的辅助数据源分配额外配额
+                # 计算可用的补偿源
+                available_compensation_sources = []
                 for source_name, source_api, source_timeout, original_limit in sources_to_search:
                     if source_name != 'scholar_dock' and source_name not in captcha_errors:
-                        # 检查该源是否已经达到或接近其原始配额
                         source_papers = sum(len(result) for i, result in enumerate(results) 
                                           if isinstance(result, list) and i < len(source_names) 
                                           and source_names[i] == source_name)
                         
-                        if source_papers < original_limit * 1.5:  # 如果没有明显超额，则进行补偿搜索
+                        if source_papers < original_limit * 1.5:  # 如果没有明显超额
+                            available_compensation_sources.append((source_name, source_api, source_timeout, original_limit, source_papers))
+                
+                if available_compensation_sources:
+                    # 智能分配策略：arXiv获得更多配额
+                    total_compensation = missing_quota
+                    for source_name, source_api, source_timeout, original_limit, current_papers in available_compensation_sources:
+                        if source_name == 'arxiv':
+                            # arXiv获得60%的补偿配额，因为它不容易被限制
+                            compensation_quota = max(10, int(total_compensation * 0.6))
+                        else:
+                            # 其他源平分剩余40%配额
+                            other_sources_count = len([s for s in available_compensation_sources if s[0] != 'arxiv'])
+                            if other_sources_count > 0:
+                                compensation_quota = max(5, int(total_compensation * 0.4 / other_sources_count))
+                            else:
+                                compensation_quota = 0
+                        
+                        if compensation_quota > 0:
                             compensation_source_names.append(source_name)
-                            # 补偿搜索也使用统一的布尔查询
                             source_query = unified_queries.get(source_name, query)
+                            
+                            logger.info(f"📈 {source_name}补偿搜索：分配{compensation_quota}篇 (已有{current_papers}篇)")
                             
                             # 🔧 修复：补偿搜索中也支持年限参数
                             if source_name == 'scholar_dock' and hasattr(source_api, 'search'):
-                                # ScholarDock补偿搜索支持年限筛选参数
                                 task = asyncio.create_task(
                                     asyncio.wait_for(
-                                        source_api.search(source_query, compensation_per_source, start_year=year_from, end_year=year_to), 
+                                        source_api.search(source_query, compensation_quota, start_year=year_from, end_year=year_to), 
                                         timeout=source_timeout
                                     )
                                 )
                             elif source_name == 'arxiv' and hasattr(source_api, 'search'):
-                                # arXiv补偿搜索支持年限筛选参数
                                 task = asyncio.create_task(
                                     asyncio.wait_for(
-                                        source_api.search(source_query, compensation_per_source, start_year=year_from, end_year=year_to), 
+                                        source_api.search(source_query, compensation_quota, start_year=year_from, end_year=year_to), 
                                         timeout=source_timeout
                                     )
                                 )
                             else:
-                                # 其他搜索源保持原有调用方式
                                 task = asyncio.create_task(
                                     asyncio.wait_for(
-                                        source_api.search(source_query, compensation_per_source), 
+                                        source_api.search(source_query, compensation_quota), 
                                         timeout=source_timeout
                                     )
                                 )
                             compensation_tasks.append(task)
-                            logger.debug(f"📈 {source_name}补偿搜索：额外{compensation_per_source}篇")
                 
                 # 执行补偿搜索
                 if compensation_tasks:
@@ -1703,6 +1841,25 @@ class MultiSourceEngine:
                 final_results = self._rank_papers(combined_deduplicated, query)[:max_results]
                 logger.info(f"✅ 补充搜索完成，最终获得 {len(final_results)} 篇论文")
         
+        # 最终强制源过滤：如果前端显式指定了数据源，确保只返回这些来源的论文
+        if sources and isinstance(sources, list) and len(sources) > 0:
+            # 统一映射前端标识到内部标识
+            allowed = set()
+            for sid in sources:
+                mapped = {
+                    'scholarly': 'scholar_dock',
+                    'scholar_dock': 'scholar_dock',
+                    'arxiv': 'arxiv',
+                    'semantic_scholar': 'semantic_scholar',
+                    'crossref': 'crossref',
+                    'pubmed': 'pubmed'
+                }.get(sid, sid)
+                allowed.add(mapped)
+            filtered_final = [p for p in final_results if p.source in allowed]
+            if len(filtered_final) != len(final_results):
+                logger.info(f"🔒 已根据用户选择过滤来源：{len(final_results)} → {len(filtered_final)}")
+            final_results = filtered_final
+
         logger.info(f"搜索完成: 原始 {len(all_papers)} 篇 → 去重 {len(deduplicated_papers)} 篇 → 最终 {len(final_results)} 篇")
         return final_results
     
@@ -1788,17 +1945,28 @@ class MultiSourceEngine:
                 original_query, analysis, use_fallback=True
             )
             
+            # 🔧 向后兼容：处理前端传递的'scholarly'标识符
+            compatible_sources = []
+            if sources:
+                for source in sources:
+                    if source == 'scholarly':
+                        compatible_sources.append('scholar_dock')  # 映射到内部标识符
+                    else:
+                        compatible_sources.append(source)
+            else:
+                compatible_sources = sources
+            
             # 选择最有效的数据源进行补充搜索（优先选择稳定的源）
             fallback_sources = []
-            if not sources or 'semantic_scholar' in sources:
+            if not compatible_sources or 'semantic_scholar' in compatible_sources:
                 if self.semantic_scholar:
                     fallback_sources.append(('semantic_scholar', self.semantic_scholar, 30.0))
-            if not sources or 'arxiv' in sources:
+            if not compatible_sources or 'arxiv' in compatible_sources:
                 if self.arxiv:
                     fallback_sources.append(('arxiv', self.arxiv, 30.0))
-            if not sources or 'scholar_dock' in sources:
-                if self.scholarly:
-                    fallback_sources.append(('scholar_dock', self.scholarly, 60.0))
+            if not compatible_sources or 'scholar_dock' in compatible_sources:
+                if self.scholar_dock:
+                    fallback_sources.append(('scholar_dock', self.scholar_dock, 180.0))  # 补充搜索也给3分钟超时
             
             if not fallback_sources:
                 logger.warning("⚠️ 没有可用的数据源进行补充搜索")
@@ -1867,6 +2035,39 @@ class MultiSourceEngine:
             logger.error(f"❌ 补充搜索失败: {e}")
             return []
     
+    def _detect_chinese_query(self, query: str) -> bool:
+        """检测查询是否包含中文字符"""
+        try:
+            import re
+            
+            # 检测中文字符（包括常用汉字、标点符号）
+            chinese_pattern = r'[\u4e00-\u9fff\u3400-\u4dbf\u20000-\u2a6df\uf900-\ufaff]'
+            chinese_matches = re.findall(chinese_pattern, query)
+            
+            if chinese_matches:
+                chinese_char_count = len(chinese_matches)
+                
+                # 移除空格和标点符号，只计算实际字符
+                clean_query = re.sub(r'[^\w\u4e00-\u9fff]', '', query)
+                total_char_count = len(clean_query)
+                
+                # 如果中文字符占比超过30%，认为是中文查询
+                if total_char_count > 0:
+                    chinese_ratio = chinese_char_count / total_char_count
+                    is_chinese = chinese_ratio >= 0.3  # 提高阈值到30%
+                    
+                    logger.debug(f"查询语言检测: 中文字符{chinese_char_count}个/总计{total_char_count}个 = {chinese_ratio:.2%} → {'中文' if is_chinese else '非中文'}")
+                    return is_chinese
+                else:
+                    # 如果有中文字符但总字符很少，仍认为是中文查询
+                    return chinese_char_count > 0
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"中文查询检测失败: {e}")
+            return False
+    
     def _rank_papers(self, papers: List[Paper], query: str) -> List[Paper]:
         """简化的相关性排序"""
         query_terms = set(query.lower().split())
@@ -1902,16 +2103,13 @@ class MultiSourceEngine:
     async def close(self):
         """关闭所有连接"""
         coros = [self.arxiv.close()]
-        if self.scholarly:
-            coros.append(self.scholarly.close())
-        if self.scholar_mirror:
-            coros.append(self.scholar_mirror.close())
+        if self.scholar_dock:
+            coros.append(self.scholar_dock.close())
         if self.semantic_scholar:
             coros.append(self.semantic_scholar.close())
         if self.crossref:
             coros.append(self.crossref.close())
         if self.pubmed:
             coros.append(self.pubmed.close())
-        
             
         await asyncio.gather(*coros)

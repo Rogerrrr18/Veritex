@@ -21,7 +21,7 @@
 3. **related_terms**（权重0.5）：相关技术术语和方法（5-6个）
 4. **context_terms**（权重0.4）：基于上下文意图的扩展词（3-4个）
 
-### 核心同义词扩展原则：
+### core_synonyms扩展原则：
 - 必须是真正的高度同义术语（切分为单词）
 - 仅限学术表达方式的不同，概念内核完全相同
 - 严格控制在3-4个最准确的同义词
@@ -31,16 +31,32 @@
 ```json
 {{
   "original_query": "{user_query}",
-  "core_concepts": ["core concepts in English"],
+  "core_concepts": ["核心概念用中文", "core concepts in English"],
   "hierarchical_keywords": {{
-    "exact_terms": {{"terms": ["exact English terms"], "weight": 1.0}},
-    "core_synonyms": {{"terms": ["3-4个精准英文同义词"], "weight": 0.9}}, 
-    "related_terms": {{"terms": ["related English terms"], "weight": 0.5}},
-    "context_terms": {{"terms": ["contextual English terms"], "weight": 0.4}}
+    "exact_terms": {{
+      "chinese": ["精确中文术语1", "精确中文术语2"],
+      "english": ["exact English term 1", "exact English term 2"],
+      "weight": 1.0
+    }},
+    "core_synonyms": {{
+      "chinese": ["核心中文同义词1", "核心中文同义词2", "核心中文同义词3"],
+      "english": ["core English synonym 1", "core English synonym 2", "core English synonym 3"],
+      "weight": 0.9
+    }}, 
+    "related_terms": {{
+      "chinese": ["相关中文术语1", "相关中文术语2", "相关中文术语3"],
+      "english": ["related English term 1", "related English term 2", "related English term 3"],
+      "weight": 0.5
+    }},
+    "context_terms": {{
+      "chinese": ["上下文中文术语1", "上下文中文术语2"],
+      "english": ["contextual English term 1", "contextual English term 2"],
+      "weight": 0.4
+    }}
   }},
-    "domain": "academic domain in English",
-    "optimized_boolean_query": "Boolean query in English",
-    "search_strategy": "balanced|precision_focused|recall_focused"
+  "domain": "学术领域中文描述 / academic domain in English",
+  "optimized_boolean_query": "优化布尔查询中英双语",
+  "search_strategy": "balanced|precision_focused|recall_focused"
 }}
 ```
 

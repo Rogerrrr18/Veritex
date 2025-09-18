@@ -51,7 +51,7 @@ class ScholarDockSpider:
     """
     基于ScholarDock项目的高效Google Scholar爬虫
     特点：
-    1. 直接HTML解析，绕过scholarly库限制
+    1. 直接HTML解析，绕过传统库限制
     2. 智能CAPTCHA检测和处理
     3. 支持大批量搜索(最多1000条)
     4. 更全面的数据字段提取
@@ -70,18 +70,28 @@ class ScholarDockSpider:
             'blocked'
         ]
         
-        # 请求配置
-        self.request_delay = 0.8  # 比ScholarDock的0.5s稍保守
-        self.max_retries = 3
-        self.timeout = 30
+        # 请求配置 (采用ScholarDock-master的成功经验)
+        self.base_delay = 5.0      # 基础延迟时间（采用ScholarDock的5.0s策略）
+        self.max_delay = 8.0       # 最大延迟时间（在ScholarDock基础上增加随机性）
+        self.max_retries = 3       # 保持ScholarDock的3次重试
+        self.timeout = 30          # 采用ScholarDock的30秒超时
         
-        # 🔧 新增：搜索超时配置
-        self.search_timeout = 45  # 单次搜索最大超时45秒
-        self.captcha_timeout = 60  # CAPTCHA等待最大60秒（从5分钟减少到1分钟）
-        self.max_pages_before_timeout = 3  # 最多搜索3页就超时检查
+        # 🔧 优化：搜索超时配置（基于ScholarDock-master经验优化）
+        self.search_timeout = 180  # 单次搜索最大超时3分钟（ScholarDock推荐）
+        self.captcha_timeout = 30   # CAPTCHA等待30秒（完全采用ScholarDock策略）
+        self.max_pages_before_timeout = 3  # 最多搜索3页（降低被检测风险）
         
         self.session = None
         self.driver = None
+        
+        # 🔧 新增：服务器自动化优化 - 采用ScholarDock的智能禁用机制
+        self.consecutive_captcha_count = 0    # 连续遇到CAPTCHA的次数
+        self.max_captcha_tolerance = 1        # 降低容忍度到1次（更快触发保护）
+        self.is_temporarily_disabled = False  # 是否临时禁用
+        self.disable_until = 0               # 禁用到什么时间
+        self.disable_duration = 7200         # 禁用2小时（7200秒，参考ScholarDock策略）
+        
+        logger.info(f"🚀 ScholarDock Spider初始化: 延迟={self.base_delay}-{self.max_delay}s, CAPTCHA超时={self.captcha_timeout}s, 最大页数={self.max_pages_before_timeout}")
         
     async def __aenter__(self):
         """异步上下文管理器入口"""
@@ -100,15 +110,27 @@ class ScholarDockSpider:
                 logger.info(f"🔒 HTTPS代理已配置: {https_proxy}")
             self.session.proxies.update(proxies)
         
-        # 设置请求头，模拟真实浏览器
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        # 设置请求头，模拟真实浏览器（参考成功库的策略）
+        self.user_agents = [
+            # Chrome浏览器
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            # Firefox浏览器
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0',
+            # Safari浏览器
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15'
+        ]
+        
+        # 建立基础请求头配置（参考sort-google-scholar-dev的配置）
+        self.base_headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-        })
+        }
         return self
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -118,14 +140,67 @@ class ScholarDockSpider:
         if self.driver:
             self.driver.quit()
     
+    def _get_dynamic_headers(self):
+        """动态生成请求头，模拟真实浏览器行为（参考成功库策略）"""
+        import random
+        
+        # 随机选择User-Agent
+        user_agent = random.choice(self.user_agents)
+        
+        # 构建动态请求头
+        headers = self.base_headers.copy()
+        headers['User-Agent'] = user_agent
+        
+        # 根据User-Agent类型调整其他请求头
+        if 'Firefox' in user_agent:
+            headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+            headers['Accept-Language'] = 'en-US,en;q=0.5'
+        elif 'Safari' in user_agent:
+            headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            headers['Accept-Language'] = 'en-us'
+        else:  # Chrome
+            headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+            headers['Accept-Language'] = 'en-US,en;q=0.9'
+        
+        return headers
+    
+    async def _smart_delay(self, page_number: int = 1, is_retry: bool = False):
+        """基于ScholarDock-master成功经验的智能延迟策略"""
+        import random
+        
+        # 基于ScholarDock的5.0秒延迟策略，增加随机性
+        base_delay = random.uniform(self.base_delay, self.max_delay)  # 5.0-8.0秒基础延迟
+        
+        # 重试时增加更长的额外延迟（参考ScholarDock处理）
+        if is_retry:
+            base_delay += random.uniform(5.0, 10.0)  # 重试时额外增加5-10秒
+        
+        # 页数增加时增加延迟（避免被检测为批量行为）
+        if page_number > 1:
+            page_factor = min(page_number * 2.0, 10.0)  # 每页增加2秒，最多增加10秒
+            base_delay += page_factor
+        
+        # 添加随机抖动，模拟人类行为
+        jitter = random.uniform(0.8, 1.5)  # 增加抖动范围
+        final_delay = base_delay * jitter
+        
+        # 确保最小延迟不低于ScholarDock的基准
+        final_delay = max(final_delay, 5.0)
+        
+        logger.debug(f"⏳ 智能延迟 {final_delay:.2f}秒 (页数={page_number}, 重试={is_retry})")
+        await asyncio.sleep(final_delay)
+    
     def _create_search_url(self, query: str, start: int = 0, 
                           start_year: Optional[int] = None, 
                           end_year: Optional[int] = None) -> str:
         """构建搜索URL"""
         import urllib.parse
         
+        # 🔧 优化：先进行中文查询优化，提高中文论文比例
+        enhanced_query = self._enhance_chinese_query(query)
+        
         # 简化复杂的布尔查询 - Google Scholar对复杂嵌套查询支持有限
-        simplified_query = self._simplify_boolean_query(query)
+        simplified_query = self._simplify_boolean_query(enhanced_query)
         
         # 正确的URL编码
         encoded_query = urllib.parse.quote_plus(simplified_query)
@@ -176,6 +251,22 @@ class ScholarDockSpider:
         except Exception as e:
             logger.warning(f"查询简化失败: {e}，使用原查询前100字符")
             return query[:100]
+    
+    def _enhance_chinese_query(self, query: str) -> str:
+        """优化中文查询，提高中文论文搜索比例"""
+        import re
+        
+        # 检测是否包含中文字符
+        chinese_pattern = re.compile(r'[\u4e00-\u9fff]')
+        has_chinese = bool(chinese_pattern.search(query))
+        
+        if has_chinese:
+            # 为中文查询添加地域和语言限制，提高中文论文比例
+            enhanced_query = f'({query}) AND (中国 OR 中文 OR Chinese OR China)'
+            logger.info(f"🔧 中文查询优化: {query} -> {enhanced_query}")
+            return enhanced_query
+        
+        return query
     
     def _extract_citations(self, content: str) -> int:
         """从内容中提取引用数 - 增强版本"""
@@ -407,8 +498,9 @@ class ScholarDockSpider:
         return None
     
     async def _get_content_with_selenium(self, url: str) -> Optional[bytes]:
-        """使用Selenium获取内容，处理CAPTCHA"""
+        """使用Selenium获取内容，采用ScholarDock的CAPTCHA处理策略"""
         if not SELENIUM_AVAILABLE:
+            logger.warning("🔧 Selenium不可用，服务器环境下跳过")
             return None
             
         try:
@@ -416,13 +508,14 @@ class ScholarDockSpider:
                 self.driver = self._setup_selenium_driver()
                 
             if not self.driver:
+                logger.warning("🔧 无法初始化Selenium驱动，服务器环境下跳过")
                 return None
             
             logger.info(f"🌐 使用Selenium访问: {url}")
             self.driver.get(url)
             
             # 等待页面加载
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
             
             body_element = self._get_element_safe(self.driver, "//body")
             if not body_element:
@@ -432,29 +525,34 @@ class ScholarDockSpider:
             
             # 检查是否需要解决CAPTCHA
             if any(keyword in content.lower() for keyword in self.robot_keywords):
-                logger.warning("🚨 检测到CAPTCHA，请在打开的浏览器中手动解决")
-                logger.info("💡 解决CAPTCHA后，程序将自动继续...")
+                logger.warning("🚨 Selenium检测到CAPTCHA，采用ScholarDock策略处理")
+                self._handle_captcha_detected()
                 
-                # 等待用户解决CAPTCHA（最多等待1分钟，避免长时间阻塞）
-                wait = WebDriverWait(self.driver, self.captcha_timeout)
+                # 🔧 采用ScholarDock的30秒等待策略
+                logger.info(f"💡 等待{self.captcha_timeout}秒让用户解决CAPTCHA（ScholarDock策略）")
+                await asyncio.sleep(self.captcha_timeout)
+                
+                # 重新获取页面内容
                 try:
-                    # 等待页面变化，表示CAPTCHA已解决
-                    wait.until(lambda driver: not any(
-                        keyword in driver.page_source.lower() 
-                        for keyword in self.robot_keywords
-                    ))
-                    logger.info("✅ CAPTCHA已解决，继续搜索")
-                except Exception:
-                    logger.error(f"⏰ CAPTCHA解决超时（{self.captcha_timeout}秒），跳过此页面")
-                    # 🔧 增强：记录CAPTCHA超时，便于后续优化
-                    logger.warning("💡 建议切换到其他数据源或稍后重试")
+                    self.driver.get(url)
+                    await asyncio.sleep(3)
+                    body_element = self._get_element_safe(self.driver, "//body")
+                    if body_element:
+                        content = body_element.get_attribute('innerHTML')
+                        # 检查CAPTCHA是否已解决
+                        if not any(keyword in content.lower() for keyword in self.robot_keywords):
+                            logger.info("✅ CAPTCHA已解决，继续搜索")
+                            self._handle_successful_request()
+                            return content.encode('utf-8')
+                        else:
+                            logger.warning("⚠️ CAPTCHA仍未解决")
+                            return None
+                except Exception as e:
+                    logger.error(f"重新获取页面失败: {e}")
                     return None
-                
-                # 重新获取内容
-                body_element = self._get_element_safe(self.driver, "//body")
-                if body_element:
-                    content = body_element.get_attribute('innerHTML')
             
+            # 如果没有CAPTCHA，标记为成功
+            self._handle_successful_request()
             return content.encode('utf-8')
             
         except Exception as e:
@@ -540,11 +638,110 @@ class ScholarDockSpider:
             logger.error(f"解析文章失败: {e}")
             return None
     
+    def _check_if_disabled(self) -> bool:
+        """检查是否因连续CAPTCHA而临时禁用"""
+        current_time = time.time()
+        if self.is_temporarily_disabled and current_time < self.disable_until:
+            remaining_minutes = int((self.disable_until - current_time) / 60)
+            logger.info(f"⏸️ ScholarDock临时禁用中，剩余{remaining_minutes}分钟")
+            return True
+        elif self.is_temporarily_disabled and current_time >= self.disable_until:
+            # 禁用期已过，重新启用
+            self.is_temporarily_disabled = False
+            self.consecutive_captcha_count = 0
+            logger.info("🔓 ScholarDock禁用期已过，重新启用")
+            return False
+        return False
+    
+    def _handle_captcha_detected(self):
+        """处理CAPTCHA检测（智能策略）"""
+        self.consecutive_captcha_count += 1
+        logger.warning(f"🚨 CAPTCHA检测计数: {self.consecutive_captcha_count}/{self.max_captcha_tolerance}")
+        
+        # 不再立即禁用，而是采用渐进式处理
+        if self.consecutive_captcha_count < self.max_captcha_tolerance:
+            logger.info(f"🔄 CAPTCHA处理: 将等待更长时间后重试 (第{self.consecutive_captcha_count}次)")
+            return False  # 表示可以继续尝试
+        else:
+            # 达到容忍上限，临时禁用
+            import time
+            self.is_temporarily_disabled = True
+            self.disable_until = time.time() + self.disable_duration
+            disable_minutes = self.disable_duration // 60
+            logger.warning(f"🚫 ScholarDock连续遇到{self.consecutive_captcha_count}次CAPTCHA，临时禁用{disable_minutes}分钟")
+            logger.info("💡 系统将自动使用其他数据源进行搜索")
+            return True  # 表示需要停止
+    
+    def _handle_successful_request(self):
+        """处理成功请求，重置CAPTCHA计数器"""
+        if self.consecutive_captcha_count > 0:
+            logger.info(f"✅ ScholarDock请求成功，重置CAPTCHA计数器（之前: {self.consecutive_captcha_count}）")
+            self.consecutive_captcha_count = 0
+    
+    async def _smart_request_with_retry(self, url: str, page_number: int = 1) -> Optional[str]:
+        """基于ScholarDock成功经验的智能请求机制"""
+        for retry_count in range(self.max_retries):
+            try:
+                # 应用智能延迟
+                await self._smart_delay(page_number, is_retry=(retry_count > 0))
+                
+                # 获取动态请求头
+                headers = self._get_dynamic_headers()
+                
+                # 发送请求
+                response = self.session.get(url, headers=headers, timeout=self.timeout)
+                content = response.content
+                
+                if response.status_code == 200:
+                    content_str = content.decode('utf-8', errors='ignore')
+                    
+                    # 检查CAPTCHA
+                    if any(keyword in content_str.lower() for keyword in self.robot_keywords):
+                        logger.warning(f"🚨 第{retry_count + 1}次尝试检测到CAPTCHA")
+                        
+                        if retry_count < self.max_retries - 1:
+                            # 🔧 采用ScholarDock的更长重试延迟策略
+                            extra_delay = 10.0 + (retry_count * 10.0)  # 10s, 20s, 30s递增延迟
+                            logger.info(f"⏳ CAPTCHA重试延迟: {extra_delay}秒（ScholarDock策略）")
+                            await asyncio.sleep(extra_delay)
+                            continue
+                        else:
+                            # 最后一次尝试也失败，尝试Selenium后备
+                            logger.warning("🔄 所有重试失败，尝试Selenium后备方案")
+                            selenium_content = await self._get_content_with_selenium(url)
+                            if selenium_content:
+                                return selenium_content.decode('utf-8', errors='ignore')
+                            
+                            # Selenium也失败
+                            should_stop = self._handle_captcha_detected()
+                            if should_stop:
+                                return None
+                            return None
+                    else:
+                        # 成功获取内容
+                        self._handle_successful_request()
+                        return content_str
+                        
+                else:
+                    logger.warning(f"HTTP状态码: {response.status_code}, 重试...")
+                    
+            except Exception as e:
+                logger.warning(f"请求失败 (尝试 {retry_count + 1}/{self.max_retries}): {e}")
+                
+                if retry_count < self.max_retries - 1:
+                    # 网络错误时也应用更长的延迟
+                    await asyncio.sleep(5.0 + (retry_count * 5.0))  # 5s, 10s, 15s递增延迟
+                    continue
+        
+        # 所有重试都失败
+        logger.error(f"❌ 请求彻底失败: {url}")
+        return None
+    
     async def search(self, query: str, limit: int = 50,
                     start_year: Optional[int] = None,
                     end_year: Optional[int] = None) -> List[ScholarDockPaper]:
         """
-        搜索Google Scholar
+        搜索Google Scholar（服务器自动化优化版）
         
         Args:
             query: 搜索查询
@@ -555,6 +752,11 @@ class ScholarDockSpider:
         Returns:
             论文列表
         """
+        
+        # 🔧 优化：检查是否临时禁用
+        if self._check_if_disabled():
+            logger.warning("⏸️ ScholarDock当前临时禁用，返回空结果")
+            return []
         
         # 限制最大结果数
         limit = min(limit, 1000)
@@ -581,29 +783,16 @@ class ScholarDockSpider:
                 url = self._create_search_url(query, start_idx, start_year, end_year)
                 logger.info(f"📖 获取第{start_idx//10 + 1}页: {url}")
                 
-                content = None
+                # 使用智能请求机制
+                page_number = start_idx//10 + 1
+                content_str = await self._smart_request_with_retry(url, page_number)
                 
-                # 首先尝试普通HTTP请求
-                try:
-                    response = self.session.get(url, timeout=self.timeout)
-                    content = response.content
-                    content_str = content.decode('utf-8', errors='ignore')
-                    
-                    # 检查是否被机器人检测
-                    if any(keyword in content_str.lower() for keyword in self.robot_keywords):
-                        logger.warning("🤖 检测到机器人验证，切换到Selenium")
-                        content = await self._get_content_with_selenium(url)
-                        
-                except Exception as e:
-                    logger.warning(f"HTTP请求失败: {e}，尝试Selenium")
-                    content = await self._get_content_with_selenium(url)
-                
-                if not content:
-                    logger.error("❌ 无法获取页面内容，跳过此页")
+                if content_str is None:
+                    logger.warning(f"⚠️ 第{page_number}页请求失败，跳过")
                     continue
                 
                 # 使用BeautifulSoup解析HTML
-                soup = BeautifulSoup(content, 'html.parser')
+                soup = BeautifulSoup(content_str, 'html.parser')
                 
                 # 查找文章div
                 article_divs = soup.find_all("div", class_="gs_or")
@@ -630,26 +819,66 @@ class ScholarDockSpider:
                 if len(papers) >= limit:
                     break
                 
-                # 延迟控制
-                if start_idx < limit - 10:  # 不是最后一页
-                    logger.debug(f"⏳ 等待 {self.request_delay} 秒...")
-                    await asyncio.sleep(self.request_delay)
-                
             except Exception as e:
                 logger.error(f"❌ 第{start_idx//10 + 1}页搜索失败: {e}")
                 continue
         
         logger.info(f"🎉 ScholarDock搜索完成: 共获得 {len(papers)} 篇论文")
-        return papers
+        
+        # 🔧 新增：中文论文优先排序，确保返回足够的中文论文
+        chinese_papers, english_papers = self._separate_chinese_papers(papers)
+        
+        # 优先返回中文论文，不足时补充英文论文
+        final_papers = chinese_papers + english_papers
+        final_papers = final_papers[:limit]  # 限制总数
+        
+        chinese_count = len([p for p in final_papers if self._is_chinese_paper(p)])
+        total_count = len(final_papers)
+        chinese_ratio = (chinese_count / total_count * 100) if total_count > 0 else 0
+        
+        logger.info(f"📊 最终结果: 共{total_count}篇，中文论文{chinese_count}篇 ({chinese_ratio:.1f}%)")
+        
+        return final_papers
+    
+    def _is_chinese_paper(self, paper: 'ScholarDockPaper') -> bool:
+        """判断是否为中文论文"""
+        import re
+        chinese_pattern = re.compile(r'[\u4e00-\u9fff]')
+        
+        # 检查标题和作者是否包含中文
+        title_has_chinese = bool(chinese_pattern.search(paper.title))
+        authors_has_chinese = any(chinese_pattern.search(author) for author in paper.authors)
+        
+        return title_has_chinese or authors_has_chinese
+    
+    def _separate_chinese_papers(self, papers: List['ScholarDockPaper']) -> tuple:
+        """分离中文和英文论文"""
+        chinese_papers = []
+        english_papers = []
+        
+        for paper in papers:
+            if self._is_chinese_paper(paper):
+                chinese_papers.append(paper)
+            else:
+                english_papers.append(paper)
+        
+        return chinese_papers, english_papers
 
 # 异步使用示例
 async def test_scholar_dock():
     """测试ScholarDock爬虫"""
     async with ScholarDockSpider() as spider:
-        papers = await spider.search("machine learning", limit=20)
-        print(f"找到 {len(papers)} 篇论文")
-        for paper in papers[:3]:
-            print(f"- {paper.title} ({paper.year}, 引用: {paper.citations})")
+        # 测试中文查询
+        papers = await spider.search("机器学习", limit=20)
+        print(f"🔍 中文搜索结果: 找到 {len(papers)} 篇论文")
+        
+        chinese_count = sum(1 for paper in papers if spider._is_chinese_paper(paper))
+        print(f"📊 中文论文数量: {chinese_count}/{len(papers)} ({chinese_count/len(papers)*100:.1f}%)")
+        
+        print("\n📄 前5篇论文:")
+        for i, paper in enumerate(papers[:5]):
+            is_chinese = "🇨🇳" if spider._is_chinese_paper(paper) else "🇺🇸"
+            print(f"{i+1}. {is_chinese} {paper.title[:60]}... (引用: {paper.citations})")
 
 if __name__ == "__main__":
     asyncio.run(test_scholar_dock())

@@ -1047,13 +1047,32 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       content: m.text
     }));
 
+    // 从用户存储恢复搜索设置，透传给后端，保证数据源选择一致
+    let searchParams: any = undefined;
+    try {
+      const savedSettings = UserStorage.getUserData(USER_DATA_KEYS.USER_SETTINGS);
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        searchParams = {
+          max_results: Number(parsed.maxResults) || undefined,
+          year_from: parsed.yearFrom ? parseInt(parsed.yearFrom) : undefined,
+          year_to: parsed.yearTo ? parseInt(parsed.yearTo) : undefined,
+          sources: Array.isArray(parsed.sources) && parsed.sources.length > 0 ? parsed.sources : undefined,
+          use_chinese: typeof parsed.useChinese === 'boolean' ? parsed.useChinese : undefined
+        };
+      }
+    } catch (e) {
+      console.warn('⚠️ 恢复搜索设置失败，将使用后端默认策略', e);
+    }
+
     const payload = {
       message: userMessage.text,
       user_id: userId, // 🔧 必填字段：添加用户ID
       history: mappedHistory,
       conversation_id: conversationId, // 包含对话ID
       mode: llmMode === 'chat-plan' ? 'chat-only' : 'auto-search',
-      stream: true // 启用流式传输
+      stream: true, // 启用流式传输
+      search_params: searchParams // 🔑 关键：把数据源等搜索参数传给后端
     };
 
     // 创建初始的助手消息
