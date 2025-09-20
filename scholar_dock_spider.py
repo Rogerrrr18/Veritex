@@ -70,11 +70,11 @@ class ScholarDockSpider:
             'blocked'
         ]
         
-        # 请求配置 (采用ScholarDock-master的成功经验)
+        # 请求配置 (优化网络连接处理)
         self.base_delay = 5.0      # 基础延迟时间（采用ScholarDock的5.0s策略）
         self.max_delay = 8.0       # 最大延迟时间（在ScholarDock基础上增加随机性）
-        self.max_retries = 3       # 保持ScholarDock的3次重试
-        self.timeout = 30          # 采用ScholarDock的30秒超时
+        self.max_retries = 5       # 增加重试次数到5次
+        self.timeout = 60          # 增加超时时间到60秒，适应网络问题
         
         # 🔧 优化：搜索超时配置（基于ScholarDock-master经验优化）
         self.search_timeout = 180  # 单次搜索最大超时3分钟（ScholarDock推荐）
@@ -91,24 +91,45 @@ class ScholarDockSpider:
         self.disable_until = 0               # 禁用到什么时间
         self.disable_duration = 7200         # 禁用2小时（7200秒，参考ScholarDock策略）
         
-        logger.info(f"🚀 ScholarDock Spider初始化: 延迟={self.base_delay}-{self.max_delay}s, CAPTCHA超时={self.captcha_timeout}s, 最大页数={self.max_pages_before_timeout}")
+        logger.info(f"🚀 ScholarDock初始化完成")
         
     async def __aenter__(self):
         """异步上下文管理器入口"""
         self.session = requests.Session()
         
-        # 🔧 配置代理支持
-        http_proxy = os.getenv('HTTP_PROXY')
-        https_proxy = os.getenv('HTTPS_PROXY')
-        if http_proxy or https_proxy:
-            proxies = {}
+        # 🔧 优化代理配置检测和支持
+        proxy_sources = [
+            ('HTTP_PROXY', 'HTTPS_PROXY'),
+            ('VPN_HTTP_PROXY', 'VPN_HTTPS_PROXY'),
+            ('http_proxy', 'https_proxy')
+        ]
+        
+        proxies = {}
+        proxy_configured = False
+        
+        for http_env, https_env in proxy_sources:
+            http_proxy = os.getenv(http_env)
+            https_proxy = os.getenv(https_env)
+            
             if http_proxy:
                 proxies['http'] = http_proxy
-                logger.info(f"🌐 HTTP代理已配置: {http_proxy}")
+                proxy_configured = True
             if https_proxy:
                 proxies['https'] = https_proxy
-                logger.info(f"🔒 HTTPS代理已配置: {https_proxy}")
+                proxy_configured = True
+            
+            # 如果找到代理配置就停止搜索
+            if proxy_configured:
+                break
+        
+        if proxy_configured:
             self.session.proxies.update(proxies)
+            logger.info("✅ 代理已配置")
+        else:
+            logger.warning("⚠️ 未配置代理")
+        
+        # 保存代理配置状态供后续使用
+        self.proxy_configured = proxy_configured
         
         # 设置请求头，模拟真实浏览器（参考成功库的策略）
         self.user_agents = [
@@ -187,7 +208,7 @@ class ScholarDockSpider:
         # 确保最小延迟不低于ScholarDock的基准
         final_delay = max(final_delay, 5.0)
         
-        logger.debug(f"⏳ 智能延迟 {final_delay:.2f}秒 (页数={page_number}, 重试={is_retry})")
+        # 移除调试日志以提升性能
         await asyncio.sleep(final_delay)
     
     def _create_search_url(self, query: str, start: int = 0, 
@@ -218,8 +239,8 @@ class ScholarDockSpider:
         """简化布尔查询，使其适合Google Scholar"""
         try:
             # 如果查询过长或过于复杂，提取核心关键词
-            if len(query) > 150 or query.count('(') > 2:  # 🔧 降低复杂度阈值，更早触发简化
-                logger.info(f"🔧 简化复杂查询: {len(query)} 字符 -> 核心关键词")
+            if len(query) > 150 or query.count('(') > 2:
+                logger.debug(f"简化复杂查询: {len(query)}字符")
                 
                 # 提取引号内的主要关键词
                 import re
@@ -241,8 +262,7 @@ class ScholarDockSpider:
                 
                 # 组合为简单查询
                 if core_terms:
-                    simplified = ' OR '.join(core_terms[:3])  # 最多3个主要词组
-                    logger.info(f"✅ 简化结果: {simplified}")
+                    simplified = ' OR '.join(core_terms[:3])
                     return simplified
             
             # 查询不太复杂，直接返回
@@ -263,7 +283,6 @@ class ScholarDockSpider:
         if has_chinese:
             # 为中文查询添加地域和语言限制，提高中文论文比例
             enhanced_query = f'({query}) AND (中国 OR 中文 OR Chinese OR China)'
-            logger.info(f"🔧 中文查询优化: {query} -> {enhanced_query}")
             return enhanced_query
         
         return query
@@ -356,7 +375,7 @@ class ScholarDockSpider:
                 # 返回格式化的作者字符串（用逗号分隔多个作者）
                 return ", ".join(valid_authors) if valid_authors else "作者未知"
         except Exception as e:
-            logger.debug(f"作者提取失败: {e}")
+            pass  # 静默处理作者提取失败
         return "作者未知"
     
     def _split_multiple_authors(self, author_text: str) -> List[str]:
@@ -446,7 +465,7 @@ class ScholarDockSpider:
             elif len(parts) == 2:
                 return "", parts[-1].strip()
         except Exception as e:
-            logger.debug(f"期刊出版商提取失败: {e}")
+            pass  # 静默处理期刊出版商提取失败
         return "", ""
     
     def _calculate_citations_per_year(self, citations: int, year: Optional[int]) -> float:
@@ -476,7 +495,7 @@ class ScholarDockSpider:
             driver = webdriver.Chrome(options=chrome_options)
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
-            logger.info("✅ Selenium Chrome驱动初始化成功")
+            logger.info("✅ Selenium已就绪")
             return driver
             
         except Exception as e:
@@ -491,16 +510,14 @@ class ScholarDockSpider:
                 return element
             except Exception as e:
                 if attempt < attempts - 1:
-                    logger.debug(f"元素获取失败，重试中... ({attempt + 1}/{attempts})")
                     time.sleep(1)
                 else:
-                    logger.error(f"元素获取最终失败: {e}")
+                    logger.error(f"元素获取失败: {e}")
         return None
     
     async def _get_content_with_selenium(self, url: str) -> Optional[bytes]:
         """使用Selenium获取内容，采用ScholarDock的CAPTCHA处理策略"""
         if not SELENIUM_AVAILABLE:
-            logger.warning("🔧 Selenium不可用，服务器环境下跳过")
             return None
             
         try:
@@ -508,10 +525,9 @@ class ScholarDockSpider:
                 self.driver = self._setup_selenium_driver()
                 
             if not self.driver:
-                logger.warning("🔧 无法初始化Selenium驱动，服务器环境下跳过")
                 return None
             
-            logger.info(f"🌐 使用Selenium访问: {url}")
+            logger.info("🌐 使用Selenium访问")
             self.driver.get(url)
             
             # 等待页面加载
@@ -525,11 +541,11 @@ class ScholarDockSpider:
             
             # 检查是否需要解决CAPTCHA
             if any(keyword in content.lower() for keyword in self.robot_keywords):
-                logger.warning("🚨 Selenium检测到CAPTCHA，采用ScholarDock策略处理")
+                logger.warning("🚨 检测到CAPTCHA")
                 self._handle_captcha_detected()
                 
                 # 🔧 采用ScholarDock的30秒等待策略
-                logger.info(f"💡 等待{self.captcha_timeout}秒让用户解决CAPTCHA（ScholarDock策略）")
+                logger.info(f"💡 等待{self.captcha_timeout}秒解决CAPTCHA")
                 await asyncio.sleep(self.captcha_timeout)
                 
                 # 重新获取页面内容
@@ -675,7 +691,7 @@ class ScholarDockSpider:
     def _handle_successful_request(self):
         """处理成功请求，重置CAPTCHA计数器"""
         if self.consecutive_captcha_count > 0:
-            logger.info(f"✅ ScholarDock请求成功，重置CAPTCHA计数器（之前: {self.consecutive_captcha_count}）")
+            logger.info("✅ 请求成功，重置CAPTCHA计数器")
             self.consecutive_captcha_count = 0
     
     async def _smart_request_with_retry(self, url: str, page_number: int = 1) -> Optional[str]:
@@ -697,17 +713,17 @@ class ScholarDockSpider:
                     
                     # 检查CAPTCHA
                     if any(keyword in content_str.lower() for keyword in self.robot_keywords):
-                        logger.warning(f"🚨 第{retry_count + 1}次尝试检测到CAPTCHA")
+                        logger.warning(f"🚨 第{retry_count + 1}次检测到CAPTCHA")
                         
                         if retry_count < self.max_retries - 1:
                             # 🔧 采用ScholarDock的更长重试延迟策略
                             extra_delay = 10.0 + (retry_count * 10.0)  # 10s, 20s, 30s递增延迟
-                            logger.info(f"⏳ CAPTCHA重试延迟: {extra_delay}秒（ScholarDock策略）")
+                            logger.info(f"⏳ CAPTCHA重试延迟: {extra_delay}秒")
                             await asyncio.sleep(extra_delay)
                             continue
                         else:
                             # 最后一次尝试也失败，尝试Selenium后备
-                            logger.warning("🔄 所有重试失败，尝试Selenium后备方案")
+                            logger.warning("🔄 尝试Selenium后备方案")
                             selenium_content = await self._get_content_with_selenium(url)
                             if selenium_content:
                                 return selenium_content.decode('utf-8', errors='ignore')
@@ -726,11 +742,17 @@ class ScholarDockSpider:
                     logger.warning(f"HTTP状态码: {response.status_code}, 重试...")
                     
             except Exception as e:
-                logger.warning(f"请求失败 (尝试 {retry_count + 1}/{self.max_retries}): {e}")
+                error_message = str(e)
+                logger.warning(f"请求失败 (尝试 {retry_count + 1}/{self.max_retries}): {error_message}")
+                
+                # 网络连接问题的特殊处理
+                if "Connection" in error_message or "timeout" in error_message.lower():
+                    if retry_count == 0:
+                        logger.error("🌐 网络连接问题，请检查代理配置")
                 
                 if retry_count < self.max_retries - 1:
-                    # 网络错误时也应用更长的延迟
-                    await asyncio.sleep(5.0 + (retry_count * 5.0))  # 5s, 10s, 15s递增延迟
+                    # 网络错误时应用更长的延迟
+                    await asyncio.sleep(10.0 + (retry_count * 10.0))  # 10s, 20s, 30s, 40s递增延迟
                     continue
         
         # 所有重试都失败
@@ -762,7 +784,7 @@ class ScholarDockSpider:
         limit = min(limit, 1000)
         papers = []
         
-        logger.info(f"🔍 ScholarDock搜索开始: {query} (目标: {limit}条)")
+        logger.info(f"🔍 开始搜索: {query} (目标: {limit}条)")
         
         # 🔧 新增：整体搜索超时机制
         search_start_time = asyncio.get_event_loop().time()
@@ -778,10 +800,10 @@ class ScholarDockSpider:
                 
                 # 🔧 检查页数限制，避免无限等待
                 if start_idx >= self.max_pages_before_timeout * 10:
-                    logger.info(f"📊 已搜索 {self.max_pages_before_timeout} 页，为避免被限制停止搜索")
+                    logger.info(f"已搜索 {self.max_pages_before_timeout} 页，停止搜索")
                     break
                 url = self._create_search_url(query, start_idx, start_year, end_year)
-                logger.info(f"📖 获取第{start_idx//10 + 1}页: {url}")
+                # 移除详细URL日志以提升性能
                 
                 # 使用智能请求机制
                 page_number = start_idx//10 + 1
@@ -796,7 +818,6 @@ class ScholarDockSpider:
                 
                 # 查找文章div
                 article_divs = soup.find_all("div", class_="gs_or")
-                logger.info(f"📄 找到 {len(article_divs)} 个文章div")
                 
                 if not article_divs:
                     logger.warning("⚠️ 未找到文章，可能已到达结果末尾")
@@ -812,9 +833,9 @@ class ScholarDockSpider:
                     if paper:
                         papers.append(paper)
                         page_papers.append(paper)
-                        logger.debug(f"✅ 解析成功: {paper.title[:50]}... (引用: {paper.citations})")
+                        pass  # 移除每篇论文的详细日志
                 
-                logger.info(f"📊 本页成功解析 {len(page_papers)} 篇论文")
+                # 移除每页详细统计日志
                 
                 if len(papers) >= limit:
                     break
@@ -823,7 +844,7 @@ class ScholarDockSpider:
                 logger.error(f"❌ 第{start_idx//10 + 1}页搜索失败: {e}")
                 continue
         
-        logger.info(f"🎉 ScholarDock搜索完成: 共获得 {len(papers)} 篇论文")
+        logger.info(f"🎉 搜索完成: 共获得 {len(papers)} 篇论文")
         
         # 🔧 新增：中文论文优先排序，确保返回足够的中文论文
         chinese_papers, english_papers = self._separate_chinese_papers(papers)
@@ -836,7 +857,7 @@ class ScholarDockSpider:
         total_count = len(final_papers)
         chinese_ratio = (chinese_count / total_count * 100) if total_count > 0 else 0
         
-        logger.info(f"📊 最终结果: 共{total_count}篇，中文论文{chinese_count}篇 ({chinese_ratio:.1f}%)")
+        logger.info(f"📊 结果: {total_count}篇，中文{chinese_count}篇 ({chinese_ratio:.1f}%)")
         
         return final_papers
     

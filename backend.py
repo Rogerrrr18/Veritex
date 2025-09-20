@@ -1130,10 +1130,10 @@ async def search_papers_api(req: SearchRequest):
                     }
                 }
         
-        # 🔄 回退模式：没有预扩展关键词时拆分为「仅分析」→「条件搜索」两阶段
-        logger.info("⚠️ 未提供预扩展关键词，先进行关键词扩展分析，再按需执行搜索")
+        # 🔄 回退模式：没有预扩展关键词时仅进行分析，不自动搜索
+        logger.info("⚠️ 未提供预扩展关键词，进行关键词扩展分析")
         
-        # 阶段1：仅做分析（不执行搜索）
+        # 使用chat&plan模式进行纯分析
         agent = get_intelligent_paper_search_agent()
         analysis_only = await agent.search_papers(
             query=req.query,
@@ -1148,60 +1148,46 @@ async def search_papers_api(req: SearchRequest):
         is_academic = analysis_only.get('is_academic_query', False)
         analysis_result = analysis_only.get('analysis_result')
         
-        # 若扩展失败（通常为LLM调用失败）或非学术，跳过搜索
-        if not (is_academic and analysis_result):
-            logger.warning("🔇 关键词扩展失败或非学术查询，已跳过文献搜索")
+        # 返回分析结果，让前端决定是否搜索
+        if is_academic and analysis_result:
+            logger.info("✅ 关键词扩展分析成功，返回分析结果供前端使用")
+            return {
+                "success": True,
+                "data": {
+                    "papers": [],  # chat&plan模式不返回论文
+                    "total_found": 0,
+                    "query_info": {
+                        "original_query": req.query,
+                        "is_academic_query": True,
+                        "analysis_result": analysis_result,
+                        "chat_plan_mode": True,  # 标记为chat&plan模式
+                        "expansion_successful": True
+                    }
+                },
+                "performance": {
+                    "llm_analysis": True,
+                    "token_consumed": True,
+                    "chat_plan_mode": True,
+                    "search_skipped": True  # 🔧 修复：正确标记搜索被跳过
+                }
+            }
+        else:
+            logger.warning("🔇 关键词扩展失败或非学术查询")
             return {
                 "success": False,
-                "error": analysis_only.get('error_message', '关键词扩展失败或非学术查询，已跳过搜索'),
+                "error": analysis_only.get('error_message', '关键词扩展失败或非学术查询'),
                 "data": {"papers": [], "total_found": 0},
                 "query_info": {
                     "original_query": req.query,
                     "is_academic_query": is_academic,
-                    "analysis_result": analysis_result
+                    "analysis_result": analysis_result,
+                    "chat_plan_mode": True
                 },
                 "performance": {
                     "llm_analysis": bool(analysis_result),
                     "token_consumed": bool(analysis_result),
                     "search_skipped": True
                 }
-            }
-        
-        # 阶段2：仅当扩展成功且为学术查询时，执行搜索
-        search_result = await agent.search_papers(
-            query=req.query,
-            mode="auto-search",  # 自动执行搜索
-            max_results=req.max_results,
-            force_search=True,
-            year_from=req.year_from,
-            year_to=req.year_to,
-            sources=req.sources,
-            allow_search=True
-        )
-        
-        if search_result.get('success') and search_result.get('search_results'):
-            return {
-                "success": True,
-                "data": {
-                    "papers": search_result['search_results'],
-                    "total_found": len(search_result['search_results']),
-                    "query_info": {
-                        "original_query": req.query,
-                        "is_academic_query": search_result.get('is_academic_query', True),
-                        "analysis_result": search_result.get('analysis_result') or analysis_result
-                    },
-                    "performance": {
-                        "intelligent_workflow": True,
-                        "llm_analysis": True,
-                        "token_consumed": True
-                    }
-                }
-            }
-        else:
-            return {
-                "success": False,
-                "error": search_result.get('error_message', '智能工作流搜索失败'),
-                "data": {"papers": [], "total_found": 0}
             }
             
     except Exception as e:
@@ -1240,7 +1226,7 @@ async def health_check():
                 "available_models": model_info.get("available_models", []),
                 "model_name": model_info.get("model_name")
             },
-            "data_sources": ["arxiv", "scholar_dock", "semantic_scholar"]
+            "data_sources": ["arxiv", "scholar_dock", "crossref"]
         }
     except Exception as e:
         return {

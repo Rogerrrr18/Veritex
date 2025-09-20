@@ -1065,50 +1065,87 @@ class IntelligentPaperSearchAgent:
     # 已移除：_generate_fallback_explanation（不再需要）
     
     def route_after_literature_search(self, state: PaperSearchState) -> str:
-        """文献搜索节点后的路由决策（统一优化版）"""
+        """文献搜索节点后的路由决策（增强模式检查版）"""
         mode = state.get("mode", "auto-search")
         should_search = state.get("should_search", False)
+        allow_search = state.get("allow_search", True)
         
-        # 添加详细调试信息
-        print(f"文献搜索后路由: 模式={mode}, 应该搜索={should_search}")
+        # 🔧 增强的模式检查机制
+        print(f"文献搜索后路由: 模式={mode}, 应该搜索={should_search}, 允许搜索={allow_search}")
         
-        if mode == "auto-search" and should_search:
-            print("auto-search模式：自动进入搜索流程")
-            return "search"
-        elif mode == "auto-search":
-            print("auto-search模式异常：缺少搜索标记")
+        # 🎯 chat&plan模式严格限制：永远不执行搜索
+        if mode == "chat&plan":
+            print("🚫 chat&plan模式：严格禁止搜索，只返回分析结果")
             return "wait_decision"
-        else:
-            # chat&plan模式
-            print("chat&plan模式：展示分析结果")
-            return "wait_decision"
+        
+        # 🎯 auto-search模式：检查搜索条件
+        if mode == "auto-search":
+            if should_search and allow_search:
+                print("✅ auto-search模式：条件满足，进入搜索流程")
+                return "search"
+            else:
+                print(f"⚠️ auto-search模式：搜索条件不满足 (should_search={should_search}, allow_search={allow_search})")
+                return "wait_decision"
+        
+        # 🔄 其他模式或未知模式：安全降级
+        print(f"⚠️ 未知模式或异常情况，安全降级: {mode}")
+        return "wait_decision"
     
     def should_execute_search_after_discussion(self, state: PaperSearchState) -> str:
-        """学术探讨节点后的路由决策 - 优化为分阶段响应"""
+        """学术探讨节点后的路由决策 - 增强模式检查版"""
         mode = state.get("mode", "auto-search") 
         search_suggestion = state.get("search_suggestion", False)
         need_search = state.get("need_search_strategy", False)
         is_completed = state.get("is_completed", False)
+        allow_search = state.get("allow_search", True)
         
-        logger.info(f"🔀 [路由] 模式={mode}, 搜索建议={search_suggestion}, 需要搜索={need_search}, 已完成={is_completed}")
+        logger.info(f"🔀 [路由] 模式={mode}, 搜索建议={search_suggestion}, 需要搜索={need_search}, 已完成={is_completed}, 允许搜索={allow_search}")
         
-        # 🎯 新的auto-search策略：先返回分析结果，标记需要后台搜索
-        if mode == "auto-search" and (search_suggestion or need_search):
-            logger.info("🚀 [auto-search] 学术分析完成 → 标记后台搜索")
-            return "end"  # 先结束工作流，返回分析结果
-        else:
-            # chat&plan模式或无需搜索的情况
-            if is_completed:
-                logger.info("✅ [路由] 学术探讨已完成，正常结束流程")
+        # 🎯 chat&plan模式严格限制：永远不执行搜索
+        if mode == "chat&plan":
+            logger.info("🚫 [chat&plan] 严格禁止搜索，只返回学术探讨结果")
+            return "end"  # chat&plan模式直接结束，不执行搜索
+        
+        # 🎯 auto-search模式：检查是否需要执行搜索
+        if mode == "auto-search":
+            if (search_suggestion or need_search) and allow_search:
+                logger.info("✅ [auto-search] 学术分析完成，但不在工作流中执行搜索")
+                return "end"  # 先结束工作流，返回分析结果，标记需要后台搜索
             else:
-                logger.info("⚠️ [路由] 学术探讨未完成但无需搜索，强制完成状态")
-            return "end"
+                logger.info("ℹ️ [auto-search] 无需搜索或搜索被禁用")
+                return "end"
+        
+        # 🔄 其他模式：安全降级
+        logger.info(f"⚠️ [路由] 未知模式或异常情况，安全结束: {mode}")
+        return "end"
     
     # 已移除：未使用的路由决策辅助函数 should_execute_search
     
     async def search_execution_node(self, state: PaperSearchState) -> Dict[str, Any]:
-        """搜索执行节点 - 调用现有多源搜索引擎，并行优化版本"""
+        """搜索执行节点 - 带防护性检查的多源搜索引擎"""
         try:
+            # 🚫 防护性检查：chat&plan模式不应该到达此节点
+            mode = state.get("mode", "auto-search")
+            allow_search = state.get("allow_search", True)
+            
+            if mode == "chat&plan":
+                logger.error("🚫 [防护检查] chat&plan模式错误到达搜索执行节点，立即返回")
+                return {
+                    "current_step": "blocked",
+                    "error_message": "chat&plan模式不允许执行搜索",
+                    "search_results": []
+                }
+            
+            if not allow_search:
+                logger.warning("🚫 [防护检查] 搜索被禁用，不执行搜索")
+                return {
+                    "current_step": "blocked", 
+                    "error_message": "搜索功能被禁用",
+                    "search_results": []
+                }
+            
+            logger.info(f"✅ [防护检查] 模式={mode}, 允许搜索={allow_search}")
+            
             query = state.get("query", "")
             max_results = state.get("max_results", 20)
             analysis = state.get("analysis_result", {})

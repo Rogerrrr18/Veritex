@@ -682,6 +682,31 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 >
                   arXiv
                 </button>
+                
+                {/* Crossref 按钮 */}
+                <button
+                  onClick={() => setSearchSettings(prev => ({
+                    ...prev,
+                    sources: ['crossref'] // 只选择Crossref
+                  }))}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    border: searchSettings.sources.length === 1 && searchSettings.sources.includes('crossref') 
+                      ? '2px solid #8b5cf6' : '1px solid #333',
+                    backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('crossref')
+                      ? 'rgba(139, 92, 246, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                    color: searchSettings.sources.length === 1 && searchSettings.sources.includes('crossref')
+                      ? '#8b5cf6' : (theme === 'dark' ? '#fff' : '#1f2937'),
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    outline: 'none',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  Crossref
+                </button>
               </div>
               
               {/* 显示当前选择的数据源和模式 */}
@@ -694,7 +719,9 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                   `Google Scholar selected ${displayChinese ? '(中文模式)' : '(English mode)'}` :
                   searchSettings.sources.length === 1 && searchSettings.sources.includes('arxiv') ?
                     `arXiv selected ${displayChinese ? '(中文模式)' : '(English mode)'}` :
-                    `${searchSettings.sources.length} sources selected ${displayChinese ? '(中文模式)' : '(English mode)'}`
+                    searchSettings.sources.length === 1 && searchSettings.sources.includes('crossref') ?
+                      `Crossref selected ${displayChinese ? '(中文模式)' : '(English mode)'}` :
+                      `${searchSettings.sources.length} sources selected ${displayChinese ? '(中文模式)' : '(English mode)'}`
                 }
               </div>
             </div>
@@ -970,6 +997,31 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 }}
               >
                 arXiv
+              </button>
+              
+              {/* Crossref 按钮 */}
+              <button
+                onClick={() => setSearchSettings(prev => ({
+                  ...prev,
+                  sources: ['crossref'] // 只选择Crossref
+                }))}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  border: searchSettings.sources.length === 1 && searchSettings.sources.includes('crossref')
+                    ? '2px solid #8b5cf6' : '1px solid #333',
+                  backgroundColor: searchSettings.sources.length === 1 && searchSettings.sources.includes('crossref')
+                    ? 'rgba(139, 92, 246, 0.2)' : (theme === 'dark' ? '#1a1a1a' : '#f7f5eb'),
+                  color: searchSettings.sources.length === 1 && searchSettings.sources.includes('crossref')
+                    ? '#8b5cf6' : (theme === 'dark' ? '#fff' : '#1f2937'),
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  outline: 'none',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Crossref
               </button>
             </div>
             
