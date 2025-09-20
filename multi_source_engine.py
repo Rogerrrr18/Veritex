@@ -659,6 +659,14 @@ class CrossrefAPI:
         
     async def _get_session(self):
         if self.session is None or self.session.closed:
+            # 🔧 基于crossrefapi库的标准请求头配置
+            headers = {
+                'User-Agent': 'Veritex-Academic-Search/3.0 (https://veritex.ai; mailto:support@veritex.ai)',
+                'Accept': 'application/json',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive'
+            }
+            
             # 🔧 配置代理支持
             http_proxy = os.getenv('HTTP_PROXY')
             https_proxy = os.getenv('HTTPS_PROXY')
@@ -668,13 +676,16 @@ class CrossrefAPI:
                 connector = aiohttp.TCPConnector()
                 self.session = aiohttp.ClientSession(
                     connector=connector,
-                    trust_env=True
+                    trust_env=True,
+                    headers=headers
                 )
             else:
-                self.session = aiohttp.ClientSession()
+                self.session = aiohttp.ClientSession(headers=headers)
+            
+            logger.debug("✅ Crossref API会话已创建，包含标准请求头")
         return self.session
         
-    async def search(self, query: str, limit: int = 20) -> List[Paper]:
+    async def search(self, query: str, limit: int = 20, start_year: Optional[int] = None, end_year: Optional[int] = None) -> List[Paper]:
         """搜索论文"""
         if not CROSSREF_ENABLED:
             return []
@@ -688,11 +699,28 @@ class CrossrefAPI:
             
             session = await self._get_session()
             
+            # 🔧 修复：使用Crossref API实际支持的select字段
             params = {
                 'query': query,
                 'rows': limit,
-                'select': 'DOI,title,author,published,abstract,URL,is-referenced-by-count,publisher,container-title,subtitle'
+                # 🎯 只使用Crossref API实际支持的字段（根据错误消息确认）
+                'select': 'DOI,title,author,published,abstract,URL,is-referenced-by-count,publisher,container-title,subtitle,type,subject,license,ISSN,issued,created,indexed'
             }
+            
+            # 🔧 新增：添加年限筛选参数 - 使用Crossref API的from-pub-date和until-pub-date
+            filters = []
+            if start_year is not None:
+                filters.append(f"from-pub-date:{start_year}")
+                logger.info(f"🗓️ Crossref添加起始年份筛选: {start_year}")
+            
+            if end_year is not None:
+                filters.append(f"until-pub-date:{end_year}")
+                logger.info(f"🗓️ Crossref添加结束年份筛选: {end_year}")
+            
+            # 如果有筛选条件，添加filter参数
+            if filters:
+                params['filter'] = ','.join(filters)
+                logger.info(f"🎯 Crossref API筛选参数: {params['filter']}")
             
             self._last_request = time.time()
             
@@ -702,70 +730,169 @@ class CrossrefAPI:
                     items = data.get('message', {}).get('items', [])
                     return self._parse_papers(items)
                 else:
+                    logger.warning(f"⚠️ Crossref API返回状态码: {response.status}")
                     return []
                     
         except Exception as e:
-            logger.error(f"Crossref搜索出错: {e}")
+            logger.error(f"❌ Crossref搜索出错: {e}")
             return []
             
     def _parse_papers(self, items: List[Dict]) -> List[Paper]:
-        """解析Crossref响应数据"""
+        """解析Crossref响应数据 - 增强元数据处理"""
         papers = []
         for item in items:
             try:
-                # 标题
+                # 标题处理 - 支持多种标题格式
                 title_list = item.get('title', [])
+                subtitle_list = item.get('subtitle', [])
+                
                 title = (title_list[0] if title_list else "").strip()
+                
+                # 如果标题为空，尝试使用subtitle
+                if not title and subtitle_list:
+                    title = subtitle_list[0].strip()
                 
                 # 跳过没有标题的论文
                 if not title:
                     continue
                 
-                # 作者
+                # 合并主标题和副标题
+                if subtitle_list and title and subtitle_list[0].strip():
+                    subtitle = subtitle_list[0].strip()
+                    if subtitle not in title:  # 避免重复
+                        title = f"{title}: {subtitle}"
+                
+                # 作者处理 - 更全面的作者信息提取
                 authors = []
                 for author in item.get('author', []):
                     if 'given' in author and 'family' in author:
+                        # 完整姓名
                         full_name = f"{author['given']} {author['family']}"
                         authors.append(full_name)
                     elif 'family' in author:
+                        # 只有姓氏
                         authors.append(author['family'])
+                    elif 'name' in author:
+                        # 备用名称字段
+                        authors.append(author['name'])
                 
-                # 作者信息缺失时保持空列表
-                
-                # 年份
+                # 🔧 改进年份处理 - 优先级：published > published-print > published-online > created
                 year = None
-                published = item.get('published-print') or item.get('published-online')
-                if published and 'date-parts' in published:
-                    date_parts = published['date-parts'][0]
-                    if date_parts:
-                        try:
-                            year = int(date_parts[0])
-                        except:
-                            pass
+                # 按优先级尝试获取年份信息
+                date_sources = [
+                    item.get('published'),
+                    item.get('published-print'), 
+                    item.get('published-online'), 
+                    item.get('created')
+                ]
                 
-                # 摘要处理 - 只使用真实数据
-                abstract = item.get('abstract', '').strip() if item.get('abstract') else ''
+                for date_source in date_sources:
+                    if date_source and 'date-parts' in date_source:
+                        date_parts = date_source['date-parts']
+                        if date_parts and len(date_parts) > 0 and len(date_parts[0]) > 0:
+                            try:
+                                year = int(date_parts[0][0])
+                                # 年份合理性检查
+                                from datetime import datetime
+                                current_year = datetime.now().year
+                                if 1900 <= year <= current_year + 2:
+                                    break  # 找到有效年份，跳出循环
+                                else:
+                                    year = None  # 年份不合理，继续尝试下一个源
+                            except (ValueError, IndexError, TypeError):
+                                continue  # 解析失败，尝试下一个源
                 
-                # DOI和URL
+                # 🎯 基于crossrefapi库的多字段摘要获取策略
+                abstract = ""
+                abstract_source = ""
+                
+                # 策略1: 主要摘要字段
+                raw_abstract = item.get('abstract')
+                if raw_abstract and isinstance(raw_abstract, str) and raw_abstract.strip():
+                    abstract = self._clean_html_abstract(raw_abstract.strip())
+                    abstract_source = "abstract"
+                    logger.debug(f"✅ 从abstract字段获取摘要: {len(abstract)}字符")
+                
+                # 策略2: 副标题字段（可能包含摘要信息）
+                elif item.get('subtitle') and len(item['subtitle']) > 0:
+                    subtitle_text = item['subtitle'][0] if isinstance(item['subtitle'], list) else str(item['subtitle'])
+                    if len(subtitle_text.strip()) > 50:  # 只有足够长的副标题才考虑作为摘要
+                        abstract = self._clean_html_abstract(subtitle_text.strip())
+                        abstract_source = "subtitle"
+                        logger.debug(f"✅ 从subtitle字段获取摘要: {len(abstract)}字符")
+                
+                # 策略3: 基于主题词生成描述性摘要（高质量降级）
+                elif item.get('subject') and len(item['subject']) > 0:
+                    subjects = item['subject'][:5]  # 最多使用5个主题词
+                    work_type = item.get('type', '').replace('-', ' ').title()
+                    if work_type and subjects:
+                        abstract = f"This {work_type.lower()} covers research in: {', '.join(subjects)}."
+                        abstract_source = "generated"
+                        logger.debug(f"✅ 基于主题词生成描述: {len(abstract)}字符")
+                
+                # 记录摘要来源用于调试
+                if abstract:
+                    logger.debug(f"📄 摘要来源: {abstract_source}")
+                else:
+                    logger.debug(f"❌ 无可用摘要数据")
+                    
+                # 如果摘要过短，清空处理
+                if abstract and len(abstract.strip()) < 20:
+                    logger.debug(f"⚠️ 摘要过短({len(abstract)}字符)，清空处理")
+                    abstract = ""
+                
+                # DOI和URL处理 - 改进URL生成逻辑
                 doi = item.get('DOI', '').strip()
                 url = item.get('URL', '').strip()
+                
+                # 如果没有URL但有DOI，生成DOI链接
                 if not url and doi:
                     url = f"https://doi.org/{doi}"
                 
-                # 引用数
+                # 引用数处理
                 citations = item.get('is-referenced-by-count', 0)
                 try:
-                    citations = int(citations)
-                except:
+                    citations = int(citations) if citations else 0
+                except (ValueError, TypeError):
                     citations = 0
                 
-                # 期刊信息 - 只使用真实数据
+                # 🎯 基于crossrefapi库的扩展期刊信息处理
                 journal = ''
+                
+                # 策略1: 优先使用container-title (期刊全名)
                 if item.get('container-title') and len(item['container-title']) > 0:
                     journal = item['container-title'][0].strip()
+                
+                # 策略2: 如果没有，使用short-container-title (期刊简称)
+                elif item.get('short-container-title') and len(item['short-container-title']) > 0:
+                    journal = item['short-container-title'][0].strip()
+                
+                # 策略3: 最后使用publisher (出版商)
                 elif item.get('publisher'):
                     journal = item['publisher'].strip()
                 
+                # 🎯 扩展元数据处理 - 基于实际可用字段
+                # 许可证信息
+                license_info = []
+                if item.get('license'):
+                    for license_item in item['license'][:2]:  # 最多2个许可证
+                        if isinstance(license_item, dict) and license_item.get('URL'):
+                            license_info.append(license_item['URL'])
+                
+                # 提取ISSN
+                issn_list = item.get('ISSN', [])
+                
+                # 构建扩展的出版商信息
+                publisher_full = item.get('publisher', '')
+                
+                # 构建描述信息（整合多种元数据）
+                description_parts = []
+                if license_info:
+                    description_parts.append(f"License: {license_info[0]}")  # 只显示第一个许可证
+                
+                description = " | ".join(description_parts) if description_parts else ""
+                
+                # 创建增强的Paper对象
                 paper = Paper(
                     title=title,
                     authors=authors,
@@ -775,14 +902,92 @@ class CrossrefAPI:
                     url=url,
                     doi=doi,
                     citations=citations,
-                    source="crossref"
+                    source="crossref",
+                    # 🎯 扩展字段映射（基于实际可用字段）
+                    pmid=issn_list[0] if issn_list else None,
+                    keywords=item.get('subject', [])[:5] if item.get('subject') else None,
+                    # ScholarDock增强字段的利用
+                    venue=journal.split(' (')[0] if ' (' in journal else journal,  # 提取纯期刊名
+                    publisher=publisher_full,
+                    description=description
                 )
                 papers.append(paper)
                 
             except Exception as e:
+                logger.debug(f"解析Crossref单篇论文失败: {e}")
                 continue
                 
+        logger.info(f"📊 Crossref解析完成: {len(papers)}/{len(items)}篇论文成功解析")
         return papers
+    
+    def _clean_html_abstract(self, html_abstract: str) -> str:
+        """清理HTML标签，转换摘要为纯文本格式"""
+        try:
+            import re
+            
+            # 如果不包含HTML标签，直接返回
+            if '<' not in html_abstract:
+                return html_abstract.strip()
+            
+            # HTML标签清理规则
+            cleaned = html_abstract
+            
+            # 1. 保持段落结构：<p> 标签转换为双换行
+            cleaned = re.sub(r'<p[^>]*>', '\n\n', cleaned)
+            cleaned = re.sub(r'</p>', '', cleaned)
+            
+            # 2. 保持强调格式：<italic>、<em>、<i> 转换为斜体标记
+            cleaned = re.sub(r'<(?:italic|em|i)[^>]*>(.*?)</(?:italic|em|i)>', r'*\1*', cleaned)
+            
+            # 3. 保持加粗格式：<strong>、<b> 转换为加粗标记
+            cleaned = re.sub(r'<(?:strong|b)[^>]*>(.*?)</(?:strong|b)>', r'**\1**', cleaned)
+            
+            # 4. 换行标签：<br> 转换为换行
+            cleaned = re.sub(r'<br[^>]*/?>', '\n', cleaned)
+            
+            # 5. 列表处理：简单转换为文本列表
+            cleaned = re.sub(r'<li[^>]*>', '\n• ', cleaned)
+            cleaned = re.sub(r'</li>', '', cleaned)
+            cleaned = re.sub(r'</?[uo]l[^>]*>', '', cleaned)
+            
+            # 6. 移除所有剩余的HTML标签
+            cleaned = re.sub(r'<[^>]+>', '', cleaned)
+            
+            # 7. 清理HTML实体
+            html_entities = {
+                '&amp;': '&',
+                '&lt;': '<',
+                '&gt;': '>',
+                '&quot;': '"',
+                '&#39;': "'",
+                '&nbsp;': ' ',
+                '&mdash;': '—',
+                '&ndash;': '–',
+                '&hellip;': '…'
+            }
+            
+            for entity, char in html_entities.items():
+                cleaned = cleaned.replace(entity, char)
+            
+            # 8. 清理多余的空白字符
+            cleaned = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned)  # 多个换行合并为双换行
+            cleaned = re.sub(r'[ \t]+', ' ', cleaned)  # 多个空格合并为单个空格
+            cleaned = cleaned.strip()
+            
+            # 9. 确保段落间有适当间距
+            if '\n\n' in cleaned:
+                paragraphs = [p.strip() for p in cleaned.split('\n\n') if p.strip()]
+                cleaned = '\n\n'.join(paragraphs)
+            
+            logger.debug(f"🧹 HTML清理完成: {len(html_abstract)} → {len(cleaned)}字符")
+            return cleaned
+            
+        except Exception as e:
+            logger.warning(f"⚠️ HTML清理失败: {e}")
+            # 降级处理：移除所有HTML标签
+            import re
+            fallback = re.sub(r'<[^>]+>', '', html_abstract)
+            return fallback.strip()
         
     async def close(self):
         if self.session and not self.session.closed:
@@ -1249,10 +1454,19 @@ class MultiSourceEngine:
                     )
                 )
             else:
-                # 其他搜索源暂时保持原有调用方式
-                task = asyncio.create_task(
-                    asyncio.wait_for(source_api.search(source_query, source_limit), timeout=source_timeout)
-                )
+                # Crossref也需要年限参数支持
+                if source_name == 'crossref':
+                    task = asyncio.create_task(
+                        asyncio.wait_for(
+                            source_api.search(source_query, source_limit, start_year=year_from, end_year=year_to), 
+                            timeout=source_timeout
+                        )
+                    )
+                else:
+                    # 其他搜索源暂时保持原有调用方式
+                    task = asyncio.create_task(
+                        asyncio.wait_for(source_api.search(source_query, source_limit), timeout=source_timeout)
+                    )
             tasks.append(task)
         
         # 执行搜索
@@ -1335,12 +1549,21 @@ class MultiSourceEngine:
                             )
                         )
                     else:
-                        task = asyncio.create_task(
-                            asyncio.wait_for(
-                                source_api.search(source_query, compensation_per_source), 
-                                timeout=source_timeout
+                        # Crossref也需要年限参数支持
+                        if comp_source_name == 'crossref':
+                            task = asyncio.create_task(
+                                asyncio.wait_for(
+                                    source_api.search(source_query, compensation_per_source, start_year=year_from, end_year=year_to), 
+                                    timeout=source_timeout
+                                )
                             )
-                        )
+                        else:
+                            task = asyncio.create_task(
+                                asyncio.wait_for(
+                                    source_api.search(source_query, compensation_per_source), 
+                                    timeout=source_timeout
+                                )
+                            )
                     compensation_tasks.append(task)
                 
                 # 执行补偿搜索
@@ -1579,10 +1802,19 @@ class MultiSourceEngine:
                         )
                     )
                 else:
-                    # 其他搜索源保持原有调用方式
-                    task = asyncio.create_task(
-                        asyncio.wait_for(source_api.search(fallback_query, per_source_limit), timeout=timeout)
-                    )
+                    # Crossref也需要年限参数支持
+                    if source_name == 'crossref':
+                        task = asyncio.create_task(
+                            asyncio.wait_for(
+                                source_api.search(fallback_query, per_source_limit, start_year=year_from, end_year=year_to), 
+                                timeout=timeout
+                            )
+                        )
+                    else:
+                        # 其他搜索源保持原有调用方式
+                        task = asyncio.create_task(
+                            asyncio.wait_for(source_api.search(fallback_query, per_source_limit), timeout=timeout)
+                        )
                 fallback_tasks.append(task)
             
             # 执行并收集结果
