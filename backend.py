@@ -232,7 +232,8 @@ async def execute_background_search(
         
     except Exception as e:
         logger.error(f"❌ [后台搜索] 执行失败: {e}")
-        raise e
+        # 🔧 修复：返回空结果而不是抛出异常，确保系统稳定性
+        return []
 
 def quick_intent_filter(message: str) -> Optional[str]:
     """快速意图预筛选 - 对明显的闲聊直接识别，避免复杂工作流"""

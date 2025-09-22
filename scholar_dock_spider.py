@@ -71,9 +71,9 @@ class ScholarDockSpider:
         ]
         
         # 请求配置 (优化网络连接处理)
-        self.base_delay = 5.0      # 基础延迟时间（采用ScholarDock的5.0s策略）
-        self.max_delay = 8.0       # 最大延迟时间（在ScholarDock基础上增加随机性）
-        self.max_retries = 5       # 增加重试次数到5次
+        self.base_delay = 8.0      # 基础延迟时间（增加到8秒避免429错误）
+        self.max_delay = 12.0      # 最大延迟时间（增加到12秒）
+        self.max_retries = 3       # 减少重试次数到3次，避免过度重试
         self.timeout = 60          # 增加超时时间到60秒，适应网络问题
         
         # 🔧 优化：搜索超时配置（基于ScholarDock-master经验优化）
@@ -189,24 +189,24 @@ class ScholarDockSpider:
         """基于ScholarDock-master成功经验的智能延迟策略"""
         import random
         
-        # 基于ScholarDock的5.0秒延迟策略，增加随机性
-        base_delay = random.uniform(self.base_delay, self.max_delay)  # 5.0-8.0秒基础延迟
+        # 基于ScholarDock的8.0秒延迟策略，增加随机性
+        base_delay = random.uniform(self.base_delay, self.max_delay)  # 8.0-12.0秒基础延迟
         
         # 重试时增加更长的额外延迟（参考ScholarDock处理）
         if is_retry:
-            base_delay += random.uniform(5.0, 10.0)  # 重试时额外增加5-10秒
+            base_delay += random.uniform(8.0, 15.0)  # 重试时额外增加8-15秒
         
         # 页数增加时增加延迟（避免被检测为批量行为）
         if page_number > 1:
-            page_factor = min(page_number * 2.0, 10.0)  # 每页增加2秒，最多增加10秒
+            page_factor = min(page_number * 3.0, 15.0)  # 每页增加3秒，最多增加15秒
             base_delay += page_factor
         
         # 添加随机抖动，模拟人类行为
-        jitter = random.uniform(0.8, 1.5)  # 增加抖动范围
+        jitter = random.uniform(0.9, 1.3)  # 减少抖动范围，保持稳定
         final_delay = base_delay * jitter
         
-        # 确保最小延迟不低于ScholarDock的基准
-        final_delay = max(final_delay, 5.0)
+        # 确保最小延迟不低于8秒（更保守）
+        final_delay = max(final_delay, 8.0)
         
         # 移除调试日志以提升性能
         await asyncio.sleep(final_delay)

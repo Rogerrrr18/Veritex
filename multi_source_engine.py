@@ -160,6 +160,10 @@ class ArxivAPI:
             logger.error(f"arXiv搜索错误: {e}")
             import traceback
             logger.error(f"详细错误: {traceback.format_exc()}")
+            # 🔧 修复：在网络错误时关闭并重置session，避免连接泄漏
+            if self.session and not self.session.closed:
+                await self.session.close()
+                self.session = None
             return []
     
     def _parse_arxiv_xml(self, xml_content: str) -> List[Paper]:
@@ -735,6 +739,10 @@ class CrossrefAPI:
                     
         except Exception as e:
             logger.error(f"❌ Crossref搜索出错: {e}")
+            # 🔧 修复：在网络错误时关闭并重置session，避免连接泄漏
+            if self.session and not self.session.closed:
+                await self.session.close()
+                self.session = None
             return []
             
     def _parse_papers(self, items: List[Dict]) -> List[Paper]:
@@ -1550,7 +1558,7 @@ class MultiSourceEngine:
                         )
                     else:
                         # Crossref也需要年限参数支持
-                        if comp_source_name == 'crossref':
+                        if source_name == 'crossref':
                             task = asyncio.create_task(
                                 asyncio.wait_for(
                                     source_api.search(source_query, compensation_per_source, start_year=year_from, end_year=year_to), 

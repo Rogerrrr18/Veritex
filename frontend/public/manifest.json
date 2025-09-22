@@ -1,0 +1,44 @@
+{
+  "name": "Veritex - 智能学术文献搜索",
+  "short_name": "Veritex",
+  "description": "AI驱动的学术文献搜索系统，提供智能对话、多源搜索、关键词扩展等功能",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1f3a",
+  "theme_color": "#1a1f3a",
+  "orientation": "portrait",
+  "scope": "/",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/favicon-16x16.png",
+      "sizes": "16x16",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/favicon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "categories": ["education", "productivity", "research"],
+  "screenshots": [
+    {
+      "src": "/favicon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
