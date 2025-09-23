@@ -285,7 +285,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       
       // 🔑 保存更新后的关键词云数据
       saveKeywordCloudData({
-        hierarchicalKeywords: activeHierarchicalKeywords,
+        hierarchicalKeywords: activeHierarchicalKeywords || null,
         expandedKeywords: updatedKeywords,
         originalQuery: activeOriginalQuery
       });
@@ -299,7 +299,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     
     // 🔑 保存更新后的关键词云数据
     saveKeywordCloudData({
-      hierarchicalKeywords: activeHierarchicalKeywords,
+      hierarchicalKeywords: activeHierarchicalKeywords || null,
       expandedKeywords: updatedKeywords,
       originalQuery: activeOriginalQuery
     });
@@ -1202,7 +1202,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                             
                             // 🔑 保存更新后的关键词云数据
                             saveKeywordCloudData({
-                              hierarchicalKeywords: activeHierarchicalKeywords,
+                              hierarchicalKeywords: activeHierarchicalKeywords || null,
                               expandedKeywords: updatedKeywords,
                               originalQuery: activeOriginalQuery
                             });

@@ -1251,31 +1251,65 @@ class IntelligentPaperSearchAgent:
         return term
     
     def _collect_weighted_terms(self, hierarchical: Dict[str, Any]) -> List[tuple]:
-        """收集所有关键词及其权重信息"""
+        """收集所有关键词及其权重信息 - 支持中英文分离格式"""
         weighted_terms = []
         
         for level, level_data in hierarchical.items():
-            if isinstance(level_data, dict) and 'terms' in level_data and 'weight' in level_data:
-                terms = level_data['terms']
-                weight = level_data['weight']
+            if not isinstance(level_data, dict) or 'weight' not in level_data:
+                continue
                 
-                # 确保terms是列表
+            weight = level_data['weight']
+            terms = []
+            
+            # 🔧 支持新格式：chinese + english 分离
+            if 'chinese' in level_data and 'english' in level_data:
+                chinese_terms = level_data.get('chinese', [])
+                english_terms = level_data.get('english', [])
+                
+                # 确保是列表格式
+                if isinstance(chinese_terms, str):
+                    chinese_terms = [chinese_terms]
+                if isinstance(english_terms, str):
+                    english_terms = [english_terms]
+                    
+                # 合并中英文术语
+                if isinstance(chinese_terms, list):
+                    terms.extend(chinese_terms)
+                if isinstance(english_terms, list):
+                    terms.extend(english_terms)
+                    
+                print(f"🔍 [格式兼容] {level}: 中文{len(chinese_terms)}个 + 英文{len(english_terms)}个 = 总计{len(terms)}个术语")
+                
+            # 🔄 兼容旧格式：直接terms数组  
+            elif 'terms' in level_data:
+                terms = level_data['terms']
                 if isinstance(terms, str):
                     terms = [terms]
                 elif not isinstance(terms, list):
                     continue
-                    
-                # 添加每个术语及其权重
-                for term in terms:
-                    if term and isinstance(term, str) and term.strip():
-                        weighted_terms.append((term.strip(), weight, level))
+                print(f"🔄 [格式兼容] {level}: 旧格式terms数组，{len(terms)}个术语")
+            else:
+                print(f"⚠️ [格式警告] {level}: 未找到有效的terms、chinese或english字段")
+                continue
+                
+            # 添加每个术语及其权重
+            valid_terms_count = 0
+            for term in terms:
+                if term and isinstance(term, str) and term.strip():
+                    cleaned_term = term.strip()
+                    weighted_terms.append((cleaned_term, weight, level))
+                    valid_terms_count += 1
+            
+            print(f"✅ [术语收集] {level}: 有效术语{valid_terms_count}个，权重{weight}")
         
         # 按权重排序（降序）
         weighted_terms.sort(key=lambda x: x[1], reverse=True)
+        print(f"📊 [术语统计] 总计收集{len(weighted_terms)}个加权术语")
+        
         return weighted_terms
 
     def _build_search_query(self, original_query: str, analysis: Optional[Dict[str, Any]]) -> str:
-        """基于权重驱动的智能布尔查询构建"""
+        """基于权重驱动的智能布尔查询构建 - 优化版"""
         if not analysis:
             return original_query
         
@@ -1288,9 +1322,14 @@ class IntelligentPaperSearchAgent:
                 print(f"📈 搜索策略: {search_strategy}")
                 return optimized_query
             
-            # 🔄 备用方案：权重驱动的动态查询构建
+            # 🔄 备用方案：优化的权重驱动查询构建
             search_strategy = analysis.get("search_strategy", "balanced")
             hierarchical = analysis.get("hierarchical_keywords", {})
+            
+            # 🧠 智能策略选择：如果没有明确指定策略，自动选择最佳策略
+            if search_strategy == "balanced" and not analysis.get("explicit_strategy"):
+                search_strategy = self._auto_select_strategy(original_query, hierarchical)
+                print(f"🤖 智能策略选择: {search_strategy}")
             
             if not hierarchical:
                 print("⚠️ 无分层关键词数据，使用原始查询")
@@ -1306,146 +1345,300 @@ class IntelligentPaperSearchAgent:
             print(f"🔍 权重驱动构建查询，策略: {search_strategy}")
             print(f"📊 可用术语: {len(weighted_terms)}个")
             
-            # 🎯 根据策略和权重动态构建查询
+            # 🆕 新的智能查询构建策略
             if search_strategy == "precision_focused":
-                # 🎯 精准策略：1核心+1灵活 → "核心术语" AND ("灵活术语1" OR "灵活术语2")
-                
-                # 选择1个最重要的核心术语（来自exact_terms，权重1.0）
-                exact_terms = [term for term, weight, level in weighted_terms if level == "exact_terms"]
-                core_terms = [term for term, weight, level in weighted_terms if level == "core_synonyms"]
-                
-                if exact_terms:
-                    # 使用权重最高的exact_term作为核心
-                    core_term = exact_terms[0]
-                    core_quoted = self._smart_quote_term(core_term)
-                    
-                    # 从core_synonyms中选择1-2个作为灵活补充
-                    if core_terms:
-                        flexible_terms = core_terms[:2]  # 最多2个灵活术语
-                        flexible_quoted = [self._smart_quote_term(term) for term in flexible_terms]
-                        
-                        if len(flexible_quoted) == 1:
-                            final_query = f"{core_quoted} AND {flexible_quoted[0]}"
-                        else:
-                            flexible_part = " OR ".join(flexible_quoted)
-                            final_query = f"{core_quoted} AND ({flexible_part})"
-                        
-                        print(f"🎯 精准策略: 1核心({core_term}) + {len(flexible_terms)}灵活术语")
-                    else:
-                        # 如果没有core_synonyms，使用另一个exact_term作为补充
-                        if len(exact_terms) > 1:
-                            second_term = exact_terms[1]
-                            second_quoted = self._smart_quote_term(second_term)
-                            final_query = f"{core_quoted} AND {second_quoted}"
-                            print(f"🎯 精准策略: 2个核心术语")
-                        else:
-                            final_query = core_quoted
-                            print(f"🎯 精准策略: 单一核心术语")
-                else:
-                    # 回退：使用权重最高的术语
-                    if len(weighted_terms) >= 2:
-                        top_two = [term for term, _, _ in weighted_terms[:2]]
-                        quoted_terms = [self._smart_quote_term(term) for term in top_two]
-                        final_query = f"{quoted_terms[0]} AND {quoted_terms[1]}"
-                        print(f"🎯 精准策略回退: 使用前2个高权重术语")
-                    else:
-                        top_term = weighted_terms[0][0] if weighted_terms else "machine learning"
-                        final_query = self._smart_quote_term(top_term)
-                        print(f"🎯 精准策略最小回退: 单一术语")
-                    
+                return self._build_precision_query(weighted_terms)
             elif search_strategy == "recall_focused":
-                # 召回策略：使用权重≥0.4的所有术语，OR连接
-                all_terms = [term for term, weight, level in weighted_terms if weight >= 0.4]
-                all_terms = all_terms[:8]  # 防止查询过长
-                
-                if all_terms:
-                    quoted_terms = [self._smart_quote_term(term) for term in all_terms]
-                    final_query = " OR ".join(quoted_terms)
-                    print(f"🔍 召回策略: 使用{len(all_terms)}个术语扩大搜索范围")
-                else:
-                    # 使用所有可用术语
-                    all_terms = [term for term, _, _ in weighted_terms[:6]]
-                    quoted_terms = [self._smart_quote_term(term) for term in all_terms]
-                    final_query = " OR ".join(quoted_terms)
-                    print(f"🔍 召回策略回退: 使用前{len(all_terms)}个术语")
-                    
-            else:  # balanced 平衡策略
-                # ⚖️ 平衡策略：四层结构 → exact(内部OR) OR core AND related OR context
-                
-                # 按层级分组术语
-                exact_terms = [term for term, weight, level in weighted_terms if level == "exact_terms"]
-                core_terms = [term for term, weight, level in weighted_terms if level == "core_synonyms"]
-                related_terms = [term for term, weight, level in weighted_terms if level == "related_terms"]
-                context_terms = [term for term, weight, level in weighted_terms if level == "context_terms"]
-                
-                query_parts = []
-                
-                # 1. exact_terms 内部OR连接
-                if exact_terms:
-                    exact_quoted = [self._smart_quote_term(term) for term in exact_terms[:3]]  # 限制数量
-                    if len(exact_quoted) == 1:
-                        exact_part = exact_quoted[0]
-                    else:
-                        exact_part = f"({' OR '.join(exact_quoted)})"
-                    query_parts.append(exact_part)
-                    print(f"⚖️ exact层: {len(exact_quoted)}个术语")
-                
-                # 2. core_synonyms 作为AND必需项
-                if core_terms:
-                    core_quoted = [self._smart_quote_term(term) for term in core_terms[:2]]  # 限制数量
-                    core_part = " AND ".join(core_quoted)
-                    
-                    # 3. related_terms 作为OR扩展
-                    extensions = []
-                    if related_terms:
-                        related_quoted = [self._smart_quote_term(term) for term in related_terms[:3]]
-                        related_part = " OR ".join(related_quoted)
-                        extensions.append(f"({related_part})")
-                        print(f"⚖️ related层: {len(related_quoted)}个术语")
-                    
-                    # 4. context_terms 作为OR补充
-                    if context_terms:
-                        context_quoted = [self._smart_quote_term(term) for term in context_terms[:2]]
-                        context_part = " OR ".join(context_quoted)
-                        extensions.append(f"({context_part})")
-                        print(f"⚖️ context层: {len(context_quoted)}个术语")
-                    
-                    # 组合core + extensions
-                    if extensions:
-                        extension_part = " OR ".join(extensions)
-                        core_and_ext = f"({core_part}) AND ({extension_part})"
-                    else:
-                        core_and_ext = core_part
-                    
-                    query_parts.append(core_and_ext)
-                    print(f"⚖️ core层: {len(core_quoted)}个术语")
-                
-                # 最终组合：exact OR (core AND related/context)
-                if len(query_parts) == 2:
-                    final_query = f"{query_parts[0]} OR ({query_parts[1]})"
-                elif len(query_parts) == 1:
-                    final_query = query_parts[0]
-                else:
-                    # 回退策略：使用权重最高的术语
-                    top_terms = [term for term, _, _ in weighted_terms[:4]]
-                    if len(top_terms) >= 2:
-                        quoted_terms = [self._smart_quote_term(term) for term in top_terms]
-                        final_query = f"{quoted_terms[0]} AND ({' OR '.join(quoted_terms[1:])})"
-                        print(f"⚖️ 平衡策略回退: 1核心 + {len(quoted_terms)-1}扩展")
-                    else:
-                        final_query = self._smart_quote_term(top_terms[0]) if top_terms else "machine learning"
-                        print(f"⚖️ 平衡策略最小回退: 单一术语")
-                
-                print(f"⚖️ 平衡策略完成: {len(query_parts)}个部分组合")
-            
-            print(f"✅ 构建完成 - {search_strategy}: {final_query}")
-            return final_query
+                return self._build_recall_query(weighted_terms)
+            else:  # balanced
+                return self._build_balanced_query(weighted_terms)
             
         except Exception as e:
             print(f"❌ 查询构建失败，使用原始查询: {e}")
             import traceback
             print(f"错误详情: {traceback.format_exc()}")
             return original_query
+
+    def _build_precision_query(self, weighted_terms: List[tuple]) -> str:
+        """构建精准搜索查询 - 核心术语 + 限定术语"""
+        # 按层级分组
+        exact_terms = [term for term, weight, level in weighted_terms if level == "exact_terms"]
+        core_terms = [term for term, weight, level in weighted_terms if level == "core_synonyms"]
+        
+        # 分离中英文术语以获得更好的匹配
+        chinese_terms = [term for term in exact_terms + core_terms if self._is_chinese(term)]
+        english_terms = [term for term in exact_terms + core_terms if not self._is_chinese(term)]
+        
+        # 选择最核心的术语（优先英文，因为国际文献更多）
+        core_term = None
+        if english_terms:
+            core_term = self._smart_quote_term(english_terms[0])
+        elif chinese_terms:
+            core_term = self._smart_quote_term(chinese_terms[0])
+        
+        if not core_term:
+            return self._fallback_query(weighted_terms)
+        
+        # 添加限定术语（同义词或相关术语）
+        limiting_terms = []
+        
+        # 添加最佳同义词
+        if len(english_terms) > 1:
+            limiting_terms.append(self._smart_quote_term(english_terms[1]))
+        elif len(chinese_terms) > 0 and english_terms:
+            limiting_terms.append(self._smart_quote_term(chinese_terms[0]))
+        
+        if limiting_terms:
+            if len(limiting_terms) == 1:
+                query = f"{core_term} AND {limiting_terms[0]}"
+            else:
+                limit_part = " OR ".join(limiting_terms[:2])
+                query = f"{core_term} AND ({limit_part})"
+        else:
+            query = core_term
+        
+        print(f"🎯 精准策略: {core_term} + {len(limiting_terms)}个限定术语")
+        return query
+
+    def _build_recall_query(self, weighted_terms: List[tuple]) -> str:
+        """构建召回优化查询 - 广泛覆盖"""
+        # 获取所有高权重术语（≥0.5）
+        high_weight_terms = [term for term, weight, level in weighted_terms if weight >= 0.5][:8]
+        
+        if not high_weight_terms:
+            high_weight_terms = [term for term, _, _ in weighted_terms[:6]]
+        
+        # 分离中英文，优先使用英文术语以获得更好的国际覆盖
+        chinese_terms = [term for term in high_weight_terms if self._is_chinese(term)]
+        english_terms = [term for term in high_weight_terms if not self._is_chinese(term)]
+        
+        # 构建双语OR查询，英文优先
+        selected_terms = []
+        if english_terms:
+            selected_terms.extend(english_terms[:5])  # 最多5个英文术语
+        if chinese_terms and len(selected_terms) < 4:
+            selected_terms.extend(chinese_terms[:4-len(selected_terms)])  # 补充中文术语
+        
+        if not selected_terms:
+            return self._fallback_query(weighted_terms)
+        
+        quoted_terms = [self._smart_quote_term(term) for term in selected_terms]
+        query = " OR ".join(quoted_terms)
+        
+        print(f"🔍 召回策略: {len(selected_terms)}个术语扩大覆盖 (英文:{len([t for t in selected_terms if not self._is_chinese(t)])}, 中文:{len([t for t in selected_terms if self._is_chinese(t)])})")
+        return query
+
+    def _build_balanced_query(self, weighted_terms: List[tuple]) -> str:
+        """构建平衡查询 - 精准性与召回率并重"""
+        # 按层级和语言分组
+        exact_terms = [term for term, weight, level in weighted_terms if level == "exact_terms"]
+        core_terms = [term for term, weight, level in weighted_terms if level == "core_synonyms"]
+        related_terms = [term for term, weight, level in weighted_terms if level == "related_terms"]
+        
+        # 核心术语组合（精准部分）
+        core_group = exact_terms + core_terms
+        chinese_core = [term for term in core_group if self._is_chinese(term)]
+        english_core = [term for term in core_group if not self._is_chinese(term)]
+        
+        # 扩展术语组合（召回部分）
+        extend_group = related_terms
+        chinese_extend = [term for term in extend_group if self._is_chinese(term)]
+        english_extend = [term for term in extend_group if not self._is_chinese(term)]
+        
+        query_parts = []
+        
+        # 1. 构建核心术语部分（双语同义词OR连接）
+        if english_core or chinese_core:
+            core_terms_selected = []
+            if english_core:
+                core_terms_selected.append(english_core[0])  # 主要英文术语
+            if chinese_core:
+                core_terms_selected.append(chinese_core[0])  # 对应中文术语
+            
+            if len(core_terms_selected) == 1:
+                core_part = self._smart_quote_term(core_terms_selected[0])
+            else:
+                quoted_core = [self._smart_quote_term(term) for term in core_terms_selected]
+                core_part = f"({' OR '.join(quoted_core)})"
+            
+            query_parts.append(core_part)
+            print(f"⚖️ 核心部分: {len(core_terms_selected)}个术语 (双语同义)")
+        
+        # 2. 构建扩展术语部分（相关概念OR连接）
+        if english_extend or chinese_extend:
+            extend_terms_selected = []
+            if english_extend:
+                extend_terms_selected.extend(english_extend[:2])  # 最多2个英文扩展
+            if chinese_extend and len(extend_terms_selected) < 2:
+                needed = 2 - len(extend_terms_selected)
+                extend_terms_selected.extend(chinese_extend[:needed])  # 补充中文扩展
+            
+            if extend_terms_selected:
+                quoted_extend = [self._smart_quote_term(term) for term in extend_terms_selected]
+                if len(quoted_extend) == 1:
+                    extend_part = quoted_extend[0]
+                else:
+                    extend_part = f"({' OR '.join(quoted_extend)})"
+                
+                query_parts.append(extend_part)
+                print(f"⚖️ 扩展部分: {len(extend_terms_selected)}个术语")
+        
+        # 3. 组合核心与扩展部分
+        if len(query_parts) == 2:
+            # 核心术语 AND 扩展术语（确保相关性的同时扩大覆盖）
+            query = f"{query_parts[0]} AND {query_parts[1]}"
+        elif len(query_parts) == 1:
+            query = query_parts[0]
+        else:
+            return self._fallback_query(weighted_terms)
+        
+        print(f"⚖️ 平衡策略: {len(query_parts)}部分组合，总长度{len(query)}字符")
+        return query
+
+    def _is_chinese(self, text: str) -> bool:
+        """判断文本是否包含中文字符"""
+        return bool(re.search(r'[\u4e00-\u9fff]', text))
+
+    def _fallback_query(self, weighted_terms: List[tuple]) -> str:
+        """降级查询构建"""
+        if not weighted_terms:
+            return "machine learning"
+        
+        # 使用权重最高的术语
+        top_terms = [term for term, _, _ in weighted_terms[:3]]
+        
+        # 优先使用英文术语
+        english_terms = [term for term in top_terms if not self._is_chinese(term)]
+        chinese_terms = [term for term in top_terms if self._is_chinese(term)]
+        
+        if english_terms:
+            selected = english_terms[:2]
+        elif chinese_terms:
+            selected = chinese_terms[:2]
+        else:
+            selected = top_terms[:2]
+        
+        quoted_terms = [self._smart_quote_term(term) for term in selected]
+        
+        if len(quoted_terms) == 1:
+            query = quoted_terms[0]
+        else:
+            query = f"{quoted_terms[0]} OR {quoted_terms[1]}"
+        
+        print(f"🔄 降级查询: {len(selected)}个高权重术语")
+        return query
+
+    def _auto_select_strategy(self, original_query: str, hierarchical: Dict[str, Any]) -> str:
+        """智能选择搜索策略"""
+        try:
+            # 分析查询特征
+            query_lower = original_query.lower()
+            
+            # 精准策略指标
+            precision_indicators = [
+                "specific", "exact", "precise", "particular", "individual",
+                "特定", "精确", "具体", "某个", "特别的",
+                "definition", "concept", "theory", "model", "algorithm",
+                "定义", "概念", "理论", "模型", "算法"
+            ]
+            
+            # 召回策略指标  
+            recall_indicators = [
+                "overview", "survey", "review", "comprehensive", "broad", "general",
+                "概述", "综述", "全面", "广泛", "总体", "整体",
+                "trends", "developments", "advances", "progress", "state of art",
+                "趋势", "发展", "进展", "现状", "前沿"
+            ]
+            
+            # 计算指标匹配分数
+            precision_score = sum(1 for indicator in precision_indicators if indicator in query_lower)
+            recall_score = sum(1 for indicator in recall_indicators if indicator in query_lower)
+            
+            # 分析关键词分布
+            term_counts = self._analyze_hierarchical_distribution(hierarchical)
+            
+            # 决策逻辑
+            # 1. 明确的精准查询
+            if precision_score > 0 or term_counts['exact_ratio'] > 0.6:
+                print(f"🎯 选择精准策略: 精准指标{precision_score}, exact比例{term_counts['exact_ratio']:.2f}")
+                return "precision_focused"
+            
+            # 2. 明确的召回查询
+            elif recall_score > 0 or term_counts['total_terms'] > 10:
+                print(f"🔍 选择召回策略: 召回指标{recall_score}, 术语总数{term_counts['total_terms']}")
+                return "recall_focused"
+            
+            # 3. 基于查询复杂度判断
+            elif len(original_query.split()) <= 3:
+                print(f"🎯 短查询选择精准策略: 词数{len(original_query.split())}")
+                return "precision_focused"
+            
+            elif len(original_query.split()) >= 8:
+                print(f"🔍 长查询选择召回策略: 词数{len(original_query.split())}")
+                return "recall_focused"
+            
+            # 4. 默认平衡策略
+            else:
+                print(f"⚖️ 保持平衡策略: 中等复杂度查询")
+                return "balanced"
+                
+        except Exception as e:
+            print(f"⚠️ 策略选择失败，使用默认平衡策略: {e}")
+            return "balanced"
+
+    def _analyze_hierarchical_distribution(self, hierarchical: Dict[str, Any]) -> Dict[str, Any]:
+        """分析层次化关键词的分布特征"""
+        stats = {
+            'total_terms': 0,
+            'exact_terms': 0,
+            'core_terms': 0,
+            'related_terms': 0,
+            'context_terms': 0,
+            'exact_ratio': 0.0,
+            'distribution_balance': 0.0
+        }
+        
+        try:
+            for level, level_data in hierarchical.items():
+                if isinstance(level_data, dict):
+                    # 支持新格式
+                    if 'chinese' in level_data and 'english' in level_data:
+                        chinese_count = len(level_data.get('chinese', []))
+                        english_count = len(level_data.get('english', []))
+                        term_count = chinese_count + english_count
+                    # 支持旧格式
+                    elif 'terms' in level_data:
+                        term_count = len(level_data.get('terms', []))
+                    else:
+                        term_count = 0
+                    
+                    stats['total_terms'] += term_count
+                    
+                    if level == 'exact_terms':
+                        stats['exact_terms'] = term_count
+                    elif level == 'core_synonyms':
+                        stats['core_terms'] = term_count
+                    elif level == 'related_terms':
+                        stats['related_terms'] = term_count
+                    elif level == 'context_terms':
+                        stats['context_terms'] = term_count
+            
+            # 计算比例
+            if stats['total_terms'] > 0:
+                stats['exact_ratio'] = stats['exact_terms'] / stats['total_terms']
+                
+                # 计算分布平衡度（方差的倒数，值越大越平衡）
+                term_counts = [stats['exact_terms'], stats['core_terms'], 
+                             stats['related_terms'], stats['context_terms']]
+                if any(c > 0 for c in term_counts):
+                    mean_count = sum(term_counts) / len(term_counts)
+                    variance = sum((c - mean_count) ** 2 for c in term_counts) / len(term_counts)
+                    stats['distribution_balance'] = 1.0 / (variance + 1.0)  # 避免除零
+            
+        except Exception as e:
+            print(f"⚠️ 分析层次化分布失败: {e}")
+        
+        return stats
     
     def _extract_keywords_from_analysis(self, analysis: Optional[Dict[str, Any]]) -> List[str]:
         """从分析结果中提取关键词列表"""

@@ -22,6 +22,26 @@
 - 严格控制在3-4个最准确的同义词
 - 避免概念漂移和语义扩散
 
+## 布尔查询构建指导（重要）
+在 `optimized_boolean_query` 字段中，基于提取的关键词构建高效的学术搜索表达式：
+
+### 构建规则：
+1. **核心术语连接**：最重要的2-3个核心概念用 AND 连接
+2. **同义词扩展**：每个核心概念的同义词用 OR 连接  
+3. **术语引用**：复合词和专业术语用双引号包围
+4. **优先级控制**：使用括号明确运算优先级
+5. **长度限制**：总长度控制在200字符以内
+
+### 示例模板：
+- **基础格式**：`("核心术语1" OR "core term 1") AND ("核心术语2" OR "core term 2")`
+- **精准搜索**：`"machine learning" AND ("medical diagnosis" OR "healthcare")`
+- **召回优化**：`("深度学习" OR "deep learning" OR "neural network") AND "图像识别"`
+
+### 策略选择：
+- **precision_focused**: 使用 AND 连接，术语更精准，结果更相关
+- **recall_focused**: 使用更多 OR 连接，获取更广泛结果  
+- **balanced**: 平衡精准性和召回率
+
 ## 输出格式
 ```json
 {{
@@ -50,7 +70,7 @@
     }}
   }},
   "domain": "学术领域中文描述 / academic domain in English",
-  "optimized_boolean_query": "优化布尔查询中英双语",
+  "optimized_boolean_query": "基于上述关键词构建精准的学术搜索布尔表达式，遵循以下规则：1)核心术语用AND连接确保主题精准性；2)同义词用OR连接增加召回率；3)复合术语加双引号确保完整匹配；4)优先使用英文术语提高国际文献覆盖；5)控制总长度在200字符内。示例格式：(\"core term 1\" OR \"synonym 1\") AND (\"related term\" OR \"相关术语\")",
   "search_strategy": "balanced|precision_focused|recall_focused"
 }}
 ```

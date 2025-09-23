@@ -36,16 +36,45 @@ interface HistoryItem {
   data: SearchHistory | ChatHistory;
 }
 
-// 统一历史记录管理 - 使用localStorage
+// 统一历史记录管理 - 使用分页存储避免超限
 const getUnifiedHistory = async (): Promise<HistoryItem[]> => {
   const userId = localStorage.getItem('user_id');
   if (!userId) return [];
 
   try {
+    // 尝试获取主历史数据
     const historyData = localStorage.getItem(`paper_god_unified_history_user_${userId}`);
-    return historyData ? JSON.parse(historyData) : [];
+    if (historyData) {
+      return JSON.parse(historyData);
+    }
+    
+    // 如果主历史不存在，尝试获取分页数据
+    const allHistory: HistoryItem[] = [];
+    let pageIndex = 0;
+    let hasMore = true;
+    
+    while (hasMore) {
+      const pageKey = `paper_god_unified_history_user_${userId}_page_${pageIndex}`;
+      const pageData = localStorage.getItem(pageKey);
+      
+      if (pageData) {
+        const pageHistory = JSON.parse(pageData);
+        allHistory.push(...pageHistory);
+        pageIndex++;
+      } else {
+        hasMore = false;
+      }
+    }
+    
+    return allHistory;
   } catch (error) {
     console.error('获取统一历史失败:', error);
+    // 清理可能损坏的数据
+    try {
+      localStorage.removeItem(`paper_god_unified_history_user_${userId}`);
+    } catch (e) {
+      console.error('清理损坏数据失败:', e);
+    }
     return [];
   }
 };
@@ -55,14 +84,92 @@ const deleteUnifiedHistory = async (ids: string[]) => {
   if (!userId) return;
 
   try {
-    const historyData = localStorage.getItem(`paper_god_unified_history_user_${userId}`);
-    if (historyData) {
-      const history: HistoryItem[] = JSON.parse(historyData);
-      const filteredHistory = history.filter(item => !ids.includes(item.id));
-      localStorage.setItem(`paper_god_unified_history_user_${userId}`, JSON.stringify(filteredHistory));
-    }
+    const allHistory = await getUnifiedHistory();
+    const filteredHistory = allHistory.filter(item => !ids.includes(item.id));
+    await saveUnifiedHistory(filteredHistory, userId);
   } catch (error) {
     console.error('删除统一历史失败:', error);
+  }
+};
+
+// 保存历史记录 - 使用分页存储避免超限
+const saveUnifiedHistory = async (history: HistoryItem[], userId: string) => {
+  try {
+    const historyJson = JSON.stringify(history);
+    const maxSize = 2 * 1024 * 1024; // 2MB限制
+    
+    // 如果数据量小于限制，直接存储
+    if (historyJson.length < maxSize) {
+      localStorage.setItem(`paper_god_unified_history_user_${userId}`, historyJson);
+      // 清理可能存在的分页数据
+      clearPagedHistory(userId);
+      return;
+    }
+    
+    // 数据量过大，使用分页存储
+    localStorage.removeItem(`paper_god_unified_history_user_${userId}`);
+    
+    // 计算每页大小（留出一些安全边距）
+    const pageSize = Math.floor(maxSize * 0.8 / JSON.stringify(history[0] || {}).length);
+    const pages: HistoryItem[][] = [];
+    
+    for (let i = 0; i < history.length; i += pageSize) {
+      pages.push(history.slice(i, i + pageSize));
+    }
+    
+    // 清理旧的分页数据
+    clearPagedHistory(userId);
+    
+    // 保存新的分页数据
+    pages.forEach((page, index) => {
+      const pageKey = `paper_god_unified_history_user_${userId}_page_${index}`;
+      try {
+        localStorage.setItem(pageKey, JSON.stringify(page));
+      } catch (e) {
+        console.error(`保存分页 ${index} 失败:`, e);
+        // 如果分页保存失败，压缩数据重试
+        const compressedPage = page.map(item => ({
+          ...item,
+          data: item.type === 'search' ? {
+            ...item.data as SearchHistory,
+            papers: (item.data as SearchHistory).papers.slice(0, 20) // 只保留前20篇文献
+          } : item.data
+        }));
+        try {
+          localStorage.setItem(pageKey, JSON.stringify(compressedPage));
+        } catch (e2) {
+          console.error(`保存压缩分页 ${index} 仍然失败:`, e2);
+        }
+      }
+    });
+    
+    console.log(`历史记录已分页保存: ${pages.length} 页, 总计 ${history.length} 条记录`);
+    
+  } catch (error) {
+    console.error('保存统一历史失败:', error);
+    // 降级方案：只保存最近的记录
+    try {
+      const recentHistory = history.slice(-10); // 只保留最近10条
+      localStorage.setItem(`paper_god_unified_history_user_${userId}`, JSON.stringify(recentHistory));
+    } catch (e) {
+      console.error('降级保存也失败:', e);
+    }
+  }
+};
+
+// 清理分页历史数据
+const clearPagedHistory = (userId: string) => {
+  let pageIndex = 0;
+  let hasMore = true;
+  
+  while (hasMore) {
+    const pageKey = `paper_god_unified_history_user_${userId}_page_${pageIndex}`;
+    if (localStorage.getItem(pageKey)) {
+      localStorage.removeItem(pageKey);
+      pageIndex++;
+    } else {
+      hasMore = false;
+    }
   }
 };
 
