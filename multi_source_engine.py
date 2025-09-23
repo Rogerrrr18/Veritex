@@ -1401,11 +1401,20 @@ class MultiSourceEngine:
                 sources_to_search.append((source_name, source_api, source_timeout, max_results))
                 logger.info(f"📊 单一数据源 {source_name}: 分配100%配额({max_results}篇)")
             else:
-                # 多数据源：平均分配
-                per_source_quota = max(5, max_results // len(selected_sources))
+                # 🔧 多数据源：更积极的配额分配
+                # 基础配额：每源至少20篇，但总和可以超过目标（允许冗余）
+                base_quota_per_source = max(20, max_results // len(selected_sources))
+                
+                # 如果总目标大于30篇，每源分配更多以确保足够结果
+                if max_results >= 30:
+                    per_source_quota = max(base_quota_per_source, 25)
+                else:
+                    per_source_quota = base_quota_per_source
+                
                 for source_name, source_api, source_timeout in selected_sources:
                     sources_to_search.append((source_name, source_api, source_timeout, per_source_quota))
-                logger.info(f"📊 多数据源平均分配: {len(selected_sources)}个源，每源{per_source_quota}篇")
+                logger.info(f"📊 多数据源积极分配: {len(selected_sources)}个源，每源{per_source_quota}篇 (总计{per_source_quota * len(selected_sources)}篇冗余)")
+            
         
         # 🎯 auto-search模式：使用Google Scholar + arXiv各50%
         elif mode == "auto-search":
@@ -1509,9 +1518,10 @@ class MultiSourceEngine:
                 all_papers.extend(result)
                 logger.info(f"✅ {source_name} 返回 {len(result)} 篇论文")
         
-        # 🔧 智能补偿搜索策略 - 基于用户选择的数据源
+        # 🔧 增强智能补偿搜索策略 - 基于用户选择的数据源
         total_papers_obtained = len(all_papers)
-        need_compensation = total_papers_obtained < max_results * 0.8  # 获得结果少于期望的80%时启动补偿
+        # 🔧 降低补偿搜索阈值，更积极地启动补偿机制
+        need_compensation = total_papers_obtained < max_results * 0.9  # 获得结果少于期望的90%时启动补偿
         
         if need_compensation:
             missing_quota = max_results - total_papers_obtained
@@ -1530,8 +1540,22 @@ class MultiSourceEngine:
             if compensation_sources and missing_quota > 0:
                 logger.info(f"🚀 启动补偿搜索：使用{len(compensation_sources)}个备用数据源")
                 
-                # 平均分配补偿配额
-                compensation_per_source = max(5, missing_quota // len(compensation_sources))
+                # 🔧 增强配额分配：每个源至少分配10篇，最多20篇
+                base_quota_per_source = 15  # 基础配额
+                min_quota = 10              # 最小配额
+                max_quota = 25              # 最大配额
+                
+                # 根据缺口和可用源数量动态分配
+                if missing_quota <= len(compensation_sources) * min_quota:
+                    # 缺口较小，平均分配
+                    compensation_per_source = max(min_quota, missing_quota // len(compensation_sources))
+                else:
+                    # 缺口较大，每个源分配基础配额
+                    compensation_per_source = min(max_quota, 
+                                                max(base_quota_per_source, 
+                                                   missing_quota // len(compensation_sources)))
+                
+                logger.info(f"📊 补偿搜索配额：每源{compensation_per_source}篇，总计{compensation_per_source * len(compensation_sources)}篇")
                 compensation_tasks = []
                 compensation_source_names = []
                 
@@ -1633,8 +1657,8 @@ class MultiSourceEngine:
         
         final_results = traditional_results
         
-        # 🔄 动态降级策略：如果结果不足，尝试exact_terms补充搜索
-        if len(final_results) < max_results and analysis and analysis.get("hierarchical_keywords"):
+        # 🔄 动态降级策略：如果结果不足，启动多轮补充搜索
+        if len(final_results) < max_results * 0.85 and analysis and analysis.get("hierarchical_keywords"):  # 降低到85%阈值
             logger.warning(f"⚠️ 搜索结果不足({len(final_results)}/{max_results})，启动exact_terms补充搜索")
             
             # 使用降级查询进行补充搜索
@@ -1651,10 +1675,12 @@ class MultiSourceEngine:
                 final_results = self._rank_papers(combined_deduplicated, query)[:max_results]
                 logger.info(f"✅ 补充搜索完成，最终获得 {len(final_results)} 篇论文")
         
-        # 最终强制源过滤：如果前端显式指定了数据源，确保只返回这些来源的论文
+        # 🔧 智能源过滤机制：分层过滤策略，保持用户选择源为主，适度保留补偿搜索结果
         if sources and isinstance(sources, list) and len(sources) > 0:
+            original_count = len(final_results)
+            
             # 统一映射前端标识到内部标识
-            allowed = set()
+            user_selected_sources = set()
             for sid in sources:
                 mapped = {
                     'scholarly': 'scholar_dock',
@@ -1662,20 +1688,104 @@ class MultiSourceEngine:
                     'arxiv': 'arxiv',
                     'crossref': 'crossref'
                 }.get(sid, sid)
-                allowed.add(mapped)
-            filtered_final = [p for p in final_results if p.source in allowed]
-            if len(filtered_final) != len(final_results):
-                logger.info(f"🔒 已根据用户选择过滤来源：{len(final_results)} → {len(filtered_final)}")
-            final_results = filtered_final
+                user_selected_sources.add(mapped)
+            
+            # 分类论文：用户选择源 vs 补偿搜索源
+            user_source_papers = []
+            compensation_papers = []
+            source_stats = {}  # 统计各源的论文数量
+            
+            for paper in final_results:
+                paper_source = paper.source.lower()
+                
+                # 初始化源统计
+                if paper_source not in source_stats:
+                    source_stats[paper_source] = {'total': 0, 'retained': 0, 'type': ''}
+                source_stats[paper_source]['total'] += 1
+                
+                # 检查是否为用户选择的源（支持模糊匹配）
+                is_user_source = (paper_source in user_selected_sources or 
+                                any(allowed_source in paper_source for allowed_source in user_selected_sources) or
+                                any(paper_source in allowed_source for allowed_source in user_selected_sources))
+                
+                if is_user_source:
+                    user_source_papers.append(paper)
+                    source_stats[paper_source]['type'] = '用户选择'
+                    source_stats[paper_source]['retained'] += 1
+                else:
+                    compensation_papers.append(paper)
+                    source_stats[paper_source]['type'] = '补偿搜索'
+            
+            # 对补偿搜索结果进行质量筛选
+            filtered_compensation = self._filter_compensation_papers(
+                compensation_papers, 
+                max_compensation_ratio=0.25,  # 最多占25%
+                target_total=len(user_source_papers)
+            )
+            
+            # 更新补偿搜索源的保留统计
+            retained_compensation_sources = {paper.source.lower() for paper in filtered_compensation}
+            for source, stats in source_stats.items():
+                if stats['type'] == '补偿搜索':
+                    if source in retained_compensation_sources:
+                        stats['retained'] = len([p for p in filtered_compensation if p.source.lower() == source])
+                    else:
+                        stats['retained'] = 0
+            
+            # 合并最终结果
+            final_results = user_source_papers + filtered_compensation
+            
+            # 🚀 增强日志记录：详细的源贡献统计
+            logger.info(f"📊 搜索源贡献统计：")
+            
+            # 用户选择源统计
+            user_sources_info = []
+            for source, stats in source_stats.items():
+                if stats['type'] == '用户选择':
+                    retention_rate = (stats['retained'] / stats['total'] * 100) if stats['total'] > 0 else 0
+                    user_sources_info.append(f"{source}: {stats['retained']}篇 (100%)")
+            
+            if user_sources_info:
+                logger.info(f"✅ 用户选择源：{', '.join(user_sources_info)}")
+            
+            # 补偿搜索源统计
+            compensation_sources_info = []
+            for source, stats in source_stats.items():
+                if stats['type'] == '补偿搜索':
+                    retention_rate = (stats['retained'] / stats['total'] * 100) if stats['total'] > 0 else 0
+                    if stats['total'] > 0:
+                        compensation_sources_info.append(f"{source}: {stats['retained']}/{stats['total']}篇 ({retention_rate:.0f}%)")
+            
+            if compensation_sources_info:
+                logger.info(f"🔄 补偿搜索源：{', '.join(compensation_sources_info)}")
+            
+            # 最终构成统计
+            user_count = len(user_source_papers)
+            comp_count = len(filtered_compensation)
+            user_ratio = (user_count / len(final_results) * 100) if len(final_results) > 0 else 0
+            comp_ratio = (comp_count / len(final_results) * 100) if len(final_results) > 0 else 0
+            
+            logger.info(f"📈 最终构成：用户选择源 {user_count}篇 ({user_ratio:.0f}%) + 补偿源 {comp_count}篇 ({comp_ratio:.0f}%) = 总计 {len(final_results)}篇")
+            
+            if original_count != len(final_results):
+                filtered_count = original_count - len(final_results)
+                logger.info(f"🔒 智能过滤完成：{original_count} → {len(final_results)} (过滤{filtered_count}篇低质量补偿结果)")
+                
+                # 如果补偿过滤过于严格，给出提醒
+                if comp_count == 0 and len(compensation_papers) > 0:
+                    logger.warning(f"⚠️ 补偿搜索结果被完全过滤，可能质量评估过于严格")
+            else:
+                logger.info(f"✅ 智能过滤完成：保留全部 {len(final_results)} 篇高质量结果")
 
         logger.info(f"搜索完成: 原始 {len(all_papers)} 篇 → 去重 {len(deduplicated_papers)} 篇 → 最终 {len(final_results)} 篇")
         return final_results
     
     def _deduplicate_papers(self, papers: List[Paper]) -> List[Paper]:
-        """简化的去重逻辑"""
+        """🔧 优化的去重逻辑 - 减少误删"""
         seen_titles = set()
         seen_dois = set()
         unique_papers = []
+        duplicate_count = 0
         
         # 优化排序：稳定数据源优先，引用数次之
         papers_sorted = sorted(papers, key=lambda p: (
@@ -1686,35 +1796,76 @@ class MultiSourceEngine:
         ), reverse=True)
         
         for paper in papers_sorted:
-            # 数据质量过滤：只保留有效标题的论文
-            if not paper.title or not paper.title.strip():
+            # 🔧 放宽数据质量过滤：保留更多有用的论文
+            if not paper.title or len(paper.title.strip()) < 3:  # 只过滤明显无效的标题
                 continue
             
-            # DOI去重
+            # DOI去重（保持不变）
             if paper.doi and paper.doi.strip():
                 if paper.doi in seen_dois:
+                    duplicate_count += 1
                     continue
                 seen_dois.add(paper.doi)
             
-            # 标题去重
+            # 🔧 优化标题去重：使用更智能的相似度检测
             normalized_title = self._normalize_title(paper.title)
-            if normalized_title in seen_titles:
+            
+            # 检查是否与已存在标题过于相似
+            is_similar = False
+            for existing_title in seen_titles:
+                if self._is_title_duplicate(normalized_title, existing_title):
+                    is_similar = True
+                    duplicate_count += 1
+                    break
+            
+            if is_similar:
                 continue
             
             seen_titles.add(normalized_title)
             unique_papers.append(paper)
         
+        logger.info(f"📊 去重统计: 输入{len(papers)}篇 → 去重{duplicate_count}篇 → 保留{len(unique_papers)}篇")
         return unique_papers
     
     def _normalize_title(self, title: str) -> str:
-        """标准化标题"""
+        """🔧 优化标题标准化 - 保留更多信息"""
         if not title:
             return ""
         
         import re
+        # 🔧 保留更多标点符号信息，避免过度标准化导致误删
         normalized = title.lower().strip()
-        normalized = re.sub(r'[:\-–—\.\s]+', ' ', normalized)
+        # 只移除多余空格，保留其他标点符号
+        normalized = re.sub(r'\s+', ' ', normalized)
         return normalized.strip()
+    
+    def _is_title_duplicate(self, title1: str, title2: str, threshold: float = 0.9) -> bool:
+        """🔧 智能标题重复检测 - 减少误判"""
+        if not title1 or not title2:
+            return False
+        
+        # 完全相同
+        if title1 == title2:
+            return True
+        
+        # 长度差异过大，不太可能重复
+        len_ratio = min(len(title1), len(title2)) / max(len(title1), len(title2))
+        if len_ratio < 0.7:  # 长度差异超过30%，认为不重复
+            return False
+        
+        # 🔧 使用词汇级别的相似度检测，而非字符级别
+        words1 = set(title1.split())
+        words2 = set(title2.split())
+        
+        # 计算Jaccard相似度
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        
+        if union == 0:
+            return False
+        
+        jaccard_similarity = intersection / union
+        return jaccard_similarity >= threshold
     
     def _filter_papers_by_year(self, papers: List[Paper], year_from: Optional[int], year_to: Optional[int]) -> List[Paper]:
         """按年份筛选论文"""
@@ -1780,8 +1931,12 @@ class MultiSourceEngine:
                 logger.warning("⚠️ 没有可用的数据源进行补充搜索")
                 return []
             
-            # 平分搜索配额
-            per_source_limit = max(1, needed_count // len(fallback_sources))
+            # 🔧 增强配额分配：补充搜索更积极
+            per_source_limit = max(8, needed_count // len(fallback_sources))  # 至少每源8篇
+            if needed_count > 20:  # 对于大缺口，每源分配更多
+                per_source_limit = max(per_source_limit, 15)
+            
+            logger.info(f"📊 补充搜索配额：每源{per_source_limit}篇，使用{len(fallback_sources)}个源")
             
             # 并行执行补充搜索
             fallback_tasks = []
@@ -1884,6 +2039,131 @@ class MultiSourceEngine:
         except Exception as e:
             logger.warning(f"中文查询检测失败: {e}")
             return False
+    
+    def _filter_compensation_papers(self, compensation_papers: List[Paper], max_compensation_ratio: float = 0.25, target_total: int = 0) -> List[Paper]:
+        """
+        智能筛选补偿搜索结果，基于质量评估保留最优论文
+        
+        Args:
+            compensation_papers: 补偿搜索获得的论文列表
+            max_compensation_ratio: 补偿搜索结果最大占比 (默认25%)
+            target_total: 用户选择源的论文数量，用于计算补偿配额
+        
+        Returns:
+            筛选后的高质量补偿搜索论文列表
+        """
+        if not compensation_papers:
+            return []
+        
+        # 计算补偿搜索的最大允许数量
+        if target_total > 0:
+            max_compensation_count = max(1, int(target_total * max_compensation_ratio / (1 - max_compensation_ratio)))
+        else:
+            max_compensation_count = max(5, len(compensation_papers) // 2)  # 降级策略：至少5篇或一半
+        
+        # 如果补偿论文数量已经在限制内，不需要过滤
+        if len(compensation_papers) <= max_compensation_count:
+            logger.debug(f"📊 补偿搜索论文数量({len(compensation_papers)})在限制内，无需过滤")
+            return compensation_papers
+        
+        # 为每篇论文计算质量评分
+        scored_papers = []
+        for paper in compensation_papers:
+            quality_score = self._calculate_paper_quality_score(paper)
+            scored_papers.append((paper, quality_score))
+        
+        # 按质量评分降序排序
+        scored_papers.sort(key=lambda x: x[1], reverse=True)
+        
+        # 选择前N篇高质量论文
+        selected_papers = [paper for paper, _ in scored_papers[:max_compensation_count]]
+        
+        # 记录质量筛选统计
+        total_compensation = len(compensation_papers)
+        selected_count = len(selected_papers)
+        
+        if total_compensation > selected_count:
+            min_score = scored_papers[selected_count-1][1] if selected_count > 0 else 0
+            max_score = scored_papers[0][1] if scored_papers else 0
+            logger.debug(f"📊 补偿搜索质量筛选：{total_compensation} → {selected_count}篇 (质量评分范围: {min_score:.2f}-{max_score:.2f})")
+        
+        return selected_papers
+    
+    def _calculate_paper_quality_score(self, paper: Paper) -> float:
+        """
+        计算论文质量评分，用于补偿搜索结果筛选
+        
+        评分组成：
+        - 引用数评分 (40%): 基于引用数量的对数标准化
+        - 年份评分 (30%): 较新的论文得分更高  
+        - 相关性评分 (30%): 基于标题和摘要的完整性
+        
+        Args:
+            paper: 论文对象
+            
+        Returns:
+            质量评分 (0-10分)
+        """
+        import math
+        from datetime import datetime
+        
+        # 基础分数
+        citation_score = 0.0  # 引用数评分 (0-4分)
+        year_score = 0.0     # 年份评分 (0-3分)
+        relevance_score = 0.0 # 相关性评分 (0-3分)
+        
+        # 1. 引用数评分 (40%权重，最高4分)
+        citations = paper.citations or 0
+        if citations > 0:
+            # 使用对数标准化，避免极值论文主导
+            citation_score = min(4.0, math.log10(citations + 1) * 1.2)
+        
+        # 2. 年份评分 (30%权重，最高3分)
+        current_year = datetime.now().year
+        if paper.year:
+            years_ago = current_year - paper.year
+            if years_ago <= 0:  # 当年或未来
+                year_score = 3.0
+            elif years_ago <= 2:  # 2年内
+                year_score = 2.5
+            elif years_ago <= 5:  # 5年内
+                year_score = 2.0
+            elif years_ago <= 10:  # 10年内
+                year_score = 1.5
+            else:  # 10年以上
+                year_score = max(0.5, 1.5 - (years_ago - 10) * 0.1)
+        
+        # 3. 相关性评分 (30%权重，最高3分)
+        # 基于标题和摘要的完整性
+        if paper.title and len(paper.title.strip()) > 10:
+            relevance_score += 1.0  # 有效标题
+        
+        if paper.abstract and len(paper.abstract.strip()) > 50:
+            relevance_score += 1.0  # 有摘要
+            
+        # 基于摘要长度的额外评分
+        if paper.abstract:
+            abstract_length = len(paper.abstract.strip())
+            if abstract_length > 200:
+                relevance_score += 1.0  # 摘要充实
+            elif abstract_length > 100:
+                relevance_score += 0.5  # 摘要中等
+        
+        # 如果有DOI，额外加分
+        if paper.doi:
+            relevance_score += 0.5
+        
+        # 限制相关性评分上限
+        relevance_score = min(3.0, relevance_score)
+        
+        # 计算总分 (0-10分)
+        total_score = citation_score + year_score + relevance_score
+        
+        # 记录评分详情（仅在调试模式下）
+        logger.debug(f"📊 质量评分: {paper.title[:30]}... → 总分{total_score:.2f}分 "
+                    f"(引用{citation_score:.1f} + 年份{year_score:.1f} + 相关性{relevance_score:.1f})")
+        
+        return total_score
     
     def _rank_papers(self, papers: List[Paper], query: str) -> List[Paper]:
         """简化的相关性排序"""

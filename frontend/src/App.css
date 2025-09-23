@@ -711,6 +711,39 @@ body {
   z-index: 10;
 }
 
+/* 表格排序样式 */
+.sortable-header {
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.sortable-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sort-arrow {
+  font-size: 8px;
+  color: #666;
+  line-height: 0.7;
+  transition: color 0.2s ease;
+  display: block;
+  margin: 1px 0;
+}
+
+.sort-arrow.active {
+  color: #3bb0e6;
+  font-weight: bold;
+}
+
+.sortable-header:hover .sort-arrow {
+  color: #a1a1aa;
+}
+
+.sortable-header:hover .sort-arrow.active {
+  color: #3bb0e6;
+}
+
 /* 列宽设置 */
 .col-title { width: 30%; }
 .col-authors { width: 18%; }
@@ -1113,6 +1146,28 @@ body[data-theme='dark'] {
   background: #1d4ed8;
   transform: translateY(-1px);
 }
+
+/* 浅色主题排序样式 */
+.report-page.light .sortable-header:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.report-page.light .sort-arrow {
+  color: #999;
+}
+
+.report-page.light .sort-arrow.active {
+  color: #2563eb;
+}
+
+.report-page.light .sortable-header:hover .sort-arrow {
+  color: #666;
+}
+
+.report-page.light .sortable-header:hover .sort-arrow.active {
+  color: #2563eb;
+}
+
 /* 丝滑无线条表格可选（如需更极简） */
 .report-page.light .report-table.smooth th,
 .report-page.light .report-table.smooth td {
@@ -2227,6 +2282,16 @@ div[style*="overflow: visible"] ul li {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+  
+  /* 移动端排序样式优化 */
+  .sortable-header {
+    padding: 4px;
+  }
+  
+  .sort-arrow {
+    font-size: 6px;
+    margin: 0.5px 0;
   }
 }
 

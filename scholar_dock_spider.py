@@ -79,7 +79,8 @@ class ScholarDockSpider:
         # 🔧 优化：搜索超时配置（基于ScholarDock-master经验优化）
         self.search_timeout = 180  # 单次搜索最大超时3分钟（ScholarDock推荐）
         self.captcha_timeout = 30   # CAPTCHA等待30秒（完全采用ScholarDock策略）
-        self.max_pages_before_timeout = 3  # 最多搜索3页（降低被检测风险）
+        self.max_pages_before_timeout = 5  # 🔧 增加到5页以获得更多结果
+        self.adaptive_page_limit = True    # 🔧 新增：自适应页数限制
         
         self.session = None
         self.driver = None
@@ -798,10 +799,27 @@ class ScholarDockSpider:
                     logger.warning(f"⏰ 搜索超时({self.search_timeout}秒)，返回已获得的 {len(papers)} 篇论文")
                     break
                 
-                # 🔧 检查页数限制，避免无限等待
-                if start_idx >= self.max_pages_before_timeout * 10:
-                    logger.info(f"已搜索 {self.max_pages_before_timeout} 页，停止搜索")
-                    break
+                # 🔧 自适应页数限制：根据目标结果数和已获得结果动态调整
+                current_page = start_idx // 10 + 1
+                
+                if self.adaptive_page_limit:
+                    # 根据目标结果数确定最大页数
+                    target_pages = min(max(limit // 8, 3), 6)  # 至少3页，最多6页，根据目标调整
+                    
+                    # 如果已获得足够结果，可以提前停止
+                    progress_ratio = len(papers) / limit if limit > 0 else 0
+                    if progress_ratio >= 0.8 and current_page >= 3:  # 获得80%目标且至少搜索3页
+                        logger.info(f"已获得{len(papers)}/{limit}篇论文({progress_ratio:.1%})，提前结束搜索")
+                        break
+                    
+                    if current_page > target_pages:
+                        logger.info(f"已搜索 {current_page-1} 页（目标{target_pages}页），停止搜索")
+                        break
+                else:
+                    # 传统固定页数限制
+                    if current_page > self.max_pages_before_timeout:
+                        logger.info(f"已搜索 {current_page-1} 页，停止搜索")
+                        break
                 url = self._create_search_url(query, start_idx, start_year, end_year)
                 # 移除详细URL日志以提升性能
                 

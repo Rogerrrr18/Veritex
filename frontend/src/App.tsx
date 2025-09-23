@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { registerUser } from './auth';
@@ -749,8 +749,33 @@ function ReportPage() {
   const [,] = useState(location.state?.originalQuery || '')
   const [,] = useState(location.state?.maxResults || 20)
   const [expandedIdx, setExpandedIdx] = useState<{[key:number]: boolean}>({})
+  // Citations排序状态管理
+  const [sortConfig, setSortConfig] = useState<{field: string, direction: 'asc' | 'desc'} | null>(null)
   const MAX_ABSTRACT = APP_CONFIG.ABSTRACT_PREVIEW_LENGTH
   const toggleAbstract = (idx: number) => setExpandedIdx(e => ({...e, [idx]: !e[idx]}))
+
+  // Citations排序处理函数
+  const handleSort = (field: string) => {
+    let direction: 'asc' | 'desc' = 'desc'
+    if (sortConfig && sortConfig.field === field && sortConfig.direction === 'desc') {
+      direction = 'asc'
+    }
+    setSortConfig({ field, direction })
+  }
+
+  // 排序后的papers数组 - 使用useMemo优化性能
+  const sortedPapers = useMemo(() => {
+    if (!sortConfig) return papers
+    
+    return [...papers].sort((a, b) => {
+      if (sortConfig.field === 'citations') {
+        const aVal = a.citations || 0
+        const bVal = b.citations || 0
+        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal
+      }
+      return 0
+    })
+  }, [papers, sortConfig])
 
   // 格式化作者显示
   const formatAuthors = (authors: string[] | string): string => {
@@ -831,7 +856,7 @@ function ReportPage() {
   const handleExport = () => {
     const csvContent = [
       [t('report.table.title'), t('report.table.authors'), t('report.table.year'), t('report.table.citations'), t('report.table.abstract'), t('report.table.link')],
-      ...papers.map((p: any) => [p.title, formatAuthors(p.authors), p.year, p.citations || 0, p.abstract, p.url])
+      ...sortedPapers.map((p: any) => [p.title, formatAuthors(p.authors), p.year, p.citations || 0, p.abstract, p.url])
     ].map(row => row.map((cell: any) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
@@ -884,13 +909,32 @@ function ReportPage() {
                   <th className="col-title">{t('report.table.title')}</th>
                   <th className="col-authors">{t('report.table.authors')}</th>
                   <th className="col-year">{t('report.table.year')}</th>
-                  <th className="col-citations">{t('report.table.citations')}</th>
+                  <th className="col-citations">
+                    <div 
+                      className="sortable-header"
+                      style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        gap: 4, 
+                        cursor: 'pointer',
+                        userSelect: 'none'
+                      }}
+                      onClick={() => handleSort('citations')}
+                    >
+                      {t('report.table.citations')}
+                      <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 4 }}>
+                        <span className={`sort-arrow ${sortConfig?.field === 'citations' && sortConfig.direction === 'asc' ? 'active' : ''}`}>▲</span>
+                        <span className={`sort-arrow ${sortConfig?.field === 'citations' && sortConfig.direction === 'desc' ? 'active' : ''}`}>▼</span>
+                      </div>
+                    </div>
+                  </th>
                   <th className="col-abstract">{t('report.table.abstract')}</th>
                   <th className="col-link">{t('report.table.link')}</th>
                 </tr>
               </thead>
               <tbody>
-                {papers.map((paper: any, idx: number) => {
+                {sortedPapers.map((paper: any, idx: number) => {
                   const abstract = paper.abstract || ''
                   const isLong = abstract.length > MAX_ABSTRACT
                   const showAll = expandedIdx[idx]
