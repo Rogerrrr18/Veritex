@@ -1,0 +1,109 @@
+用户提出学术问题："{user_query}"
+当前模式：{mode}
+
+你的任务：
+1. 进行深度学术分析和讨论（300-500字）
+2. 提供多角度观点和专业见解
+3. 识别潜在的可搜索研究要点
+4. 根据模式提供不同的后续建议
+5. 每点分行排列，保持格式整洁！ 
+
+## 学术讨论要求
+- 提供专业、深入的分析
+- 呈现多个角度和观点
+- 结合当前学术发展趋势
+- 指出关键研究领域和方向
+- 保持客观和批判性思维
+
+### 4层扩展架构：
+1. **exact_terms**（权重1.0）：必须精确匹配的核心术语 （分词形式，不要长词汇）   
+2. **core_synonyms**（权重0.9）：高度同义的学术表达（3-4个精准同义词）
+3. **related_terms**（权重0.5）：相关技术术语和方法（5-6个）
+4. **context_terms**（权重0.4）：基于上下文意图的扩展词（3-4个）
+
+### core_synonyms扩展原则：
+- 必须是真正的高度同义术语（切分为单词）
+- 仅限学术表达方式的不同，概念内核完全相同
+- 严格控制在3-4个最准确的同义词
+- 避免概念漂移和语义扩散
+
+## 布尔查询构建指导（重要）
+在 `optimized_boolean_query` 字段中，基于提取的关键词构建高效的学术搜索表达式：
+
+### 构建规则：
+1. **核心术语连接**：最重要的2-3个核心概念用 AND 连接
+2. **同义词扩展**：每个核心概念的同义词用 OR 连接  
+3. **术语引用**：复合词和专业术语用双引号包围
+4. **优先级控制**：使用括号明确运算优先级
+5. **长度限制**：总长度控制在200字符以内
+
+### 示例模板：
+- **基础格式**：`("核心术语1" OR "core term 1") AND ("核心术语2" OR "core term 2")`
+- **精准搜索**：`"machine learning" AND ("medical diagnosis" OR "healthcare")`
+- **召回优化**：`("深度学习" OR "deep learning" OR "neural network") AND "图像识别"`
+
+### 策略选择：
+- **precision_focused**: 使用 AND 连接，术语更精准，结果更相关
+- **recall_focused**: 使用更多 OR 连接，获取更广泛结果  
+- **balanced**: 平衡精准性和召回率
+
+ ## 输出格式
+```json
+{{
+  "original_query": "{user_query}",
+  "core_concepts": ["核心概念用中文", "core concepts in English"],
+  "hierarchical_keywords": {{
+    "exact_terms": {{
+      "chinese": ["精确中文术语1", "精确中文术语2"],
+      "english": ["exact English term 1", "exact English term 2"],
+      "weight": 1.0
+    }},
+    "core_synonyms": {{
+      "chinese": ["核心中文同义词1", "核心中文同义词2", "核心中文同义词3"],
+      "english": ["core English synonym 1", "core English synonym 2", "core English synonym 3"],
+      "weight": 0.9
+    }}, 
+    "related_terms": {{
+      "chinese": ["相关中文术语1", "相关中文术语2", "相关中文术语3"],
+      "english": ["related English term 1", "related English term 2", "related English term 3"],
+      "weight": 0.5
+    }},
+    "context_terms": {{
+      "chinese": ["上下文中文术语1", "上下文中文术语2"],
+      "english": ["contextual English term 1", "contextual English term 2"],
+      "weight": 0.4
+    }}
+  }},
+  "domain": "学术领域中文描述 / academic domain in English",
+  "optimized_boolean_query": "基于上述关键词构建精准的学术搜索布尔表达式，遵循以下规则：1)核心术语用AND连接确保主题精准性；2)同义词用OR连接增加召回率；3)复合术语加双引号确保完整匹配；4)优先使用英文术语提高国际文献覆盖；5)控制总长度在200字符内。示例格式：(\"core term 1\" OR \"synonym 1\") AND (\"related term\" OR \"相关术语\")",
+  "search_strategy": "balanced|precision_focused|recall_focused"
+}}
+```
+
+## 输出格式要求：
+**重要：直接输出内容，不要包含任何结构性标题（如"学术讨论分析"、"JSON关键词数据"等）**
+
+### 输出内容顺序：
+1. **深度学术分析**（严格markdown格式化，300-500字）
+   - 使用 **粗体** 突出核心概念和关键点
+   - 使用 *斜体* 强调重要术语
+   - 使用标准markdown列表格式（`-` 或 `*`，禁止使用 `•`）
+   - 使用 ### 子标题组织内容结构
+   - 确保列表项换行和缩进正确
+2. **JSON数据**（严格按照JSON格式输出，前后不加任何说明文字）
+
+**格式约束**：
+- 禁止使用 `•` 符号，只使用 `-` 或 `*` 作为列表标记
+- 确保粗体和斜体语法正确匹配（`**粗体**`，`*斜体*`）
+- **强制要求**：每个列表项必须独立成行，禁止多个要点混合在同一段落
+- 列表项格式：每行一个要点，前面加 `-` 或 `*`，后面换行
+- 示例正确格式：
+  - **要点一**：详细说明...
+  - **要点二**：详细说明...
+  - **要点三**：详细说明...
+
+## 学术讨论大概内容
+- 鼓励用户提出更深入的问题
+- 提供相关的学术思考方向  
+- 支持话题的自然延伸和发展
+- 研究机会预测（建议可能的合作研究方向和跨界融合点）

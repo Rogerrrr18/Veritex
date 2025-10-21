@@ -1,0 +1,48 @@
+# 使用Docker Hub官方镜像
+FROM python:3.11-slim AS base
+
+# 设置时区和基础依赖 + pip国内源
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Shanghai \
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com
+
+# 使用国内源（适配 deb822 格式：Debian 12/13 默认 debian.sources），并移除 security 源
+RUN set -eux; \
+    rm -f /etc/apt/sources.list.d/debian.sources || true; \
+    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie main contrib non-free non-free-firmware\n' > /etc/apt/sources.list; \
+    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie-updates main contrib non-free non-free-firmware\n' >> /etc/apt/sources.list; \
+    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie-backports main contrib non-free non-free-firmware\n' >> /etc/apt/sources.list; \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 仅复制依赖文件以利用构建缓存
+COPY requirements.txt /app/requirements.txt
+
+# 安装依赖（使用阿里云pip源）
+RUN python -m pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
+    && awk '!/^volcengine-ark/{print}' /app/requirements.txt > /tmp/requirements.no-ark.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.no-ark.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
+    && (pip install --no-cache-dir volcengine-ark -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com || echo "skip volcengine-ark (optional)")
+
+# 复制源码
+COPY . /app
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查（可选）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/health | grep -q '"status": "healthy"' || exit 1
+
+# 运行（使用更健壮的生产参数）
+CMD ["python", "-m", "uvicorn", "backend:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--timeout-keep-alive", "300"]
+
+

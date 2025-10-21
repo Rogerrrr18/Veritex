@@ -1,0 +1,79 @@
+# Paper God Beta3 - 智能对话式学术文献搜索系统依赖
+# 混合缓存架构版本 - 支持Supabase云端 + SQLite本地缓存
+# 最后更新: 2025-09-03
+
+# 核心框架
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+
+# 异步HTTP客户端
+aiohttp>=3.9.5
+httpx[socks]>=0.27.0
+
+# LangGraph和LangChain生态
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+
+# LLM客户端库
+openai>=1.50.0
+anthropic>=0.25.0
+groq>=0.9.0
+volcengine-ark>=2.1.0
+
+# 学术搜索和文本处理
+feedparser>=6.0.11
+beautifulsoup4>=4.12.3
+lxml>=5.1.0
+
+# ScholarDock集成依赖
+selenium>=4.17.2
+requests>=2.31.0
+
+# 数据处理和表格
+pandas>=2.2.0
+openpyxl>=3.1.0
+
+# 配置和环境管理
+python-dotenv>=1.0.1
+pydantic>=2.6.0
+
+# 工具库
+tenacity>=8.2.0
+python-dateutil>=2.8.2
+xmltodict>=0.13.0
+
+# JSON处理和数据验证
+jsonschema>=4.21.0
+
+# 数据库和缓存系统（新增/更新）
+# Supabase云端存储
+supabase>=2.3.0
+
+# SQLite异步支持（本地缓存）
+aiosqlite>=0.20.0
+
+# PostgreSQL异步客户端（Supabase后端）
+asyncpg>=0.29.0
+
+# 数据库迁移工具
+alembic>=1.13.0
+
+# 性能监控
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+
+# 网络请求支持
+Brotli>=1.1.0
+
+# 缓存和序列化优化
+msgpack>=1.0.7
+redis>=5.0.0  # 可选：未来Redis缓存支持
+
+# 开发和测试工具
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# 数据验证和类型检查
+mypy>=1.8.0
+types-requests>=2.31.0

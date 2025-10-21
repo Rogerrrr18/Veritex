@@ -156,6 +156,43 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
   const [editingText, setEditingText] = useState<string>('');
   const [inputMessage, setInputMessage] = useState('');
   const [currentAnalysis, setCurrentAnalysis] = useState<any>(null);
+  // 规范化层级关键词：仅做类型清洗，不做跨语言补齐
+  const normalizeBilingualKeywords = (analysis: any): any => {
+    try {
+      if (!analysis || typeof analysis !== 'object') return analysis;
+      const hk = analysis.hierarchical_keywords;
+      if (!hk || typeof hk !== 'object') return analysis;
+
+      const levels = ['exact_terms', 'core_synonyms', 'related_terms', 'context_terms'] as const;
+      const normalized: any = { ...analysis, hierarchical_keywords: { ...hk } };
+
+      levels.forEach((level) => {
+        const levelData = hk[level] || {};
+        const terms = Array.isArray(levelData.terms)
+          ? levelData.terms.filter((t: any) => typeof t === 'string' && t.trim())
+          : (typeof levelData.terms === 'string' ? [levelData.terms] : []);
+        const zhOut = Array.isArray(levelData.chinese)
+          ? levelData.chinese.filter((t: any) => typeof t === 'string' && t.trim())
+          : (typeof levelData.chinese === 'string' ? [levelData.chinese] : []);
+        const enOut = Array.isArray(levelData.english)
+          ? levelData.english.filter((t: any) => typeof t === 'string' && t.trim())
+          : (typeof levelData.english === 'string' ? [levelData.english] : []);
+
+        normalized.hierarchical_keywords[level] = {
+          ...levelData,
+          chinese: zhOut, // 仅清洗，不跨语言补齐
+          english: enOut, // 仅清洗，不跨语言补齐
+          terms,          // 保留清洗后的terms用于降级显示
+          // 保留原weight
+          weight: typeof levelData.weight === 'number' ? levelData.weight : (levelData.weight ? Number(levelData.weight) : 1.0)
+        };
+      });
+
+      return normalized;
+    } catch {
+      return analysis;
+    }
+  };
   const [conversationId, setConversationId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -581,7 +618,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
         // 如果有保存的分析结果，验证并使用
         const validatedAnalysis = UserStorage.validateKeywordAnalysis(savedAnalysis);
         if (validatedAnalysis) {
-          setCurrentAnalysis(validatedAnalysis);
+          const normalized = normalizeBilingualKeywords(validatedAnalysis);
+          setCurrentAnalysis(normalized);
           console.log('📊 恢复保存的关键词分析结果');
         } else {
           console.warn('⚠️ 保存的分析结果数据异常，尝试从消息历史恢复');
@@ -607,7 +645,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           if (keywords) {
             const validatedAnalysis = UserStorage.validateKeywordAnalysis({ hierarchical_keywords: keywords });
             if (validatedAnalysis) {
-              setCurrentAnalysis(validatedAnalysis);
+              const normalized = normalizeBilingualKeywords(validatedAnalysis);
+              setCurrentAnalysis(normalized);
               console.log('🔄 从消息历史恢复关键词扩展状态');
             }
           }
@@ -1128,8 +1167,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
       const decoder = new TextDecoder();
       let buffer = '';
       let accumulatedText = '';
-      let analysisResult = null;
-      let searchResults = null;
+      let analysisResult: any = null;
+      let searchResults: any = null;
       let isAcademicQuery = false;
 
       while (true) {
@@ -1161,11 +1200,43 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
                 // 自动滚动到底部
                 setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 0);
                 
+              } else if (data.type === 'analysis_done') {
+                // 仅分析完成（后台将继续搜索）
+                isAcademicQuery = data.data.is_academic_query || false;
+                analysisResult = data.data.analysis_result || null;
+                console.log('🧠 [SSE] analysis_done 收到分析结果，等待后台搜索...', {
+                  hasAnalysisResult: !!analysisResult,
+                  bgPending: data.data.background_search_pending
+                });
+
+                // 提前展示关键词云
+                if (analysisResult && analysisResult.hierarchical_keywords) {
+                  const normalized = normalizeBilingualKeywords(analysisResult);
+                  setCurrentAnalysis(normalized);
+                  if (isKeywordPanelCollapsed) setIsKeywordPanelCollapsed(false);
+                }
+
+              } else if (data.type === 'search_done') {
+                // 后台搜索完成
+                searchResults = data.data.search_results || null;
+                console.log('🔎 [SSE] search_done 收到搜索结果', {
+                  count: Array.isArray(searchResults) ? searchResults.length : 0
+                });
+
               } else if (data.type === 'done') {
                 // 流式完成
                 isAcademicQuery = data.data.is_academic_query || false;
                 searchResults = data.data.search_results || null;
                 analysisResult = data.data.analysis_result || null;
+                
+                // 🐛 调试：检查接收到的数据
+                console.log('🔍 [调试] 接收done事件数据:', {
+                  hasAnalysisResult: !!analysisResult,
+                  analysisResultKeys: analysisResult ? Object.keys(analysisResult) : null,
+                  hasSearchResults: !!searchResults,
+                  isAcademicQuery,
+                  conversationId: data.data.conversation_id
+                });
                 
                 // 保存对话ID
                 if (data.data.conversation_id) {
@@ -1186,15 +1257,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
 
       // 流式完成后更新最终消息
       let hierarchicalKeywords = null;
+      
+      // 🐛 调试：详细日志分析结果
+      console.log('🔍 [调试] 流式完成分析结果:', {
+        hasAnalysisResult: !!analysisResult,
+        analysisResultKeys: analysisResult ? Object.keys(analysisResult) : null,
+        hasHierarchicalKeywords: analysisResult ? !!analysisResult.hierarchical_keywords : false,
+        hierarchicalKeywordsStructure: analysisResult?.hierarchical_keywords ? Object.keys(analysisResult.hierarchical_keywords) : null
+      });
+      
       if (analysisResult && analysisResult.hierarchical_keywords) {
-        hierarchicalKeywords = analysisResult.hierarchical_keywords;
-        setCurrentAnalysis(analysisResult);
+        const normalized = normalizeBilingualKeywords(analysisResult);
+        hierarchicalKeywords = normalized.hierarchical_keywords;
+        setCurrentAnalysis(normalized);
+        analysisResult = normalized;
+        
+        console.log('✅ [调试] 成功设置关键词数据:', hierarchicalKeywords);
         
         // 🔧 新增：如果有新的关键词扩展，自动展开关键词面板
         if (isKeywordPanelCollapsed) {
           setIsKeywordPanelCollapsed(false);
           console.log('📈 检测到新的关键词扩展，自动展开关键词面板');
         }
+      } else {
+        console.log('❌ [调试] 未找到hierarchical_keywords数据');
       }
 
       // 清理流式传输状态
@@ -1361,7 +1447,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
           
           // 保存分析结果以供关键词面板使用
           if (response.analysis_result?.hierarchical_keywords) {
-            setCurrentAnalysis(response.analysis_result);
+            const normalized = normalizeBilingualKeywords(response.analysis_result);
+            setCurrentAnalysis(normalized);
             
             // 🔧 新增：如果有新的关键词扩展，自动展开关键词面板
             if (isKeywordPanelCollapsed) {
@@ -1369,7 +1456,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
               console.log('📈 检测到新的关键词扩展，自动展开关键词面板');
             }
           } else if (response.hierarchical_keywords) {
-            setCurrentAnalysis(response);
+            const normalized = normalizeBilingualKeywords(response);
+            setCurrentAnalysis(normalized);
             
             // 🔧 新增：如果有新的关键词扩展，自动展开关键词面板
             if (isKeywordPanelCollapsed) {
@@ -1383,13 +1471,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ className = '' }) => {
             text: response.response || response.message || '分析完成',
             isUser: false,
             timestamp: Date.now(),
-            analysisResult: response.analysis_result,
-            hierarchicalKeywords: response.analysis_result?.hierarchical_keywords
+            analysisResult: normalized || response.analysis_result,
+            hierarchicalKeywords: (normalized || response.analysis_result)?.hierarchical_keywords
           };
           
           const finalMessages = [...newMessages, aiMessage];
           setMessages(finalMessages);
-          saveChatHistory(finalMessages, response.analysis_result || response);
+          saveChatHistory(finalMessages, normalized || response.analysis_result || response);
           
         } catch (error: any) {
           console.error('重新发送失败:', error);

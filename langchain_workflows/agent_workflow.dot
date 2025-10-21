@@ -1,0 +1,26 @@
+digraph VeritexAgent {
+  rankdir=LR; labelloc=t; fontsize=14; label="Veritex Agent 工作流（LangGraph 状态机）";
+  START [label="START", shape=circle, style="filled", fillcolor="#e2f0ff"];
+  router [label="模式路由\n(route_by_mode)\n+ 快速闲聊过滤", shape=box, style="rounded,filled", fillcolor="#ffffff"];
+  chat [label="Chat Conversation\n(chat_conversation)", shape=box, style="rounded,filled", fillcolor="#ffffff"];
+  lit [label="Literature Search\n(literature_search)\n仅分析 + 关键词扩展（缓存）", shape=box, style="rounded,filled", fillcolor="#ffffff"];
+  exec [label="Search Execution\n(search_execution)\n多源并行检索", shape=box, style="rounded,filled", fillcolor="#ffffff"];
+  fmt [label="Result Formatting\n(result_formatting)", shape=box, style="rounded,filled", fillcolor="#ffffff"];
+  disc [label="Academic Discussion\n(academic_discussion)", shape=box, style="rounded,filled", fillcolor="#ffffff"];
+  END [label="END", shape=doublecircle, style="filled", fillcolor="#e2f0ff"];
+  START -> router;
+  router -> chat [label="快速闲聊命中", fontsize=11];
+  router -> lit [label="mode=auto-search", fontsize=11];
+  router -> disc [label="mode=chat&plan", fontsize=11];
+  chat -> END [label="对话完成", fontsize=11];
+  lit -> exec [label="should_search=True 且 allow_search=True", fontsize=11, color="#0ea5e9"];
+  lit -> END [label="wait_decision / 条件不满足", fontsize=11, style=dashed, color="#64748b"];
+  exec -> fmt;
+  fmt -> END;
+  disc -> END [label="默认结束（分析先行）", fontsize=11];
+  disc -> exec [label="(后台) auto-search + 建议搜索 → 由后端触发", fontsize=11, style=dotted, color="#94a3b8"];
+  subgraph cluster_legend {
+    label="图例"; fontsize=12; color="#94a3b8";
+    legend1 [label="圆角方框：处理节点\n圆圈：开始/结束\n蓝色边：auto-search 条件满足→图内检索\n灰色虚线：等待/非图内路径（后端SSE触发）", shape=note, style=filled, fillcolor="#f8fafc"];
+  }
+}

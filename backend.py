@@ -16,6 +16,14 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 确保本模块日志可见：如果没有任何handler，则添加一个StreamHandler
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _fmt = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
+    _handler.setFormatter(_fmt)
+    logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
+
 # 导入新的智能搜索系统
 from langchain_workflows.paper_search_workflow import get_intelligent_paper_search_agent
 from llm_interface import get_universal_llm, get_model_config_manager
@@ -34,7 +42,7 @@ except ImportError as e:
 app = FastAPI(
     title="Paper God API - 智能对话版",
     description="学术文献智能搜索系统 - 集成LLM对话与专业关键词扩展",
-    version="3.0.0"
+    version="3.0.6"
 )
 
 app.add_middleware(
@@ -1214,7 +1222,7 @@ async def health_check():
         
         return {
             "status": "healthy",
-            "version": "3.0.0",
+            "version": "3.0.6",
             "features": {
                 "intelligent_chat": True,
                 "academic_analysis": True,
@@ -1233,14 +1241,14 @@ async def health_check():
         return {
             "status": "unhealthy", 
             "error": str(e),
-            "version": "3.0.0"
+            "version": "3.0.6"
         }
 
 @app.get("/")
 async def root():
     return {
         "message": "Paper God API - 智能对话式学术搜索系统",
-        "version": "3.0.0",
+        "version": "3.0.6",
         "features": [
             "智能对话交互",
             "专业学术分析",

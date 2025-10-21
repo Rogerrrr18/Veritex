@@ -458,19 +458,33 @@ export class UserStorage {
       return null;
     }
 
-    // 检查hierarchical_keywords结构
+    // 检查hierarchical_keywords结构（兼容 terms 与 chinese/english 双格式）
     if (analysis.hierarchical_keywords && typeof analysis.hierarchical_keywords === 'object') {
       const validLevels = ['exact_terms', 'core_synonyms', 'related_terms', 'context_terms'];
       let hasValidKeywords = false;
 
       for (const level of validLevels) {
         const levelData = analysis.hierarchical_keywords[level];
-        if (levelData && Array.isArray(levelData.terms) && levelData.terms.length > 0) {
+        if (!levelData || typeof levelData !== 'object') continue;
+
+        // 兼容新格式：如果没有terms，但有chinese/english，则合并为terms（去重保持顺序）
+        if (!Array.isArray(levelData.terms)) {
+          const zh = Array.isArray(levelData.chinese) ? levelData.chinese : [];
+          const en = Array.isArray(levelData.english) ? levelData.english : [];
+          const merged = [...zh, ...en].filter((t) => typeof t === 'string' && t.trim().length > 0);
+          if (merged.length > 0) {
+            // 去重保持顺序
+            const unique = Array.from(new Set(merged.map((t) => t.trim())));
+            levelData.terms = unique;
+          }
+        }
+
+        if (Array.isArray(levelData.terms) && levelData.terms.length > 0) {
           // 过滤掉空字符串和非字符串项
-          levelData.terms = levelData.terms.filter((term: unknown) => 
+          levelData.terms = levelData.terms.filter((term: unknown) =>
             typeof term === 'string' && (term as string).trim().length > 0
           );
-          
+
           if (levelData.terms.length > 0) {
             hasValidKeywords = true;
           }

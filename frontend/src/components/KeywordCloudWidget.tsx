@@ -82,12 +82,12 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   });
   
   const [displayChinese, setDisplayChinese] = useState(() => {
-    // 恢复语言偏好
+    // 恢复语言偏好（上一版做法：仅使用用户隔离存储）
     const savedLanguage = UserStorage.getUserData('language_preference');
     const isChinese = savedLanguage === 'chinese';
     console.log('🔍 KeywordCloudWidget初始化:', { savedLanguage, isChinese, hierarchicalKeywords: !!hierarchicalKeywords, hasStoredData: !!keywordCloudData });
     return isChinese;
-  }); // 新增：控制显示中文还是英文，支持持久化
+  });
   const [searchSettings, setSearchSettings] = useState<SearchSettings>(() => {
     // 优先恢复已保存的用户搜索设置
     try {
@@ -213,11 +213,11 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       // 按层级处理关键词 - 使用当前活跃的关键词数据
       Object.entries(currentHierarchicalKeywords).forEach(([level, data]) => {
         if (data && typeof data === 'object') {
-          // 根据displayChinese状态选择显示的语言
+          // 上一版做法：仅按中/英优先-降级选择，不处理旧格式 terms
           const termsToDisplay = displayChinese 
-            ? (data.chinese || data.english || [])  // 中文模式：优先中文，降级英文
-            : (data.english || data.chinese || []); // 英文模式：优先英文，降级中文
-          
+            ? ((data as any).chinese || (data as any).english || [])
+            : ((data as any).english || (data as any).chinese || []);
+
           if (Array.isArray(termsToDisplay)) {
             termsToDisplay.forEach((term: string) => {
               if (term && typeof term === 'string' && term.trim()) {
@@ -318,7 +318,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       // 构建搜索查询
       const searchQuery = keywords.map(k => k.term).join(' OR ');
 
-      // 🔑 关键优化：构建预扩展关键词，支持双语模式
+      // 上一版做法：按当前展示的关键词构造预扩展（中英对称，不合并原始层级）
       const preExpandedKeywords = {
         hierarchical_keywords: {
           exact_terms: {
@@ -344,7 +344,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         },
         domain: 'academic_research',
         core_concepts: keywords.map(k => k.term),
-        useChinese: searchSettings.useChinese // 🔑 添加中文模式标识
+        useChinese: searchSettings.useChinese
       };
 
       console.log('🚀 使用预扩展关键词执行搜索，避免重复LLM分析');
@@ -413,6 +413,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       UserStorage.setUserData(UNIFIED_HISTORY_KEY, JSON.stringify(existingUnifiedHistory));
       
       console.log('✅ 关键词搜索结果已保存到用户隔离存储和My面板');
+      // 注意：不将并集后的双语结构写回关键词云存储，避免同化中英文
 
       // 跳转到报告页面
       navigate('/report', {
@@ -902,7 +903,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                       ...prev,
                       useChinese: newDisplayChinese
                     }));
-                    // 保存语言偏好到持久化存储
+                    // 保存语言偏好到持久化存储（上一版做法：不写入全局localStorage）
                     UserStorage.setUserData('language_preference', newDisplayChinese ? 'chinese' : 'english');
                   }}
                   style={{
