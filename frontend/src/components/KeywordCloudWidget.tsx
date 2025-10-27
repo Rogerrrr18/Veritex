@@ -213,10 +213,23 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       // 按层级处理关键词 - 使用当前活跃的关键词数据
       Object.entries(currentHierarchicalKeywords).forEach(([level, data]) => {
         if (data && typeof data === 'object') {
-          // 上一版做法：仅按中/英优先-降级选择，不处理旧格式 terms
-          const termsToDisplay = displayChinese 
-            ? ((data as any).chinese || (data as any).english || [])
-            : ((data as any).english || (data as any).chinese || []);
+          // 增加旧格式 terms 兜底，但仍不做跨语言补齐，仅用于显示
+          let termsToDisplay: any[] = [];
+          const zh = Array.isArray((data as any).chinese)
+            ? (data as any).chinese
+            : (typeof (data as any).chinese === 'string' ? [(data as any).chinese] : []);
+          const en = Array.isArray((data as any).english)
+            ? (data as any).english
+            : (typeof (data as any).english === 'string' ? [(data as any).english] : []);
+          const legacy = Array.isArray((data as any).terms)
+            ? (data as any).terms
+            : (typeof (data as any).terms === 'string' ? [(data as any).terms] : []);
+
+          if (displayChinese) {
+            termsToDisplay = zh.length > 0 ? zh : (en.length > 0 ? en : legacy);
+          } else {
+            termsToDisplay = en.length > 0 ? en : (zh.length > 0 ? zh : legacy);
+          }
 
           if (Array.isArray(termsToDisplay)) {
             termsToDisplay.forEach((term: string) => {

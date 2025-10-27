@@ -9,6 +9,7 @@ import re
 import time
 import hashlib
 import logging
+import os
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,8 @@ class IntelligentPaperSearchAgent:
         self.llm = get_llm_for_langgraph()
         
         # 移除意图分类器 - 改为直接模式路由
+        # 控制调试日志输出
+        self.debug_enabled = os.getenv('WORKFLOW_DEBUG', 'false').lower() == 'true'
         logger.info("🚀 [工作流] 智能Agent初始化完成（模式直接路由）")
         
         self.checkpointer = MemorySaver() if enable_memory else None
@@ -55,6 +58,21 @@ class IntelligentPaperSearchAgent:
         self._search_engine = None
         
         logger.info("💾 [工作流] 智能缓存系统已启用")
+
+    # 日志辅助：带线程ID的前缀
+    def _tid(self, state: Dict[str, Any]) -> str:
+        try:
+            tid = state.get('thread_id') if isinstance(state, dict) else None
+            return (tid or "-")[:12]
+        except Exception:
+            return "-"
+
+    def _info(self, state: Dict[str, Any], msg: str):
+        logger.info(f"[{self._tid(state)}] {msg}")
+
+    def _debug(self, state: Dict[str, Any], msg: str):
+        if self.debug_enabled:
+            logger.debug(f"[{self._tid(state)}] {msg}")
     
     async def _get_search_engine(self):
         """获取搜索引擎实例（延迟加载）- 避免循环依赖"""
@@ -136,21 +154,20 @@ class IntelligentPaperSearchAgent:
         """直接根据用户模式选择路由，移除复杂的意图分析"""
         mode = state.get("mode", "auto-search")
         user_message = state.get("user_message", "")
-        
-        print(f"模式路由：mode={mode}, message={user_message[:40]}...")
+        self._info(state, f"路由判定: mode={mode}, message='{user_message[:40]}...'")
         
         # 快速闲聊预筛选（保留现有逻辑，避免浪费资源）
         quick_intent = self._quick_chat_filter(user_message)
         if quick_intent == "闲聊":
-            print("快速识别为闲聊，路由到对话节点")
+            self._info(state, "快速识别为闲聊 → chat_conversation")
             return "chat_conversation"
         
         # 直接根据用户选择的模式路由
         if mode == "auto-search":
-            print("Auto-search模式 → 直接进入文献搜索")
+            self._info(state, "Auto-search模式 → literature_search")
             return "literature_search"
         else:  # chat&plan 模式
-            print("Chat&Plan模式 → 直接进入学术探讨")
+            self._info(state, "Chat&Plan模式 → academic_discussion")
             return "academic_discussion"
     
     def _quick_chat_filter(self, message: str) -> Optional[str]:
@@ -189,12 +206,12 @@ class IntelligentPaperSearchAgent:
         """优化的闲聊对话处理节点 - 减少LLM调用"""
         try:
             user_message = state.get("user_message", "")
-            print(f"闲聊对话处理: {user_message}")
+            self._info(state, f"闲聊对话处理开始: '{user_message[:40]}...'")
             
             # 🚀 优化策略：对常见闲聊使用预定义回复，减少LLM调用
             quick_response = self._get_quick_chat_response(user_message)
             if quick_response:
-                print("使用快速回复")
+                self._debug(state, "命中快速回复表")
                 from langchain_core.messages import AIMessage
                 return {
                     "current_step": "completed",
@@ -207,18 +224,20 @@ class IntelligentPaperSearchAgent:
                 }
             
             # 对复杂闲聊才使用LLM
-            print("使用LLM生成回复")
+            self._info(state, "未命中快速回复 → 调用LLM生成闲聊回复")
             from prompt_utils import get_chat_conversation_prompt
             prompt = get_chat_conversation_prompt(user_message)
             
             # 调用LLM生成对话回复（使用简单聊天超时配置）
             import os
             simple_timeout = float(os.getenv('SIMPLE_CHAT_TIMEOUT', '30.0'))
+            start_ts = time.time()
             response = await self.llm.simple_chat(prompt=prompt, timeout=simple_timeout)
+            self._info(state, f"LLM闲聊完成，用时 {time.time()-start_ts:.2f}s")
             
             # 🧹 应用统一的消息清洗处理
             cleaned_response = self._final_clean_response(response)
-            print("消息清洗完成")
+            self._debug(state, "消息清洗完成")
             
             # 明确导入AIMessage避免作用域问题
             from langchain_core.messages import AIMessage
@@ -235,7 +254,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"对话处理失败: {str(e)}"
-            print(f"错误: {error_msg}")
+            self._debug(state, f"错误: {error_msg}")
             from langchain_core.messages import AIMessage
             return {
                 "current_step": "failed",
@@ -322,7 +341,7 @@ class IntelligentPaperSearchAgent:
         """文献搜索处理节点 - 统一使用关键词扩展流程（支持缓存）"""
         mode = state.get("mode", "auto-search")
         user_message = state.get("user_message", "")
-        print(f"文献搜索处理: {user_message} (模式: {mode})")
+        self._info(state, f"文献搜索处理开始: 模式={mode}, 消息='{user_message[:40]}...'")
         
         # 所有模式都使用相同的关键词扩展逻辑
         result = await self._analysis_only_search(state)
@@ -336,11 +355,11 @@ class IntelligentPaperSearchAgent:
             # 保留原始详细分析内容，不用简单提示覆盖
             # result["messages"]保持不变，保留详细的关键词分析响应
             
-            print("auto-search模式：保留详细分析 + 自动搜索")
+            self._info(state, "auto-search模式：保留详细分析 + 自动搜索")
         else:
             # chat&plan模式保持原有逻辑，等待用户决策
             result["should_search"] = False
-            print("chat&plan模式：等待用户决策")
+            self._info(state, "chat&plan模式：等待用户决策")
         
         return result
             
@@ -358,7 +377,7 @@ class IntelligentPaperSearchAgent:
             if cache_key in self._keyword_expansion_cache:
                 cached_entry = self._keyword_expansion_cache[cache_key]
                 if self._is_cache_valid(cached_entry):
-                    print("命中关键词扩展缓存")
+                    self._info(state, "命中关键词扩展缓存")
                     
                     from langchain_core.messages import AIMessage
                     cached_response = cached_entry['response']
@@ -366,7 +385,7 @@ class IntelligentPaperSearchAgent:
                     
                     # 🧹 对缓存的响应也进行清洗，移除JSON内容
                     cleaned_cached_response = self._final_clean_response(cached_response)
-                    print("缓存响应清洗完成")
+                    self._debug(state, "缓存响应清洗完成")
                     
                     return {
                         "current_step": "search_ready",
@@ -392,7 +411,7 @@ class IntelligentPaperSearchAgent:
             
             # 验证LLM响应
             if not response or len(response.strip()) < 20:
-                print("LLM响应异常，使用回退机制")
+                self._info(state, "LLM响应异常，使用回退机制（fallback分析）")
                 
                 # 提供基本的关键词提取作为回退
                 fallback_analysis = {
@@ -422,7 +441,7 @@ class IntelligentPaperSearchAgent:
             
             # 🧹 清洗响应，移除JSON内容，只保留用户友好的中文内容
             cleaned_response = self._final_clean_response(response)
-            print("响应清洗完成")
+            self._debug(state, "响应清洗完成")
             
             # 🚀 缓存关键词扩展结果
             if keywords_analysis:
@@ -435,9 +454,9 @@ class IntelligentPaperSearchAgent:
                         'mode': mode
                     }
                     self._keyword_expansion_cache[cache_key] = cache_entry
-                    print("已缓存关键词扩展结果")
+                    self._debug(state, "已缓存关键词扩展结果")
                 except Exception as e:
-                    print(f"缓存失败: {e}")
+                    self._debug(state, f"缓存失败: {e}")
             
             from langchain_core.messages import AIMessage
             return {
@@ -454,7 +473,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"文献搜索分析失败: {str(e)}"
-            print(f"错误: {error_msg}")
+            self._debug(state, f"错误: {error_msg}")
             from langchain_core.messages import AIMessage
             return {
                 "current_step": "failed",
@@ -468,7 +487,7 @@ class IntelligentPaperSearchAgent:
         try:
             user_message = state.get("user_message", "")
             mode = state.get("mode", "auto-search")
-            print(f"学术探讨处理: {user_message} (模式: {mode})")
+            self._info(state, f"学术探讨论证开始: 模式={mode}, 消息='{user_message[:40]}...'")
             
             # 使用简化的prompt工具函数（支持中文搜索模式）
             from prompt_utils import get_academic_discussion_prompt
@@ -476,7 +495,7 @@ class IntelligentPaperSearchAgent:
             prompt = get_academic_discussion_prompt(user_message, mode=mode, sources=sources)
             
             # 并行处理：LLM学术讨论 + 搜索引擎预热
-            print("🚀 开始并行LLM学术讨论分析 + 搜索引擎预热")
+            self._info(state, "并行启动：LLM讨论分析 + 搜索引擎预热")
             import time
             start_time = time.time()
             
@@ -494,32 +513,33 @@ class IntelligentPaperSearchAgent:
             )
             
             # 等待LLM响应完成（搜索引擎预热在后台继续）
+            t0 = time.time()
             response = await llm_task
             end_time = time.time()
-            print(f"✅ LLM调用完成，耗时: {end_time - start_time:.2f}秒")
+            self._info(state, f"LLM学术讨论完成，用时: {end_time - start_time:.2f}s")
             
             # 检查搜索引擎预热状态（不阻塞主流程）
             try:
                 await asyncio.wait_for(search_engine_preheat_task, timeout=0.1)
-                print("✅ 搜索引擎预热完成")
+                self._debug(state, "搜索引擎预热完成")
             except asyncio.TimeoutError:
-                print("⏳ 搜索引擎预热在后台继续...")
+                self._debug(state, "搜索引擎预热在后台继续...")
             
             # 验证LLM响应 - 如果失败直接抛出异常
             if not response or len(response.strip()) < 20:
                 error_msg = f"学术讨论LLM响应无效: 长度={len(response) if response else 0}, 内容='{response}'"
-                print(f"错误: {error_msg}")
+                self._debug(state, f"错误: {error_msg}")
                 raise Exception(error_msg)
             
             # 🧹 应用统一的消息清洗处理
             cleaned_response = self._final_clean_response(response)
-            print("学术探讨消息清洗完成")
+            self._debug(state, "学术探讨消息清洗完成")
             
             # 解析可能的关键词信息（恢复原始逻辑）
             keywords_analysis = self._extract_json_analysis(response)
-            print(f"学术探讨关键词分析结果: {bool(keywords_analysis)}")
+            self._info(state, f"关键词分析: {'有结果' if bool(keywords_analysis) else '无结果'}")
             if keywords_analysis:
-                print(f"关键词分析包含的字段: {list(keywords_analysis.keys())}")
+                self._debug(state, f"关键词分析字段: {list(keywords_analysis.keys())}")
             
             # 根据模式决定搜索建议策略
             should_suggest_search = False
@@ -542,7 +562,7 @@ class IntelligentPaperSearchAgent:
                 need_search = False
                 background_search_required = False
             
-            return {
+            result = {
                 "current_step": "discussion_completed",
                 "is_completed": is_completed,
                 "analysis_result": keywords_analysis,
@@ -555,10 +575,12 @@ class IntelligentPaperSearchAgent:
                 "query": state.get("query", ""),  # 保存原始查询供后台搜索使用
                 "max_results": state.get("max_results", 40)  # 保存搜索数量
             }
+            self._info(state, f"讨论完成: background_search_required={background_search_required}")
+            return result
             
         except Exception as e:
             error_msg = f"学术讨论失败: {str(e)}"
-            print(f"错误: {error_msg}")
+            self._debug(state, f"错误: {error_msg}")
             from langchain_core.messages import AIMessage
             return {
                 "current_step": "failed",
@@ -1071,24 +1093,24 @@ class IntelligentPaperSearchAgent:
         allow_search = state.get("allow_search", True)
         
         # 🔧 增强的模式检查机制
-        print(f"文献搜索后路由: 模式={mode}, 应该搜索={should_search}, 允许搜索={allow_search}")
+        self._info(state, f"文献搜索后路由: 模式={mode}, 应该搜索={should_search}, 允许搜索={allow_search}")
         
         # 🎯 chat&plan模式严格限制：永远不执行搜索
         if mode == "chat&plan":
-            print("🚫 chat&plan模式：严格禁止搜索，只返回分析结果")
+            self._info(state, "🚫 chat&plan模式：严格禁止搜索，只返回分析结果")
             return "wait_decision"
         
         # 🎯 auto-search模式：检查搜索条件
         if mode == "auto-search":
             if should_search and allow_search:
-                print("✅ auto-search模式：条件满足，进入搜索流程")
+                self._info(state, "✅ auto-search模式：条件满足，进入搜索流程")
                 return "search"
             else:
-                print(f"⚠️ auto-search模式：搜索条件不满足 (should_search={should_search}, allow_search={allow_search})")
+                self._info(state, f"⚠️ auto-search模式：搜索条件不满足 (should_search={should_search}, allow_search={allow_search})")
                 return "wait_decision"
         
         # 🔄 其他模式或未知模式：安全降级
-        print(f"⚠️ 未知模式或异常情况，安全降级: {mode}")
+        self._info(state, f"⚠️ 未知模式或异常情况，安全降级: {mode}")
         return "wait_decision"
     
     def should_execute_search_after_discussion(self, state: PaperSearchState) -> str:
@@ -1144,7 +1166,7 @@ class IntelligentPaperSearchAgent:
                     "search_results": []
                 }
             
-            logger.info(f"✅ [防护检查] 模式={mode}, 允许搜索={allow_search}")
+            self._info(state, f"进入搜索节点: 模式={mode}, 允许搜索={allow_search}")
             
             query = state.get("query", "")
             max_results = state.get("max_results", 20)
@@ -1153,7 +1175,7 @@ class IntelligentPaperSearchAgent:
             year_to = state.get("year_to")
             sources = state.get("sources")
             
-            print(f"🚀 开始并行执行搜索: query={query}, max_results={max_results}")
+            self._info(state, f"并行搜索开始: query='{(query or '')[:40]}...', max_results={max_results}, year_from={year_from}, year_to={year_to}, sources={sources}, use_chinese={state.get('use_chinese', False)}")
             
             # 并行任务1：构建搜索查询（CPU密集型）
             search_query_task = asyncio.create_task(
@@ -1172,14 +1194,14 @@ class IntelligentPaperSearchAgent:
             
             # 检查并行任务是否有异常
             if isinstance(search_query, Exception):
-                print(f"❌ 构建搜索查询失败: {search_query}")
+                self._debug(state, f"❌ 构建搜索查询失败: {search_query}")
                 search_query = query  # 降级使用原始查询
             
             if isinstance(search_engine, Exception):
-                print(f"❌ 搜索引擎预热失败: {search_engine}")
+                self._debug(state, f"❌ 搜索引擎预热失败: {search_engine}")
                 raise search_engine
             
-            print(f"✅ 并行任务完成 - 搜索查询: {search_query}")
+            self._debug(state, f"并行任务完成，搜索查询: {search_query}")
             
             # 获取analysis结果用于统一布尔查询
             analysis = state.get("analysis_result", {})
@@ -1203,7 +1225,7 @@ class IntelligentPaperSearchAgent:
                 # 兜底：使用基础搜索接口（传递年限参数）
                 search_result = await search_engine.search_parallel(search_query, max_results, analysis=analysis, year_from=year_from, year_to=year_to)
                 papers = search_result if isinstance(search_result, list) else search_result.get('papers', [])
-            print(f"搜索完成，找到 {len(papers)} 篇论文")
+            self._info(state, f"搜索完成，找到 {len(papers)} 篇论文")
             
             # 转换为标准格式
             formatted_results = self._format_search_results(papers)
@@ -1216,7 +1238,7 @@ class IntelligentPaperSearchAgent:
             
         except Exception as e:
             error_msg = f"搜索执行失败: {str(e)}"
-            print(f"错误: {error_msg}")
+            self._debug(state, f"错误: {error_msg}")
             return {
                 "error_message": error_msg,
                 "current_step": "failed",
@@ -1812,14 +1834,13 @@ class IntelligentPaperSearchAgent:
             search_results = state.get("search_results", [])
             analysis = state.get("analysis_result", {})
             keywords = state.get("search_keywords", [])
-            
-            print(f"保持原有学术分析内容，搜索到 {len(search_results)} 个结果")
+            self._info(state, f"结果格式化：保持原有学术分析内容，结果数={len(search_results)}")
             
             # 🔑 重要修改：保持原有的详细学术指导内容
             # 保持原有的详细分析内容，让用户看到完整的专业解读
             existing_messages = state.get("messages", [])
             if existing_messages:
-                print("保持现有的详细学术分析内容")
+                self._debug(state, "保持现有的详细学术分析内容")
                 return {
                     "current_step": "completed",
                     "is_completed": True
@@ -1828,7 +1849,7 @@ class IntelligentPaperSearchAgent:
             else:
                 # 备用响应（正常情况下不会到这里）
                 fallback_response = "✅ 已完成学术分析和关键词扩展。请查看右侧关键词云进行进一步的文献搜索。"
-                print("使用备用响应")
+                self._debug(state, "使用备用响应")
                 # 局部导入AIMessage
                 from langchain_core.messages import AIMessage
                 return {
@@ -1945,7 +1966,8 @@ class IntelligentPaperSearchAgent:
             year_from=year_from,
             year_to=year_to,
             sources=sources,
-            use_chinese=use_chinese  # 🔑 新增：传递中文搜索模式参数
+            use_chinese=use_chinese,  # 🔑 新增：传递中文搜索模式参数
+            thread_id=thread_id
         )
 
         # 注入历史对话（最近20条）
@@ -1969,7 +1991,7 @@ class IntelligentPaperSearchAgent:
         except Exception as e:
             logger.warning(f"⚠️ [工作流] 注入历史失败: {e}")
         
-        logger.info(f"🎯 [工作流] 启动 → 查询: {query[:40]}...")
+        logger.info(f"[{(thread_id or '-')[:12]}] 🎯 [工作流] 启动 → 查询: {query[:40]}...")
         
         config = {"configurable": {"thread_id": thread_id}} if self.enable_memory else {}
         
@@ -2008,12 +2030,12 @@ class IntelligentPaperSearchAgent:
                 "need_search_strategy": final_state.get("need_search_strategy", False)
             }
             
-            logger.info(f"✅ [工作流] {'完成' if result['success'] else '失败'}")
+            logger.info(f"[{(thread_id or '-')[:12]}] ✅ [工作流] {'完成' if result['success'] else '失败'}")
             return result
             
         except asyncio.TimeoutError:
             timeout_msg = f"学术查询超时（{workflow_timeout}秒），可能由于网络或服务器繁忙。"
-            logger.warning(f"⚠️ [工作流] 执行超时: {timeout_msg}")
+            logger.warning(f"[{(thread_id or '-')[:12]}] ⚠️ [工作流] 执行超时: {timeout_msg}")
             
             return {
                 "success": False,
@@ -2034,12 +2056,12 @@ class IntelligentPaperSearchAgent:
             # 检查是否是CAPTCHA相关错误
             if 'captcha' in error_str or 'blocked' in error_str:
                 user_friendly_msg = "搜索服务暂时受限，请稍等片刻后重试，或尝试使用其他关键词。"
-                print(f"CAPTCHA限制: {error_msg}")
+                logger.warning(f"[{(thread_id or '-')[:12]}] CAPTCHA限制: {error_msg}")
             else:
                 user_friendly_msg = "处理您的请求时出现错误，请稍后再试。"
-                print(f"错误: {error_msg}")
+                logger.error(f"[{(thread_id or '-')[:12]}] 错误: {error_msg}")
                 import traceback
-                print(f"详细错误堆栈: {traceback.format_exc()}")
+                logger.debug(f"[{(thread_id or '-')[:12]}] 详细错误堆栈: {traceback.format_exc()}")
             
             return {
                 "success": False,

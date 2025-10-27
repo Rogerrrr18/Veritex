@@ -9,19 +9,13 @@ import json
 import asyncio
 import re
 from datetime import datetime
+import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# 确保本模块日志可见：如果没有任何handler，则添加一个StreamHandler
-if not logger.handlers:
-    _handler = logging.StreamHandler()
-    _fmt = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
-    _handler.setFormatter(_fmt)
-    logger.addHandler(_handler)
+# 统一将应用日志输出到 Uvicorn 的 error logger，确保 --reload 下可见
+logger = logging.getLogger('uvicorn.error')
 logger.setLevel(logging.INFO)
 
 # 导入新的智能搜索系统
@@ -515,8 +509,11 @@ async def generate_stream_response(
             workflow_mode = "auto-search" if mode != "chat-only" else "chat&plan"
             
             agent = get_intelligent_paper_search_agent()
+            # 生成一个本地线程ID用于日志跟踪（非对话模式）
+            thread_id = f"thread_{uuid.uuid4().hex[:8]}"
             final_result = await agent.search_papers(
                 query=message,
+                thread_id=thread_id,
                 mode=workflow_mode,
                 max_results=max_results,
                 force_search=False,
@@ -688,6 +685,7 @@ async def generate_stream_response_with_conversation(
             agent = get_intelligent_paper_search_agent()
             final_result = await agent.search_papers(
                 query=message,
+                thread_id=conversation_id,
                 mode=workflow_mode,
                 max_results=max_results,
                 force_search=False,
