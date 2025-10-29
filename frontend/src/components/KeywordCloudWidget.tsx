@@ -62,6 +62,11 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   const [keywordCloudData, setKeywordCloudData] = useState<{
     hierarchicalKeywords: HierarchicalKeywords | null;
     expandedKeywords: KeywordItem[];
+    // 新增：按语言分别保存，保证切换中英时显示对应版本且可持久化删除
+    expandedKeywordsByLang?: {
+      zh: KeywordItem[];
+      en: KeywordItem[];
+    };
     originalQuery?: string;
   } | null>(() => {
     // 尝试从存储中恢复关键词云数据
@@ -165,6 +170,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   const saveKeywordCloudData = (data: {
     hierarchicalKeywords: HierarchicalKeywords | null;
     expandedKeywords: KeywordItem[];
+    expandedKeywordsByLang?: { zh: KeywordItem[]; en: KeywordItem[] };
     originalQuery?: string;
   }) => {
     try {
@@ -192,7 +198,21 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   // 解析层次化关键词数据
   useEffect(() => {
     const currentHierarchicalKeywords = activeHierarchicalKeywords;
-    
+
+    // 优先级：
+    // 1) 若存在按语言存储的快照，直接按当前语言显示（保证切换即时生效且保留删除）
+    // 2) 若有新传入的分层关键词（LLM分析结果），根据其重建 zh/en 两套并保存
+    // 3) 否则若存储中存在分层结构，根据当前语言重建
+    // 4) 否则最后回退到旧版 expandedKeywords（仅为兼容，不支持按语言切换）
+
+    if (!hierarchicalKeywords && keywordCloudData?.expandedKeywordsByLang) {
+      const byLang = keywordCloudData.expandedKeywordsByLang;
+      const list = displayChinese ? byLang.zh : byLang.en;
+      setKeywords(Array.isArray(list) ? list : []);
+      console.log(`✅ 使用存储的按语言快照渲染（${displayChinese ? '中文' : '英文'}，${list?.length || 0} 项）`);
+      return;
+    }
+
     // 🔧 优化数据来源检测和日志记录
     if (hierarchicalKeywords) {
       console.log('🔍 使用新传入的关键词数据:', hierarchicalKeywords);
@@ -203,100 +223,126 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       setKeywords([]);
       return;
     }
-    
+
     if (!currentHierarchicalKeywords) {
       console.log('❌ 当前活跃关键词数据为空');
       setKeywords([]);
       return;
     }
 
-    const newKeywords: KeywordItem[] = [];
+    const buildListForLanguage = (preferZh: boolean): KeywordItem[] => {
+      const out: KeywordItem[] = [];
+      try {
+        Object.entries(currentHierarchicalKeywords || {}).forEach(([level, data]) => {
+          if (data && typeof data === 'object') {
+            const zh = Array.isArray((data as any).chinese)
+              ? (data as any).chinese
+              : (typeof (data as any).chinese === 'string' ? [(data as any).chinese] : []);
+            const en = Array.isArray((data as any).english)
+              ? (data as any).english
+              : (typeof (data as any).english === 'string' ? [(data as any).english] : []);
+            const legacy = Array.isArray((data as any).terms)
+              ? (data as any).terms
+              : (typeof (data as any).terms === 'string' ? [(data as any).terms] : []);
 
-    // 🔧 新增：支持双语关键词解析
-    try {
-      // 按层级处理关键词 - 使用当前活跃的关键词数据
-      Object.entries(currentHierarchicalKeywords).forEach(([level, data]) => {
-        if (data && typeof data === 'object') {
-          // 增加旧格式 terms 兜底，但仍不做跨语言补齐，仅用于显示
-          let termsToDisplay: any[] = [];
-          const zh = Array.isArray((data as any).chinese)
-            ? (data as any).chinese
-            : (typeof (data as any).chinese === 'string' ? [(data as any).chinese] : []);
-          const en = Array.isArray((data as any).english)
-            ? (data as any).english
-            : (typeof (data as any).english === 'string' ? [(data as any).english] : []);
-          const legacy = Array.isArray((data as any).terms)
-            ? (data as any).terms
-            : (typeof (data as any).terms === 'string' ? [(data as any).terms] : []);
+            const termsToDisplay = preferZh
+              ? (zh.length > 0 ? zh : (en.length > 0 ? en : legacy))
+              : (en.length > 0 ? en : (zh.length > 0 ? zh : legacy));
 
-          if (displayChinese) {
-            termsToDisplay = zh.length > 0 ? zh : (en.length > 0 ? en : legacy);
+            if (Array.isArray(termsToDisplay)) {
+              termsToDisplay.forEach((term: string) => {
+                if (term && typeof term === 'string' && term.trim()) {
+                  out.push({
+                    term: term.trim(),
+                    level,
+                    weight: typeof (data as any).weight === 'number' ? (data as any).weight : 1.0,
+                    color: levelColors[level as keyof typeof levelColors] || '#6b7280'
+                  });
+                }
+              });
+            }
           } else {
-            termsToDisplay = en.length > 0 ? en : (zh.length > 0 ? zh : legacy);
+            console.warn(`⚠️ 关键词层级 ${level} 的数据格式异常:`, data);
           }
+        });
+      } catch (e) {
+        console.warn('⚠️ 构建关键词列表失败:', e);
+      }
+      return out;
+    };
 
-          if (Array.isArray(termsToDisplay)) {
-            termsToDisplay.forEach((term: string) => {
-              if (term && typeof term === 'string' && term.trim()) {
-                newKeywords.push({
-                  term: term.trim(),
-                  level,
-                  weight: typeof data.weight === 'number' ? data.weight : 1.0,
-                  color: levelColors[level as keyof typeof levelColors] || '#6b7280'
-                });
-              }
-            });
-          }
-        } else {
-          console.warn(`⚠️ 关键词层级 ${level} 的数据格式异常:`, data);
-        }
-      });
+    // 分支 A：有分层关键词（新到或存量）→ 重建 zh/en 两套
+    if (currentHierarchicalKeywords) {
+      const zhList = buildListForLanguage(true);
+      const enList = buildListForLanguage(false);
+      const chosen = displayChinese ? zhList : enList;
+      setKeywords(chosen);
+      console.log(`✅ 成功解析 ${chosen.length} 个关键词 (${displayChinese ? '中文' : '英文'}模式)`);
 
-      setKeywords(newKeywords);
-      console.log(`✅ 成功解析 ${newKeywords.length} 个关键词 (${displayChinese ? '中文' : '英文'}模式)`);
-      
-      // 🔑 只有当有新传入的数据时才保存到存储（避免重复保存）
+      // 仅当本次传入了新的分层关键词时，保存到持久化（避免覆盖用户编辑历史）
       if (hierarchicalKeywords) {
-        console.log('💾 检测到新的关键词数据，保存到存储');
+        console.log('💾 检测到新的关键词数据，保存到存储（含按语言快照）');
         saveKeywordCloudData({
           hierarchicalKeywords,
-          expandedKeywords: newKeywords,
+          expandedKeywords: chosen,
+          expandedKeywordsByLang: { zh: zhList, en: enList },
           originalQuery: activeOriginalQuery
         });
-      } else if (keywordCloudData && newKeywords.length > 0) {
-        // 如果是从存储恢复的数据，确保当前显示的关键词与存储保持同步
-        console.log('🔄 从存储恢复数据，更新显示的关键词');
-        const updatedData = {
-          ...keywordCloudData,
-          expandedKeywords: newKeywords
-        };
-        setKeywordCloudData(updatedData);
-        // 静默更新存储（不打印保存日志）
-        try {
-          UserStorage.setUserData(USER_DATA_KEYS.KEYWORD_CLOUD, JSON.stringify(updatedData));
-        } catch (error) {
-          console.warn('⚠️ 更新关键词显示数据失败:', error);
-        }
+      } else if (!keywordCloudData?.expandedKeywordsByLang) {
+        // 若是从存储的分层结构首次重建，且之前没有按语言快照，也写入一份，便于切换与删除持久化
+        saveKeywordCloudData({
+          hierarchicalKeywords: currentHierarchicalKeywords,
+          expandedKeywords: chosen,
+          expandedKeywordsByLang: { zh: zhList, en: enList },
+          originalQuery: activeOriginalQuery
+        });
       }
-    } catch (error) {
-      console.error('❌ 解析关键词数据时出错:', error);
-      console.error('异常的关键词数据:', currentHierarchicalKeywords);
-      setKeywords([]); // 出错时清空关键词
+      return;
     }
+
+    // 分支 B：无分层数据但有旧版 expandedKeywords → 仅兼容显示（切换不生效）
+    if (Array.isArray(keywordCloudData?.expandedKeywords) && keywordCloudData!.expandedKeywords.length > 0) {
+      setKeywords(keywordCloudData!.expandedKeywords as KeywordItem[]);
+      console.log(`✅ 使用旧版 expandedKeywords 渲染 (${(keywordCloudData!.expandedKeywords as KeywordItem[]).length} 项)`);
+      return;
+    }
+
+    // 分支 C：无任何数据
+    console.log('❌ 没有可用的关键词数据 - 显示空状态');
+    setKeywords([]);
   }, [hierarchicalKeywords, keywordCloudData, displayChinese, activeHierarchicalKeywords, activeOriginalQuery]); // 优化依赖项
 
 
   // 删除关键词
   const removeKeyword = (index: number) => {
+    if (index < 0 || index >= keywords.length) {
+      console.warn('⚠️ 删除关键词索引无效:', index);
+      return;
+    }
     const updatedKeywords = keywords.filter((_, i) => i !== index);
     setKeywords(updatedKeywords);
-    
-    // 🔑 保存更新后的关键词云数据
-    saveKeywordCloudData({
-      hierarchicalKeywords: activeHierarchicalKeywords || null,
-      expandedKeywords: updatedKeywords,
-      originalQuery: activeOriginalQuery
-    });
+
+    // 🔑 保存更新后的关键词云数据（按语言保存以便切换保持删除状态）
+    if (keywordCloudData?.expandedKeywordsByLang) {
+      const byLang = keywordCloudData.expandedKeywordsByLang;
+      const newByLang = {
+        zh: displayChinese ? updatedKeywords : (byLang.zh || []),
+        en: !displayChinese ? updatedKeywords : (byLang.en || [])
+      };
+      saveKeywordCloudData({
+        hierarchicalKeywords: activeHierarchicalKeywords || null,
+        expandedKeywords: updatedKeywords, // 兼容字段（当前语言）
+        expandedKeywordsByLang: newByLang,
+        originalQuery: activeOriginalQuery
+      });
+    } else {
+      // 旧版兼容：仅保存单列表
+      saveKeywordCloudData({
+        hierarchicalKeywords: activeHierarchicalKeywords || null,
+        expandedKeywords: updatedKeywords,
+        originalQuery: activeOriginalQuery
+      });
+    }
   };
 
   // === 布尔检索式构建与复制 ===
