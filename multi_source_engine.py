@@ -1063,37 +1063,21 @@ class MultiSourceEngine:
         return unified_queries
     
     def _build_hierarchical_boolean_query(self, query: str, analysis: Optional[Dict] = None, use_fallback: bool = False, use_chinese: bool = False) -> str:
-        """构建4层权重映射的布尔查询，支持双语关键词智能选择
-        
-        布尔结构：
-        (exact_terms) AND 
-        (core_synonyms OR exact_terms) AND
-        (related_terms OR context_terms)
-        
-        如果use_fallback=True，则只使用exact_terms进行补充搜索
-        如果use_chinese=True，优先使用中文关键词
-        如果use_chinese=False，使用简化的英文查询策略
+        """构建将用于各源的布尔查询。
+
+        新策略（按需）：
+        - 若 analysis 中存在 optimized_boolean_query，则无条件优先返回该串（不区分中英文模式）。
+        - 若无 optimized_boolean_query：
+          - use_fallback=True 时仅用 exact_terms（按指定语言优先）
+          - use_chinese=True 时按 4 层 (OR) + 层间 AND 组合
+          - 否则回退到原始 query
         """
         try:
-            # 🔧 修复：当use_chinese=False时，使用简化策略，避免过于复杂的查询
-            if not use_chinese and analysis and analysis.get("hierarchical_keywords"):
-                logger.info("🎯 Eng模式：使用简化英文查询策略")
-                hierarchical_keywords = analysis["hierarchical_keywords"]
-                
-                # 只使用exact_terms，避免查询过于复杂
-                exact_terms_data = hierarchical_keywords.get("exact_terms", {})
-                exact_terms = exact_terms_data.get("english") or exact_terms_data.get("terms", [])
-                
-                if exact_terms and len(exact_terms) > 0:
-                    # 最多使用前3个最重要的术语，避免查询过长
-                    key_terms = exact_terms[:3]
-                    simplified_query = ' OR '.join([f'"{term}"' for term in key_terms])
-                    logger.info(f"🔧 Eng模式简化查询: {simplified_query}")
-                    return simplified_query
-                else:
-                    # 降级到原始查询
-                    logger.info("🔧 Eng模式降级到原始查询")
-                    return query
+            # 1) 优先使用 LLM 返回的优化布尔查询（统一入口，不区分语言）
+            if analysis and analysis.get("optimized_boolean_query"):
+                boolean_query = analysis["optimized_boolean_query"]
+                logger.info(f"🎯 使用LLM优化布尔查询: {boolean_query}")
+                return boolean_query
             
             # 如果是降级搜索，只使用exact_terms
             if use_fallback and analysis and analysis.get("hierarchical_keywords"):
@@ -1116,7 +1100,7 @@ class MultiSourceEngine:
                     logger.warning("⚠️ 没有exact_terms可用于降级查询，使用原查询")
                     return query
             
-            # 如果有LLM分析结果，构建4层权重布尔查询（仅用于中文模式）
+            # 2) 若无 optimized_boolean_query 且中文模式：构建4层权重布尔查询
             if use_chinese and analysis and analysis.get("hierarchical_keywords"):
                 hierarchical_keywords = analysis["hierarchical_keywords"]
                 
@@ -1148,13 +1132,7 @@ class MultiSourceEngine:
                     logger.warning("⚠️ 无法从层次关键词构建查询，使用原查询")
                     return query
             
-            # 如果有简单的优化查询，直接使用
-            elif analysis and analysis.get("optimized_boolean_query"):
-                boolean_query = analysis["optimized_boolean_query"]
-                logger.info(f"使用LLM优化布尔查询: {boolean_query}")
-                return boolean_query
-            
-            # 没有分析结果，使用原始查询
+            # 3) 没有分析结果或上述路径均不满足，使用原始查询
             else:
                 logger.info(f"使用原始查询: {query}")
                 return query

@@ -56,7 +56,6 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
   const navigate = useNavigate();
   const [keywords, setKeywords] = useState<KeywordItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [newKeyword, setNewKeyword] = useState('');
   
   // 🔑 关键词云数据持久化状态
   const [keywordCloudData, setKeywordCloudData] = useState<{
@@ -281,29 +280,6 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     }
   }, [hierarchicalKeywords, keywordCloudData, displayChinese, activeHierarchicalKeywords, activeOriginalQuery]); // 优化依赖项
 
-  // 添加自定义关键词
-  const addCustomKeyword = () => {
-    if (newKeyword.trim()) {
-      const newKeywordItem = {
-        term: newKeyword.trim(),
-        level: 'custom',
-        weight: 1.0,
-        color: '#6366f1',
-        editable: true
-      };
-      
-      const updatedKeywords = [...keywords, newKeywordItem];
-      setKeywords(updatedKeywords);
-      setNewKeyword('');
-      
-      // 🔑 保存更新后的关键词云数据
-      saveKeywordCloudData({
-        hierarchicalKeywords: activeHierarchicalKeywords || null,
-        expandedKeywords: updatedKeywords,
-        originalQuery: activeOriginalQuery
-      });
-    }
-  };
 
   // 删除关键词
   const removeKeyword = (index: number) => {
@@ -316,6 +292,97 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
       expandedKeywords: updatedKeywords,
       originalQuery: activeOriginalQuery
     });
+  };
+
+  // === 布尔检索式构建与复制 ===
+  const quoteIfNeeded = (term: string): string => {
+    const t = (term || '').trim();
+    if (!t) return '';
+    // 含空格/连字符/特殊符号时加双引号；中文可不强制，但加引号更稳妥
+    if (/\s|[()]/.test(t) || /[\u4e00-\u9fa5]/.test(t) || /[\W_]/.test(t)) {
+      // 简单转义双引号
+      const escaped = t.replace(/"/g, '\\"');
+      return `"${escaped}"`;
+    }
+    return t;
+  };
+
+  const buildBooleanQuery = (mode: 'wos' | 'generic' = 'wos'): string => {
+    // 基于当前显示的关键词 keywords 分组构建
+    const order: Array<keyof typeof levelNames> = [
+      'exact_terms',
+      'core_synonyms',
+      'related_terms',
+      'context_terms'
+    ];
+
+    const seen = new Set<string>();
+    const groups: string[] = [];
+
+    for (const level of order) {
+      const terms = keywords
+        .filter(k => k.level === level)
+        .map(k => (k.term || '').trim())
+        .filter(Boolean)
+        .filter(t => {
+          const key = t.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+      if (terms.length === 0) continue;
+
+      const orExpr = terms.map(quoteIfNeeded).join(' OR ');
+      if (mode === 'wos') {
+        groups.push(`TS=(${orExpr})`);
+      } else {
+        groups.push(`(${orExpr})`);
+      }
+    }
+
+    // 若所有层级为空，返回空字符串
+    if (groups.length === 0) return '';
+    return groups.join(' AND ');
+  };
+
+  const [copyTip, setCopyTip] = useState<string>('');
+  const copyToClipboard = async (text: string) => {
+    if (!text) return false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // 回退方案
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      return true;
+    } catch (e) {
+      console.warn('复制到剪贴板失败:', e);
+      return false;
+    }
+  };
+
+  const handleCopyBoolean = async (mode: 'wos' | 'generic' = 'generic') => {
+    const q = buildBooleanQuery(mode);
+    if (!q) {
+      setCopyTip('没有可用关键词，无法生成检索式');
+      setTimeout(() => setCopyTip(''), 1800);
+      return;
+    }
+    const ok = await copyToClipboard(q);
+    if (ok) {
+      setCopyTip(`已复制布尔检索式（基于${displayChinese ? '中文' : '英文'}关键词）`);
+      setTimeout(() => setCopyTip(''), 2000);
+    } else {
+      setCopyTip('复制失败，请手动选择文本复制');
+      setTimeout(() => setCopyTip(''), 2000);
+    }
   };
 
   // 执行搜索
@@ -1072,32 +1139,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             </div>
           </div>
           
-          {/* 清除按钮 */}
-          {keywords.length > 0 && (
-            <button
-              onClick={clearKeywordCloudData}
-              style={{
-                padding: '6px 12px',
-                fontSize: '12px',
-                border: '1px solid #ef4444',
-                borderRadius: '6px',
-                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                color: '#ef4444',
-                cursor: 'pointer',
-                fontWeight: '500',
-                transition: 'all 0.2s'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.2)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-              }}
-              title="清除所有关键词云数据"
-            >
-              Clear All
-            </button>
-          )}
+          {/* 清除按钮已移除，根据需求隐藏此入口 */}
         </div>
 
         {/* 关键词显示区域 */}
@@ -1340,46 +1382,33 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           )}
         </div>
 
-        {/* 添加自定义关键词 */}
-        <div style={{ marginBottom: '20px' }}>
-          <div style={{
-            display: 'flex',
-            gap: '8px',
-            marginBottom: '8px'
-          }}>
-            <input
-              type="text"
-              value={newKeyword}
-              onChange={(e) => setNewKeyword(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && addCustomKeyword()}
-              placeholder="Add custom keyword..."
-              style={{
-                flex: 1,
-                padding: '8px 12px',
-                fontSize: '13px',
-                border: theme === 'dark' ? '1px solid #333' : '1px solid #d6d3d1',
-                borderRadius: '6px',
-                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f7f5eb',
-                color: theme === 'dark' ? '#fff' : '#1f2937',
-                outline: 'none'
-              }}
-            />
-            <button
-              onClick={addCustomKeyword}
-              style={{
-                padding: '8px 16px',
-                fontSize: '13px',
-                border: '1px solid #3bb0e6',
-                borderRadius: '6px',
-                backgroundColor: 'rgba(59,176,230,0.1)',
-                color: '#3bb0e6',
-                cursor: 'pointer',
-                fontWeight: '600'
-              }}
-            >
-              Add
-            </button>
-          </div>
+        {/* 添加自定义关键词区域已移除 */}
+
+        {/* 布尔检索式复制按钮区 */}
+        <div style={{ marginBottom: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            onClick={() => handleCopyBoolean('generic')}
+            disabled={keywords.length === 0}
+            style={{
+              padding: '8px 12px',
+              fontSize: '12px',
+              border: '1px solid #3b82f6',
+              borderRadius: '6px',
+              backgroundColor: keywords.length > 0 ? 'rgba(59,130,246,0.1)' : '#333',
+              color: keywords.length > 0 ? '#3b82f6' : '#999',
+              cursor: keywords.length > 0 ? 'pointer' : 'not-allowed',
+              fontWeight: 600
+            }}
+            title="复制布尔检索式，例如 (A OR B) AND (C OR D)"
+          >
+            复制布尔检索式
+          </button>
+          {!!copyTip && (
+            <span style={{
+              fontSize: '12px',
+              color: '#f59e0b'
+            }}>{copyTip}</span>
+          )}
         </div>
 
         {/* 搜索按钮 */}
