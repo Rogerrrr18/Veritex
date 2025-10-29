@@ -39,6 +39,7 @@ interface SearchSettings {
   yearTo: string;
   sources: string[];
   useChinese?: boolean; // 新增：是否使用中文模式
+  precision?: 'high' | 'medium' | 'low'; // 新增：搜索精度档位
 }
 
 interface KeywordItem {
@@ -100,7 +101,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
           yearFrom: typeof parsed.yearFrom === 'string' ? parsed.yearFrom : (parsed.yearFrom ? String(parsed.yearFrom) : ''),
           yearTo: typeof parsed.yearTo === 'string' ? parsed.yearTo : (parsed.yearTo ? String(parsed.yearTo) : ''),
           sources: Array.isArray(parsed.sources) && parsed.sources.length > 0 ? parsed.sources : ['scholarly'],
-          useChinese: typeof parsed.useChinese === 'boolean' ? parsed.useChinese : isChinese
+          useChinese: typeof parsed.useChinese === 'boolean' ? parsed.useChinese : isChinese,
+          precision: (parsed.precision === 'high' || parsed.precision === 'low' || parsed.precision === 'medium') ? parsed.precision : 'medium'
         }
       }
       return {
@@ -108,7 +110,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         yearFrom: '',
         yearTo: '',
         sources: ['scholarly'], // 默认只选择Google Scholar
-        useChinese: isChinese
+        useChinese: isChinese,
+        precision: 'medium'
       };
     } catch {
       // 降级到默认配置
@@ -119,7 +122,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         yearFrom: '',
         yearTo: '',
         sources: ['scholarly'],
-        useChinese: isChinese
+        useChinese: isChinese,
+        precision: 'medium'
       };
     }
   });
@@ -132,7 +136,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         yearFrom: searchSettings.yearFrom,
         yearTo: searchSettings.yearTo,
         sources: searchSettings.sources,
-        useChinese: searchSettings.useChinese
+        useChinese: searchSettings.useChinese,
+        precision: searchSettings.precision || 'medium'
       };
       UserStorage.setUserData(USER_DATA_KEYS.USER_SETTINGS, JSON.stringify(toSave));
     } catch (e) {
@@ -307,43 +312,41 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     return t;
   };
 
-  const buildBooleanQuery = (mode: 'wos' | 'generic' = 'wos'): string => {
-    // 基于当前显示的关键词 keywords 分组构建
-    const order: Array<keyof typeof levelNames> = [
-      'exact_terms',
-      'core_synonyms',
-      'related_terms',
-      'context_terms'
-    ];
+  const buildBooleanByPrecision = (precision: 'high'|'medium'|'low'): string => {
+    // 按层级收集并全局去重（保持顺序）
+    const exact = keywords.filter(k => k.level === 'exact_terms').map(k => (k.term||'').trim()).filter(Boolean);
+    const core = keywords.filter(k => k.level === 'core_synonyms').map(k => (k.term||'').trim()).filter(Boolean);
+    const related = keywords.filter(k => k.level === 'related_terms').map(k => (k.term||'').trim()).filter(Boolean);
+    const context = keywords.filter(k => k.level === 'context_terms').map(k => (k.term||'').trim()).filter(Boolean);
 
-    const seen = new Set<string>();
-    const groups: string[] = [];
+    const dedup = (arr: string[], seen: Set<string>) => arr.filter(t => { const key=t.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
+    const seenAll = new Set<string>();
+    const exactU = dedup(exact, seenAll);
+    const coreU = dedup(core, seenAll);
+    const relatedU = dedup(related, seenAll);
+    const contextU = dedup(context, seenAll);
 
-    for (const level of order) {
-      const terms = keywords
-        .filter(k => k.level === level)
-        .map(k => (k.term || '').trim())
-        .filter(Boolean)
-        .filter(t => {
-          const key = t.toLowerCase();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
+    const orGroup = (arr: string[]) => arr.length ? `(${arr.map(quoteIfNeeded).join(' OR ')})` : '';
 
-      if (terms.length === 0) continue;
-
-      const orExpr = terms.map(quoteIfNeeded).join(' OR ');
-      if (mode === 'wos') {
-        groups.push(`TS=(${orExpr})`);
-      } else {
-        groups.push(`(${orExpr})`);
-      }
+    if (precision === 'high') {
+      const partExact = orGroup(exactU);
+      const partCore = orGroup(coreU);
+      const ext = [...relatedU, ...contextU];
+      const partExt = orGroup(ext);
+      const parts = [partExact, partCore, partExt].filter(Boolean);
+      return parts.join(' AND ');
     }
 
-    // 若所有层级为空，返回空字符串
-    if (groups.length === 0) return '';
-    return groups.join(' AND ');
+    if (precision === 'medium') {
+      const group1 = orGroup([...exactU, ...coreU]);
+      const group2 = orGroup([...relatedU, ...contextU]);
+      const parts = [group1, group2].filter(Boolean);
+      return parts.join(' AND ');
+    }
+
+    // low
+    const all = [...exactU, ...coreU, ...relatedU, ...contextU];
+    return orGroup(all);
   };
 
   const [copyTip, setCopyTip] = useState<string>('');
@@ -368,8 +371,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     }
   };
 
-  const handleCopyBoolean = async (mode: 'wos' | 'generic' = 'generic') => {
-    const q = buildBooleanQuery(mode);
+  const handleCopyBoolean = async () => {
+    const q = buildBooleanByPrecision(searchSettings.precision || 'medium');
     if (!q) {
       setCopyTip('没有可用关键词，无法生成检索式');
       setTimeout(() => setCopyTip(''), 1800);
@@ -395,8 +398,10 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
     setIsLoading(true);
 
     try {
-      // 构建搜索查询
-      const searchQuery = keywords.map(k => k.term).join(' OR ');
+      // 基于精度档位构建布尔查询
+      const precision = searchSettings.precision || 'medium';
+      const searchQuery = buildBooleanByPrecision(precision) || keywords.map(k => k.term).join(' OR ');
+      const strategy = precision === 'high' ? 'precision_focused' : (precision === 'low' ? 'recall_focused' : 'balanced');
 
       // 上一版做法：按当前展示的关键词构造预扩展（中英对称，不合并原始层级）
       const preExpandedKeywords = {
@@ -422,6 +427,8 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             weight: 0.4
           }
         },
+        optimized_boolean_query: searchQuery,
+        search_strategy: strategy,
         domain: 'academic_research',
         core_concepts: keywords.map(k => k.term),
         useChinese: searchSettings.useChinese
@@ -790,6 +797,41 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
                 </button>
               </div>
               
+              {/* 搜索精度选择条（空态视图） */}
+              <div style={{ marginTop: '10px' }}>
+                <label style={{
+                  display: 'block',
+                  fontSize: '12px',
+                  color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+                  marginBottom: '6px'
+                }}>
+                  Search Precision
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '11px', color: theme === 'dark' ? '#9ca3af' : '#6b7280' }}>低</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={3}
+                    step={1}
+                    value={searchSettings.precision === 'high' ? 3 : searchSettings.precision === 'low' ? 1 : 2}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value);
+                      const map = v === 3 ? 'high' : v === 1 ? 'low' : 'medium';
+                      setSearchSettings(prev => ({ ...prev, precision: map }));
+                    }}
+                    className="precision-slider"
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: '11px', color: theme === 'dark' ? '#9ca3af' : '#6b7280' }}>高</span>
+                </div>
+                <div style={{ marginTop: '4px', fontSize: '11px', color: theme === 'dark' ? '#6b7280' : '#9ca3af' }}>
+                  {searchSettings.precision === 'high' && '(Exact) AND (Core) AND (Related OR Context)'}
+                  {searchSettings.precision === 'medium' && '(Exact OR Core) AND (Related OR Context)'}
+                  {searchSettings.precision === 'low' && '(Exact OR Core OR Related OR Context)'}
+                </div>
+              </div>
+
               {/* 显示当前选择的数据源和模式 */}
               <div style={{
                 marginTop: '6px',
@@ -1107,6 +1149,40 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             </div>
             
           </div>
+          {/* 搜索精度选择条（主视图） */}
+          <div style={{ marginTop: '10px' }}>
+            <label style={{
+              display: 'block',
+              fontSize: '12px',
+              color: theme === 'dark' ? '#a1a1aa' : '#6b7280',
+              marginBottom: '6px'
+            }}>
+              Search Precision
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', color: theme === 'dark' ? '#9ca3af' : '#6b7280' }}>低</span>
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={1}
+                value={searchSettings.precision === 'high' ? 3 : searchSettings.precision === 'low' ? 1 : 2}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value);
+                  const map = v === 3 ? 'high' : v === 1 ? 'low' : 'medium';
+                  setSearchSettings(prev => ({ ...prev, precision: map }));
+                }}
+                className="precision-slider"
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: '11px', color: theme === 'dark' ? '#9ca3af' : '#6b7280' }}>高</span>
+            </div>
+            <div style={{ marginTop: '4px', fontSize: '11px', color: theme === 'dark' ? '#6b7280' : '#9ca3af' }}>
+              {searchSettings.precision === 'high' && '(Exact) AND (Core) AND (Related OR Context)'}
+              {searchSettings.precision === 'medium' && '(Exact OR Core) AND (Related OR Context)'}
+              {searchSettings.precision === 'low' && '(Exact OR Core OR Related OR Context)'}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1387,7 +1463,7 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
         {/* 布尔检索式复制按钮区 */}
         <div style={{ marginBottom: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button
-            onClick={() => handleCopyBoolean('generic')}
+            onClick={handleCopyBoolean}
             disabled={keywords.length === 0}
             style={{
               padding: '8px 12px',
@@ -1460,6 +1536,54 @@ const KeywordCloudWidget: React.FC<KeywordCloudWidgetProps> = ({
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
           }
+
+          /* ===== 自定义精度滑块样式 ===== */
+          .precision-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 16px; /* 提供可点击区域，但轨道仅2px */
+            background: transparent;
+            outline: none;
+          }
+          /* WebKit 轨道 */
+          .precision-slider::-webkit-slider-runnable-track {
+            height: 2px;
+            border-radius: 1px;
+            background: linear-gradient(to right, ${theme === 'dark' ? 'rgba(120,120,120,0)' : 'rgba(160,160,160,0)'} 0%, ${theme === 'dark' ? 'rgba(120,120,120,0.8)' : 'rgba(160,160,160,0.9)'} 12%, ${theme === 'dark' ? 'rgba(130,130,130,1)' : 'rgba(190,190,190,1)'} 50%, ${theme === 'dark' ? 'rgba(120,120,120,0.8)' : 'rgba(160,160,160,0.9)'} 88%, ${theme === 'dark' ? 'rgba(120,120,120,0)' : 'rgba(160,160,160,0)'} 100%);
+          }
+          /* WebKit 拇指 */
+          .precision-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #3b82f6; /* 纯色球体 */
+            border: none;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+            margin-top: -6px; /* 垂直居中到2px轨道: (14-2)/2 */
+            cursor: pointer;
+          }
+          .precision-slider:active::-webkit-slider-thumb { box-shadow: 0 0 0 5px rgba(59,130,246,0.22); }
+
+          /* Firefox 轨道 */
+          .precision-slider::-moz-range-track {
+            height: 2px;
+            border-radius: 1px;
+            background: linear-gradient(to right, ${theme === 'dark' ? 'rgba(120,120,120,0)' : 'rgba(160,160,160,0)'} 0%, ${theme === 'dark' ? 'rgba(120,120,120,0.8)' : 'rgba(160,160,160,0.9)'} 12%, ${theme === 'dark' ? 'rgba(130,130,130,1)' : 'rgba(190,190,190,1)'} 50%, ${theme === 'dark' ? 'rgba(120,120,120,0.8)' : 'rgba(160,160,160,0.9)'} 88%, ${theme === 'dark' ? 'rgba(120,120,120,0)' : 'rgba(160,160,160,0)'} 100%);
+          }
+          /* Firefox 拇指 */
+          .precision-slider::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #3b82f6;
+            border: none;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+            cursor: pointer;
+          }
+          .precision-slider:active::-moz-range-thumb { box-shadow: 0 0 0 5px rgba(59,130,246,0.22); }
         `}
       </style>
     </div>

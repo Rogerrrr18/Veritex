@@ -1038,10 +1038,18 @@ async def search_papers_api(req: SearchRequest):
                     # 使用LLM返回的优化布尔查询和搜索策略
                     hierarchical = req.expanded_keywords['hierarchical_keywords']
                     
+                    # 统一准备 analysis_data（供各搜索源适配使用）
+                    analysis_data = {
+                        "hierarchical_keywords": hierarchical,
+                        "search_strategy": req.expanded_keywords.get('search_strategy', 'balanced')
+                    }
+
                     # 优先使用LLM提供的优化布尔查询
                     if req.expanded_keywords.get('optimized_boolean_query'):
                         search_query = req.expanded_keywords['optimized_boolean_query']
                         search_strategy = req.expanded_keywords.get('search_strategy', 'balanced')
+                        # 将 optimized_boolean_query 同步写入 analysis，便于下游统一处理
+                        analysis_data["optimized_boolean_query"] = search_query
                         logger.info(f"🎯 使用LLM优化布尔查询: {search_query}")
                         logger.info(f"📈 搜索策略: {search_strategy}")
                     else:
@@ -1051,13 +1059,7 @@ async def search_papers_api(req: SearchRequest):
                         # 使用paper_search_workflow中的智能构建逻辑
                         from langchain_workflows.paper_search_workflow import IntelligentPaperSearchAgent
                         temp_agent = IntelligentPaperSearchAgent()
-                        
-                        # 构建分析数据结构
-                        analysis_data = {
-                            "hierarchical_keywords": hierarchical,
-                            "search_strategy": req.expanded_keywords.get('search_strategy', 'balanced')
-                        }
-                        
+                        # 构建权重驱动的查询串
                         search_query = temp_agent._build_search_query(req.query, analysis_data)
                         logger.info(f"🔧 权重驱动查询构建: {search_query}")
                     
