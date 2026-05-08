@@ -21,7 +21,7 @@
 - LLM 适配器禁用环境代理：`trust_env=False`，避免本机代理污染模型调用。
 - `run_dev.sh` 支持从任意目录启动，并允许透传端口：`bash run_dev.sh --port 8012`。
 - Vite 代理支持 `VITE_BACKEND_URL`，本地端口冲突时可快速切换后端。
-- 新增项目内 skill：`.codex/skills/veritex-model-api/SKILL.md`，供以后 agent 复用模型 API 排障流程。
+- 新增产品级 agent skill：`.codex/skills/veritex-research/SKILL.md`，让任意 agent 复用 Veritex 文献检索能力。
 
 ## 系统要求
 
@@ -95,52 +95,81 @@ npm run dev
 
 ## Agent Skill
 
-本仓库内置了一个可复用 skill：
+本仓库内置了两个 skill：
 
 ```text
-.codex/skills/veritex-model-api/SKILL.md
+.codex/skills/veritex-research/SKILL.md      # 给任意 agent 复用 Veritex 产品能力
+.codex/skills/veritex-model-api/SKILL.md    # 给 Veritex 开发者排查模型 API 配置
 ```
 
-### 拉取并安装 Skill
+### 给 OpenClaw/Codex 安装 Veritex 产品 Skill
 
-如果你已经克隆了 Veritex 仓库，可以把 skill 安装到本机 Codex skills 目录：
+其他用户不需要配置 Veritex 的模型 API，也不需要知道 OpenAI/Ark/Doubao 等底层 key。安装 `veritex-research` 后，agent 会把文献检索、关键词扩展、论文聚类和研究总结任务交给 Veritex 产品能力处理。
+
+一行安装命令：
 
 ```bash
-git clone https://github.com/Rogerrrr18/Veritex.git
+tmp="$(mktemp -d)" && git clone --depth 1 --branch beta2 --filter=blob:none --sparse https://github.com/Rogerrrr18/Veritex.git "$tmp/Veritex" && cd "$tmp/Veritex" && git sparse-checkout set .codex/skills/veritex-research && mkdir -p "${OPENCLAW_SKILLS_DIR:-$HOME/.codex/skills}" && rsync -a .codex/skills/veritex-research "${OPENCLAW_SKILLS_DIR:-$HOME/.codex/skills}/"
+```
+
+默认安装目录是：
+
+```text
+~/.codex/skills/veritex-research
+```
+
+如果你的 OpenClaw 使用独立 skills 目录，安装前指定 `OPENCLAW_SKILLS_DIR`：
+
+```bash
+export OPENCLAW_SKILLS_DIR="$HOME/.openclaw/skills"
+tmp="$(mktemp -d)" && git clone --depth 1 --branch beta2 --filter=blob:none --sparse https://github.com/Rogerrrr18/Veritex.git "$tmp/Veritex" && cd "$tmp/Veritex" && git sparse-checkout set .codex/skills/veritex-research && mkdir -p "$OPENCLAW_SKILLS_DIR" && rsync -a .codex/skills/veritex-research "$OPENCLAW_SKILLS_DIR/"
+```
+
+如果你已经克隆了 Veritex 仓库，可以本地安装：
+
+```bash
+git clone --branch beta2 https://github.com/Rogerrrr18/Veritex.git
 cd Veritex
 mkdir -p ~/.codex/skills
-rsync -a .codex/skills/veritex-model-api ~/.codex/skills/
+rsync -a .codex/skills/veritex-research ~/.codex/skills/
 ```
 
-如果你只想更新这个 skill，进入已有仓库后执行：
+更新已安装的产品 skill：
 
 ```bash
+cd Veritex
 git pull
 mkdir -p ~/.codex/skills
-rsync -a .codex/skills/veritex-model-api ~/.codex/skills/
+rsync -a .codex/skills/veritex-research ~/.codex/skills/
 ```
 
 安装完成后，新开的 Codex/agent 会在可用 skills 中看到：
 
 ```text
-veritex-model-api
+veritex-research
 ```
 
-你也可以不全局安装，直接让 agent 在当前项目内读取：
+使用方式：
 
 ```text
-请读取 .codex/skills/veritex-model-api/SKILL.md，并使用 veritex-model-api skill 检查模型 API 配置。
+使用 veritex-research skill，帮我检索近五年关于「graph neural networks for drug discovery」的关键论文，并总结研究脉络。
 ```
 
-当以后任何 agent 需要处理以下任务时，应优先读取这个 skill：
+这个产品 skill 适合：
 
-- 配置或迁移 Veritex 模型 API
-- 判断 OpenAI-compatible endpoint 是否应该走 `OpenAIAdapter`
-- 修复 `ACTIVE_MODEL`、`base_url`、`model_name` 不一致
-- 移除代理导致的 `socks5h`、`All connection attempts failed` 等问题
-- 用项目自己的 `llm_interface` 做端到端模型验证
+- 语义化文献检索
+- 学术关键词扩展
+- 论文列表生成与初筛
+- 研究主题聚类
+- 文献脉络和下一步研究方向总结
 
-推荐触发语：`使用 veritex-model-api skill 检查模型 API 配置`。
+如果 agent 没有拿到 Veritex 产品入口，它会只询问 Veritex 的产品 URL 或 API 地址；不会要求用户配置底层模型 API。
+
+内部开发者排查模型配置时，再使用：
+
+```text
+使用 veritex-model-api skill 检查模型 API 配置。
+```
 
 ## 🎯 使用指南
 
