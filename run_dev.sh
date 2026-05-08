@@ -7,9 +7,19 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1
 
-exec python -m uvicorn backend:app \
-  --reload \
-  --log-config logging.yaml \
-  --log-level debug \
-  --access-log
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
 
+UVICORN_ARGS=(
+  backend:app
+  --app-dir "$ROOT_DIR"
+  --reload
+  --log-level debug
+  --access-log
+)
+
+if [[ -f "$ROOT_DIR/logging.yaml" ]]; then
+  UVICORN_ARGS+=(--log-config "$ROOT_DIR/logging.yaml")
+fi
+
+python -m uvicorn "${UVICORN_ARGS[@]}" "$@"

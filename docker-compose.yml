@@ -1,0 +1,43 @@
+version: "3.9"
+
+name: veritex
+
+services:
+  veritex-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        # 使用可替换的公共基础镜像以提升可达性
+        BASE_IMAGE_PY: public.ecr.aws/docker/library/python:3.11-slim
+        # 可选：Debian 镜像
+        DEBIAN_MIRROR: mirrors.ustc.edu.cn
+    image: veritex-backend:3.0.7
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  veritex-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # 使用公共镜像仓库与国内加速
+        BASE_IMAGE_NODE: public.ecr.aws/docker/library/node:20-bullseye-slim
+        BASE_IMAGE_NGINX: public.ecr.aws/docker/library/nginx:1.27-alpine
+        NPM_REGISTRY: https://registry.npmmirror.com
+        # 关键：选择带后端代理规则的 nginx 配置
+        NGINX_CONF: nginx.conf
+    image: veritex-frontend:3.0.7
+    ports:
+      - "8080:80"
+    depends_on:
+      veritex-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  default:
+    name: veritex-net

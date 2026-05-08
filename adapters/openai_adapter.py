@@ -17,14 +17,16 @@ class OpenAIAdapter(BaseLLMAdapter):
     
     def __init__(self, config: ModelConfig):
         super().__init__(config)
+        self.base_url = config.base_url.rstrip("/")
         self.headers = {
             "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json"
         }
         # 创建异步HTTP客户端，使用连接池
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(config.timeout),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            timeout=httpx.Timeout(config.timeout or 120.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            trust_env=False
         )
     
     async def chat_completion(
@@ -48,7 +50,7 @@ class OpenAIAdapter(BaseLLMAdapter):
         
         try:
             response = await self.client.post(
-                f"{self.config.base_url}/chat/completions",
+                f"{self.base_url}/chat/completions",
                 headers=self.headers,
                 json=payload
             )

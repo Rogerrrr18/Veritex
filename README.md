@@ -1,43 +1,36 @@
-# Veritex Beta3 - 智能学术文献搜索系统
+# Veritex
 
-基于AI驱动的全学科学术文献搜索引擎，集成多数据源并行搜索、智能关键词扩展和智能源过滤机制。
+**Veritex 是一个面向研究者、学生和知识工作者的 AI-native 文献检索工作台。**
 
-**最新更新 (2025-09-23)**: 
-- ✅ 重大突破：智能源过滤机制上线，保持用户选择源主导地位的同时智能保留高质量补偿搜索结果
-- ✅ 质量评估系统：基于引用数、年份、相关性的综合评分筛选补偿结果
-- ✅ 增强日志记录：详细展示各搜索源的贡献统计和构成比例
-- ✅ 引用数排序功能：报告页面支持升降序筛选，提升用户体验
-- ✅ 项目清理：删除临时测试脚本，优化代码结构
+它不是传统关键词搜索框，而是一套“语义理解 -> 查询重写 -> 多源检索 -> 质量排序 -> 对话式解释”的研究基础设施。你可以用自然语言描述一个研究问题，Veritex 会自动拆解学科语境、生成更适合数据库的检索表达，并在 ScholarDock、arXiv、Crossref 等来源中并行检索，最终把结果组织成更适合阅读、比较和继续追问的知识界面。
 
-## 🚀 核心特性
+## 核心能力
 
-### 🔍 智能搜索
-- **智能源过滤**: 用户选择源100%保留，补偿搜索源基于质量评估选择性保留（最多25%占比）
-- **质量评估系统**: 综合引用数(40%) + 年份(30%) + 相关性(30%)的智能评分
-- **多学科支持**: 智能识别10+学科领域并自适应关键词扩展
-- **多源并行**: ScholarDock + arXiv + Crossref等高质量数据源
-- **补偿搜索**: 自动启动备用数据源，确保搜索覆盖面
+- **语义驱动检索**：把模糊问题转成可执行的学术检索策略，而不是只做字符串匹配。
+- **多源并行搜索**：聚合 ScholarDock、arXiv、Crossref 等数据源，兼顾覆盖面和响应速度。
+- **智能关键词扩展**：按精确术语、核心同义词、相关概念、上下文术语分层扩展查询。
+- **质量感知排序**：综合引用数、年份、相关性和元数据完整度筛选结果。
+- **对话式研究流**：支持边搜索边追问，让文献检索从一次性搜索变成连续研究过程。
+- **OpenAI-compatible 模型接入**：支持通过 `/v1/chat/completions` 兼容接口接入第三方模型服务。
+- **工程化交付**：FastAPI 后端、React/Vite 前端、Docker 部署文件和可复用 agent skill 已就绪。
 
-### 🤖 AI工作流
-- **智能对话**: 集成LangGraph工作流，自动判断学术查询vs闲聊
-- **关键词扩展**: 4层权重映射布尔查询（精确术语/核心同义/相关概念/上下文术语）
-- **快速预筛选**: 避免不必要的LLM调用，提升响应速度
-- **关键词复用**: 减少重复分析，优化token消耗
+## 近期更新
 
-### 💻 现代架构
-- **后端**: FastAPI异步架构，支持高并发
-- **前端**: React + TypeScript响应式设计，支持移动端
-- **性能监控**: 实时统计搜索成功率和响应时间
-- **数据透明**: 详细的源贡献统计和过滤过程记录
+- 模型层切换为 OpenAI-compatible 优先路径：`ACTIVE_MODEL=openai`。
+- 兼容旧 `ARK_*` 环境变量：当 `ARK_BASE_URL` 以 `/v1` 结尾时自动走 OpenAI 适配器。
+- LLM 适配器禁用环境代理：`trust_env=False`，避免本机代理污染模型调用。
+- `run_dev.sh` 支持从任意目录启动，并允许透传端口：`bash run_dev.sh --port 8012`。
+- Vite 代理支持 `VITE_BACKEND_URL`，本地端口冲突时可快速切换后端。
+- 新增项目内 skill：`.codex/skills/veritex-model-api/SKILL.md`，供以后 agent 复用模型 API 排障流程。
 
-## 📋 系统要求
+## 系统要求
 
 - Python 3.9+
 - Node.js 16+
-- LLM API密钥 (OpenAI/Anthropic/Groq)
+- OpenAI-compatible LLM API key
 - 推荐: 8GB+ 内存，SSD存储
 
-## 🔧 快速开始
+## 快速开始
 
 ### 1. 环境配置
 
@@ -48,30 +41,20 @@ cp .env.example .env
 
 编辑 `.env` 文件：
 ```env
-# LLM API配置 (选择其一)
-OPENAI_API_KEY=your_openai_key
-ANTHROPIC_API_KEY=your_anthropic_key  
-GROQ_API_KEY=your_groq_key
+ACTIVE_MODEL=openai
+
+# OpenAI-compatible 模型配置
+ARK_API_KEY=your_model_api_key
+ARK_BASE_URL=https://your-provider.example/v1/
+ARK_MODEL_NAME=your-model-name
+ARK_TEMPERATURE=0.3
+ARK_MAX_TOKENS=2000
 
 # 数据源控制
-GOOGLE_SCHOLAR_ENABLED=true
-SEMANTIC_SCHOLAR_ENABLED=true
+SCHOLAR_DOCK_ENABLED=true
 ARXIV_ENABLED=true
-
-# 语义搜索配置
-ENABLE_SEMANTIC_SEARCH=true
-SEMANTIC_THRESHOLD=0.6
-SEMANTIC_TOP_K=100
-
-# 可选配置
-PUBMED_API_KEY=disabled
-CROSSREF_ENABLED=false
+CROSSREF_ENABLED=true
 ```
-
-**API密钥获取**:
-- OpenAI: https://platform.openai.com/api-keys
-- Anthropic: https://console.anthropic.com/
-- Groq: https://console.groq.com/
 
 ### 2. 后端启动
 
@@ -80,15 +63,26 @@ CROSSREF_ENABLED=false
 pip install -r requirements.txt
 
 # 启动后端服务
-python -m uvicorn backend:app --reload
+bash run_dev.sh --port 8012
 ```
 
-验证后端：http://127.0.0.1:8000/docs
+验证后端：http://127.0.0.1:8012/docs
+
+验证模型 API：
+
+```bash
+python -c 'import asyncio; from llm_interface import get_universal_llm; ns={}; exec("async def main():\n    llm = await get_universal_llm()\n    print(llm.get_model_info())\n    r = await llm.chat_completion([{\"role\": \"user\", \"content\": \"只回复OK\"}], max_tokens=8)\n    print(\"RESULT:\", r)\n    await llm.close()", globals(), ns); asyncio.run(ns["main"]())'
+```
+
+成功时应看到 `RESULT: OK` 或等价短回复。
 
 ### 3. 前端启动
 
 ```bash
 cd frontend
+
+# 如果后端不是8000，在 frontend/.env 中设置：
+# VITE_BACKEND_URL=http://127.0.0.1:8012
 
 # 安装依赖
 npm install
@@ -98,6 +92,24 @@ npm run dev
 ```
 
 访问应用：http://localhost:5173
+
+## Agent Skill
+
+本仓库内置了一个可复用 skill：
+
+```text
+.codex/skills/veritex-model-api/SKILL.md
+```
+
+当以后任何 agent 需要处理以下任务时，应优先读取这个 skill：
+
+- 配置或迁移 Veritex 模型 API
+- 判断 OpenAI-compatible endpoint 是否应该走 `OpenAIAdapter`
+- 修复 `ACTIVE_MODEL`、`base_url`、`model_name` 不一致
+- 移除代理导致的 `socks5h`、`All connection attempts failed` 等问题
+- 用项目自己的 `llm_interface` 做端到端模型验证
+
+推荐触发语：`使用 veritex-model-api skill 检查模型 API 配置`。
 
 ## 🎯 使用指南
 
@@ -124,8 +136,8 @@ Veritex Beta3/
 ├── 后端服务
 │   ├── backend.py                    # FastAPI主服务
 │   ├── multi_source_engine.py        # 多源搜索引擎
-│   ├── semantic_search_engine.py     # 语义搜索增强
 │   ├── llm_interface.py              # 统一LLM接口
+│   ├── model_config.py               # 模型配置管理
 │   └── performance_monitor.py        # 性能监控
 ├── AI工作流
 │   └── langchain_workflows/          # LangGraph智能工作流

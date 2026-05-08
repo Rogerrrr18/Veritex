@@ -1,0 +1,17 @@
+debug = false
+
+[registry."docker.io"]
+  mirrors = [
+    "https://docker.m.daocloud.io",
+    "https://hub-mirror.c.163.com",
+    "https://mirror.baidubce.com",
+    "https://dockerproxy.com"
+  ]
+
+[registry."registry-1.docker.io"]
+  mirrors = [
+    "https://docker.m.daocloud.io",
+    "https://hub-mirror.c.163.com",
+    "https://mirror.baidubce.com",
+    "https://dockerproxy.com"
+  ]

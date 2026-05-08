@@ -36,7 +36,7 @@ except ImportError as e:
 app = FastAPI(
     title="Paper God API - 智能对话版",
     description="学术文献智能搜索系统 - 集成LLM对话与专业关键词扩展",
-    version="3.0.6"
+    version="3.0.7"
 )
 
 app.add_middleware(
@@ -1222,7 +1222,7 @@ async def health_check():
         
         return {
             "status": "healthy",
-            "version": "3.0.6",
+            "version": "3.0.7",
             "features": {
                 "intelligent_chat": True,
                 "academic_analysis": True,
@@ -1241,14 +1241,14 @@ async def health_check():
         return {
             "status": "unhealthy", 
             "error": str(e),
-            "version": "3.0.6"
+            "version": "3.0.7"
         }
 
 @app.get("/")
 async def root():
     return {
         "message": "Paper God API - 智能对话式学术搜索系统",
-        "version": "3.0.6",
+        "version": "3.0.7",
         "features": [
             "智能对话交互",
             "专业学术分析",

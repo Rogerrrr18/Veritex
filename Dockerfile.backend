@@ -1,5 +1,6 @@
-# 使用Docker Hub官方镜像
-FROM python:3.11-slim AS base
+# 基础镜像可通过构建参数覆盖，便于绕过 docker.io 访问限制
+ARG BASE_IMAGE_PY=python:3.11-slim
+FROM ${BASE_IMAGE_PY} AS base
 
 # 设置时区和基础依赖 + pip国内源
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -9,16 +10,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     PIP_TRUSTED_HOST=mirrors.aliyun.com
 
-# 使用国内源（适配 deb822 格式：Debian 12/13 默认 debian.sources），并移除 security 源
+# 使用可配置 Debian 镜像源，自动检测系统 codename，避免固定 trixie 导致 502
+ARG DEBIAN_MIRROR=deb.debian.org
 RUN set -eux; \
+    codename="$(grep -Po '(?<=VERSION_CODENAME=)[^\n]+' /etc/os-release || echo bookworm)"; \
+    echo "Using mirror: ${DEBIAN_MIRROR}, codename: ${codename}"; \
     rm -f /etc/apt/sources.list.d/debian.sources || true; \
-    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie main contrib non-free non-free-firmware\n' > /etc/apt/sources.list; \
-    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie-updates main contrib non-free non-free-firmware\n' >> /etc/apt/sources.list; \
-    printf 'deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie-backports main contrib non-free non-free-firmware\n' >> /etc/apt/sources.list; \
-    apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    ca-certificates \
+    printf 'deb http://%s/debian %s main contrib non-free non-free-firmware\n' "${DEBIAN_MIRROR}" "${codename}" > /etc/apt/sources.list; \
+    printf 'deb http://%s/debian %s-updates main contrib non-free non-free-firmware\n' "${DEBIAN_MIRROR}" "${codename}" >> /etc/apt/sources.list; \
+    printf 'deb http://%s/debian %s-backports main contrib non-free non-free-firmware\n' "${DEBIAN_MIRROR}" "${codename}" >> /etc/apt/sources.list; \
+    apt-get update -o Acquire::Retries=3 && apt-get install -y --no-install-recommends \
+      build-essential \
+      curl \
+      ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -44,5 +48,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # 运行（使用更健壮的生产参数）
 CMD ["python", "-m", "uvicorn", "backend:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--timeout-keep-alive", "300"]
-
-

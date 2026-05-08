@@ -1,6 +1,6 @@
 node_modules
 npm-debug.log*
-dist
+# 保留 dist 以支持无需 Node 构建的预编译静态包镜像构建
 .git
 .gitignore
 .DS_Store

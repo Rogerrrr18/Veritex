@@ -30,16 +30,18 @@ class ModelConfigManager:
     def _load_model_configs(self) -> Dict[str, ModelConfig]:
         """加载所有支持的模型配置"""
         configs = {}
+        ark_base_url = os.getenv("ARK_BASE_URL", "")
+        ark_is_openai_compatible = ark_base_url.rstrip("/").endswith("/v1")
         
         # OpenAI配置（替换Groq为默认）
-        openai_key = os.getenv("OPENAI_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY") or (os.getenv("ARK_API_KEY") if ark_is_openai_compatible else None)
         if openai_key:
             configs["openai"] = ModelConfig(
                 api_key=openai_key,
-                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-                model_name=os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo"),
-                temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.3")),
-                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "8000"))
+                base_url=os.getenv("OPENAI_BASE_URL", ark_base_url if ark_is_openai_compatible else "https://api.openai.com/v1"),
+                model_name=os.getenv("OPENAI_MODEL_NAME", os.getenv("ARK_MODEL_NAME", "gpt-3.5-turbo")),
+                temperature=float(os.getenv("OPENAI_TEMPERATURE", os.getenv("ARK_TEMPERATURE", "0.3"))),
+                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", os.getenv("ARK_MAX_TOKENS", "8000")))
             )
         
         # Qwen配置
@@ -76,7 +78,7 @@ class ModelConfigManager:
             )
         
         # Doubao (Ark) 配置
-        doubao_key = os.getenv("ARK_API_KEY") or os.getenv("DOUBAO_API_KEY")
+        doubao_key = None if ark_is_openai_compatible else (os.getenv("ARK_API_KEY") or os.getenv("DOUBAO_API_KEY"))
         if doubao_key:
             configs["doubao"] = ModelConfig(
                 api_key=doubao_key,

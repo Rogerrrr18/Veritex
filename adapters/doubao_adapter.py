@@ -61,7 +61,8 @@ class DoubaoAdapter(BaseLLMAdapter):
         self.client = httpx.AsyncClient(
             timeout=timeout_config,
             limits=limits_config,
-            http2=True
+            http2=True,
+            trust_env=False
         )
         
         # 初始化官方SDK客户端（如果可用，用于普通聊天）
@@ -77,6 +78,36 @@ class DoubaoAdapter(BaseLLMAdapter):
         
         # 混合对话管理器引用（延迟初始化）
         self._hybrid_manager = None
+
+    def _is_openai_compatible_endpoint(self) -> bool:
+        """判断当前 base_url 是否已经指向 OpenAI-compatible API 根路径。"""
+        return self.config.base_url.rstrip("/").endswith("/v1")
+
+    def _get_chat_completions_url(self) -> str:
+        """根据 base_url 选择正确的聊天补全端点。"""
+        base_url = self.config.base_url.rstrip("/")
+        if self._is_openai_compatible_endpoint():
+            return f"{base_url}/chat/completions"
+        return f"{base_url}/api/v3/chat/completions"
+
+    def _build_http_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """根据接口类型构造消息格式。"""
+        if self._is_openai_compatible_endpoint():
+            return [
+                {
+                    "role": m.get("role", "user"),
+                    "content": m.get("content", "")
+                }
+                for m in messages
+            ]
+
+        return [
+            {
+                "role": m.get("role", "user"),
+                "content": _to_ark_message_content(m.get("content", ""))
+            }
+            for m in messages
+        ]
     
     async def _get_hybrid_manager(self):
         """获取混合对话管理器实例（延迟初始化）"""
@@ -270,24 +301,16 @@ class DoubaoAdapter(BaseLLMAdapter):
         **kwargs
     ) -> Optional[str]:
         """使用HTTP客户端进行聊天完成"""
-        # 将消息转换为 Ark 期望的 content 数组格式
-        ark_messages: List[Dict[str, Any]] = []
-        for m in messages:
-            ark_messages.append({
-                "role": m.get("role", "user"),
-                "content": _to_ark_message_content(m.get("content", ""))
-            })
-        
         payload = {
             "model": self.model_name,
-            "messages": ark_messages,
+            "messages": self._build_http_messages(messages),
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "stream": False
         }
         
         try:
-            url = f"{self.config.base_url}/api/v3/chat/completions"
+            url = self._get_chat_completions_url()
             response = await self.client.post(url, headers=self.headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -339,24 +362,16 @@ class DoubaoAdapter(BaseLLMAdapter):
         if not self.config.api_key:
             raise ValueError("ARK_API_KEY 或 DOUBAO_API_KEY 未设置，请检查 .env 文件")
         
-        # 将消息转换为 Ark 期望的 content 数组格式
-        ark_messages: List[Dict[str, Any]] = []
-        for m in messages:
-            ark_messages.append({
-                "role": m.get("role", "user"),
-                "content": _to_ark_message_content(m.get("content", ""))
-            })
-        
         payload = {
             "model": self.model_name,
-            "messages": ark_messages,
+            "messages": self._build_http_messages(messages),
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "stream": True  # 启用流式输出
         }
         
         try:
-            url = f"{self.config.base_url}/api/v3/chat/completions"
+            url = self._get_chat_completions_url()
             
             async with self.client.stream('POST', url, headers=self.headers, json=payload) as response:
                 response.raise_for_status()
@@ -474,5 +489,3 @@ async def test_doubao_adapter():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(test_doubao_adapter())
-
-
