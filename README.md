@@ -101,6 +101,37 @@ npm run dev
 .codex/skills/veritex-model-api/SKILL.md
 ```
 
+### 拉取并安装 Skill
+
+如果你已经克隆了 Veritex 仓库，可以把 skill 安装到本机 Codex skills 目录：
+
+```bash
+git clone https://github.com/Rogerrrr18/Veritex.git
+cd Veritex
+mkdir -p ~/.codex/skills
+rsync -a .codex/skills/veritex-model-api ~/.codex/skills/
+```
+
+如果你只想更新这个 skill，进入已有仓库后执行：
+
+```bash
+git pull
+mkdir -p ~/.codex/skills
+rsync -a .codex/skills/veritex-model-api ~/.codex/skills/
+```
+
+安装完成后，新开的 Codex/agent 会在可用 skills 中看到：
+
+```text
+veritex-model-api
+```
+
+你也可以不全局安装，直接让 agent 在当前项目内读取：
+
+```text
+请读取 .codex/skills/veritex-model-api/SKILL.md，并使用 veritex-model-api skill 检查模型 API 配置。
+```
+
 当以后任何 agent 需要处理以下任务时，应优先读取这个 skill：
 
 - 配置或迁移 Veritex 模型 API
